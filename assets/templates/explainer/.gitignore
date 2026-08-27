@@ -1,0 +1,6 @@
+.manim-director/media/
+.manim-director/tmp/
+.manim-director/state.db*
+output/
+__pycache__/
+.venv/

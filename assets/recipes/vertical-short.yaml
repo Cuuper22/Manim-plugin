@@ -1,0 +1,20 @@
+version: 1
+name: vertical-short
+best_for: Deliver one strong idea in a phone-safe composition with fast but readable pacing.
+beats:
+  - role: hook
+    duration_fraction: 0.16
+    direction: Put the visual question in the upper safe region immediately.
+  - role: setup
+    duration_fraction: 0.18
+    direction: Establish only the notation needed for the payoff.
+  - role: payoff
+    duration_fraction: 0.34
+    direction: Make the primary change fill the central safe region.
+  - role: why
+    duration_fraction: 0.22
+    direction: Give the shortest valid explanation of the payoff.
+  - role: resolve
+    duration_fraction: 0.10
+    direction: Hold a complete final frame clear of platform controls.
+qa_focus: [mobile-safe-area, minimum-text-size, caption-density, readable-holds]

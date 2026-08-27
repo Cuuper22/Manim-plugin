@@ -1,0 +1,50 @@
+version: 1
+schema: manim-director/v1
+project:
+  name: Edit and debug fixture
+  source_dir: .
+  asset_dir: assets
+  output_dir: dist
+  media_dir: .manim-director/media
+  id: edit-debug-fixture
+  title: Edit and debug fixture
+engine:
+  backend: manim-ce
+  source: editable_scene.py
+  main_scene: EditablePulse
+render:
+  renderer: cairo
+  profile: preview
+  format: mp4
+  transparent: false
+  width: 640
+  height: 360
+  fps: 15
+theme:
+  preset: midnight
+  background: "#090D1A"
+  foreground: "#FFFFFF"
+  accent: "#64D8FF"
+  font: Sans
+safe_area:
+  top: 0.05
+  right: 0.05
+  bottom: 0.05
+  left: 0.05
+captions:
+  format: vtt
+  burn_in: false
+profiles:
+  preview:
+    resolution: [640, 360]
+    fps: 15
+    renderer: cairo
+    format: mp4
+edit:
+  semantic_ids:
+    - pulse.ring
+    - pulse.label
+    - pulse.composition
+  cases: fixture.json#/edit_cases
+debug:
+  case: fixture.json#/debug_case

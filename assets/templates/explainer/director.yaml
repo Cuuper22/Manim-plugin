@@ -1,0 +1,88 @@
+version: 1
+project:
+  name: Directed Recurrence
+  id: directed-recurrence
+  title: A Recurrence, Seen as Motion
+  language: en-US
+  seed: 1729
+  source_dir: scenes
+  asset_dir: assets
+  output_dir: output
+  media_dir: .manim-director/media
+brief:
+  objective: Show how a recurrence turns two remembered values into a visible sequence.
+  audience: Curious adults comfortable with basic algebra
+  rigor: intuition-then-derivation
+  duration_seconds: 24
+  assumptions: []
+  required_claims: []
+  forbidden_elements: []
+engine:
+  backend: manim-ce
+  source: scenes/main.py
+  main_scene: DirectedRecurrence
+  compatible: ">=0.19,<1"
+render:
+  renderer: cairo
+  profile: preview
+  format: mp4
+  transparent: false
+  width: 1920
+  height: 1080
+  fps: 60
+theme:
+  preset: midnight
+  background: "#0B1020"
+  foreground: "#F7F8FC"
+  accent: "#FF6188"
+  font: DejaVu Sans
+safe_area:
+  top: 0.05
+  right: 0.05
+  bottom: 0.08
+  left: 0.05
+captions:
+  format: vtt
+  burn_in: false
+storyboard:
+  - id: hook
+    objective: Ask where the next value comes from.
+    visual: A missing term waits at the end of a number row.
+    duration: 4
+  - id: construction
+    objective: Show the recurrence acting on the last two values.
+    visual: Colored arcs carry the two terms into the sum.
+    duration: 12
+  - id: rule
+    objective: Name the repeated operation with notation.
+    visual: The concrete row compresses into the recurrence equation.
+    duration: 5
+  - id: resolve
+    objective: Return to the now-predictable next term.
+    visual: The row completes and the active pair advances.
+    duration: 3
+profiles:
+  preview:
+    resolution: [854, 480]
+    fps: 24
+    renderer: cairo
+    format: mp4
+    quality: low
+  production:
+    resolution: [1920, 1080]
+    fps: 60
+    renderer: cairo
+    format: mp4
+    quality: high
+validation:
+  visual:
+    minimum_text_px: 28
+    minimum_contrast: 4.5
+    safe_area_percent: 8
+  assertions:
+    - sequence[6] == 8
+budgets:
+  render_seconds: 900
+  memory_mb: 4096
+  output_mb: 1024
+extensions: {}

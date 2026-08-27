@@ -1,0 +1,37 @@
+# Build outputs
+/target/
+/dist/
+/bin/
+/workbench/dist/
+/workbench/node_modules/
+/runtime/build/
+/runtime/dist/
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Manim and Director project state
+media/
+.manim-director/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local environment and temporary QA
+.env
+.env.*
+!.env.example
+/workbench/qa/

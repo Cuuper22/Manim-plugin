@@ -1,0 +1,23 @@
+version: 1
+name: mathematical-proof
+best_for: Present a rigorous argument without losing the construction that makes it intelligible.
+beats:
+  - role: statement
+    duration_fraction: 0.12
+    direction: State the claim and assumptions precisely.
+  - role: construction
+    duration_fraction: 0.20
+    direction: Build the objects or definitions used by the proof.
+  - role: invariant
+    duration_fraction: 0.18
+    direction: Highlight the relationship that remains fixed.
+  - role: argument
+    duration_fraction: 0.32
+    direction: Transform one justified step at a time with explicit correspondence.
+  - role: edge-case
+    duration_fraction: 0.10
+    direction: Resolve excluded or limiting cases.
+  - role: conclusion
+    duration_fraction: 0.08
+    direction: Return to the exact statement and mark it established.
+qa_focus: [assumptions, equation-equivalence, geometry-constraints, readable-holds]

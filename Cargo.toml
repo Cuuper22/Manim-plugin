@@ -1,0 +1,43 @@
+[workspace]
+members = [
+    "crates/manim-director-core",
+    "crates/manim-director-engine",
+    "crates/manim-director-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Cuuper22/Manim-plugin"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["json", "macros"] }
+blake3 = "1.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+mime_guess = "2.0"
+libc = "0.2"
+parking_lot = "0.12"
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+walkdir = "2.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

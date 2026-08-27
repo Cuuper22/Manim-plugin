@@ -1,0 +1,23 @@
+version: 1
+name: intuitive-explainer
+best_for: Build a mental model before introducing formal notation.
+beats:
+  - role: hook
+    duration_fraction: 0.10
+    direction: Show one concrete behavior that creates a question.
+  - role: object
+    duration_fraction: 0.20
+    direction: Establish the object and the visual encoding the viewer will track.
+  - role: variation
+    duration_fraction: 0.25
+    direction: Change one parameter while preserving object identity.
+  - role: formalize
+    duration_fraction: 0.25
+    direction: Introduce notation that names the behavior already seen.
+  - role: stress
+    duration_fraction: 0.12
+    direction: Test an edge case or counterexample.
+  - role: resolve
+    duration_fraction: 0.08
+    direction: Answer the opening question in one stable frame.
+qa_focus: [visual-continuity, readable-holds, claim-status]

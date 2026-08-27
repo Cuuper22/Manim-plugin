@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.100
+Fibonacci is one point in a universe of two-step recurrences.
+
+00:00:04.100 --> 00:00:09.600
+Two coefficients and two seeds can produce growth or oscillation.
+
+00:00:09.600 --> 00:00:15.800
+The plotted terms expose how rules and seeds shape each trajectory.
+
+00:00:15.800 --> 00:00:20.500
+A companion matrix advances the entire two-number state.
+
+00:00:20.500 --> 00:00:26.200
+Characteristic roots usually control the long-run behavior.
+
+00:00:26.200 --> 00:00:30.700
+When the roots merge, a linear factor in n appears.
+
+00:00:30.700 --> 00:00:34.900
+Coefficients choose the machine; seeds choose the start.

@@ -1,0 +1,34 @@
+{
+  "scene": {
+    "label": "One semantic edit",
+    "color": "#64D8FF",
+    "background": "#090D1A",
+    "radius": 1.15,
+    "stroke_width": 7,
+    "font_size": 34,
+    "enter_seconds": 0.8,
+    "hold_seconds": 1.0
+  },
+  "edit_cases": [
+    {
+      "request": "Make the ring gold and hold it two seconds longer",
+      "scope": ["scene.color", "scene.hold_seconds"],
+      "expected": {"scene.color": "#FFD166", "scene.hold_seconds": 3.0},
+      "unchanged": ["scene.label", "scene.radius", "scene.enter_seconds"]
+    },
+    {
+      "request": "Rename the label to Matrix step",
+      "scope": ["scene.label"],
+      "expected": {"scene.label": "Matrix step"},
+      "unchanged": ["scene.color", "scene.radius", "scene.hold_seconds"]
+    }
+  ],
+  "debug_case": {
+    "source": "broken_scene.py",
+    "scene": "MissingAssetScene",
+    "signal": "missing-badge.svg",
+    "expected_diagnosis": "required SVG asset does not exist",
+    "expected_repair": "expected/repaired_scene.py",
+    "repair_scope": ["MissingAssetScene.construct"]
+  }
+}

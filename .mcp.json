@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "manim-director": {
+      "command": "manim-director",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

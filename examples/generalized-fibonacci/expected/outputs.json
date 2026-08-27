@@ -1,0 +1,61 @@
+{
+  "schema": "manim-director/outputs-v1",
+  "artifacts": [
+    {
+      "profile": "preview",
+      "scene": "GeneralizedFibonacci",
+      "path": ".manim-director/media/videos/scenes/480p15/GeneralizedFibonacci.mp4",
+      "width": 854,
+      "height": 480,
+      "fps": 15,
+      "alpha": false
+    },
+    {
+      "profile": "production",
+      "scene": "GeneralizedFibonacci",
+      "path": ".manim-director/media/videos/scenes/1080p60/GeneralizedFibonacci.mp4",
+      "width": 1920,
+      "height": 1080,
+      "fps": 60,
+      "alpha": false
+    },
+    {
+      "profile": "vertical",
+      "scene": "GeneralizedFibonacci",
+      "path": "dist/generalized-fibonacci-vertical.mp4",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "alpha": false
+    },
+    {
+      "profile": "transparent",
+      "scene": "GeneralizedFibonacci",
+      "path": "dist/generalized-fibonacci-alpha.mov",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "alpha": true
+    },
+    {
+      "profile": "loop-gif",
+      "scene": "GeneralizedFibonacci",
+      "path": "dist/generalized-fibonacci.gif",
+      "width": 640,
+      "height": 360,
+      "fps": 15,
+      "alpha": false
+    },
+    {
+      "profile": "orbit-3d",
+      "scene": "StateOrbit3D",
+      "path": "dist/state-orbit-3d.mp4",
+      "width": 1280,
+      "height": 720,
+      "fps": 30,
+      "alpha": false
+    }
+  ],
+  "sections": ["hook", "family", "data", "state-space", "roots", "edge-case", "recap"],
+  "required_sidecars": ["captions.vtt", "narration.json", "director.yaml"]
+}

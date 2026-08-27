@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "manim-director-runtime"
+version = "1.0.0"
+description = "A small, streaming runtime bridge for directing and inspecting Manim projects"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Manim Director contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+visual = ["Pillow>=10", "numpy>=1.24"]
+math = ["sympy>=1.12"]
+all = ["Pillow>=10", "numpy>=1.24", "sympy>=1.12"]
+ingest = ["pypdf>=5"]
+full = ["manim>=0.21,<0.22", "Pillow>=10", "numpy>=1.24", "sympy>=1.12", "pypdf>=5"]
+voiceover = ["manim-voiceover>=0.3"]
+test = ["pytest>=8"]
+
+[project.scripts]
+manim-director-runtime = "manim_director_runtime.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

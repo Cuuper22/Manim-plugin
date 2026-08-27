@@ -1,0 +1,43 @@
+{
+  "name": "manim-plugin",
+  "version": "1.0.0",
+  "description": "Create, edit, render, inspect, debug, migrate, and export production Manim animations with a fast local director engine and workbench.",
+  "author": {
+    "name": "Cuuper22",
+    "url": "https://github.com/Cuuper22"
+  },
+  "homepage": "https://github.com/Cuuper22/Manim-plugin",
+  "repository": "https://github.com/Cuuper22/Manim-plugin",
+  "license": "MIT",
+  "keywords": [
+    "manim",
+    "animation",
+    "mathematics",
+    "visualization",
+    "rendering",
+    "video"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Manim Director",
+    "shortDescription": "Direct and ship production Manim animations",
+    "longDescription": "Turn an idea, equation, dataset, paper, narration, or existing Manim project into a storyboarded, rendered, visually inspected animation. Manim Director keeps large logs and media out of model context while providing precise create, edit, render, debug, migrate, QA, and export workflows through a fast local engine and interactive workbench.",
+    "developerName": "Cuuper22",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Cuuper22/Manim-plugin",
+    "brandColor": "#6C63FF",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.svg",
+    "defaultPrompt": [
+      "Create and render a Manim explanation from this idea",
+      "Fix this Manim scene and inspect the result",
+      "Open my Manim project in the visual workbench"
+    ],
+    "screenshots": []
+  }
+}

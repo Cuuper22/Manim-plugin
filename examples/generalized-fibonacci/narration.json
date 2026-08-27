@@ -1,0 +1,56 @@
+{
+  "schema": "manim-director/narration-v1",
+  "language": "en-US",
+  "voice": {"mode": "metadata-only", "pace_wpm": 148},
+  "cues": [
+    {
+      "id": "cue-01",
+      "section": "hook",
+      "start": 0.0,
+      "end": 4.1,
+      "text": "Fibonacci is not a lone trick. It is one point in a universe of two-step recurrences."
+    },
+    {
+      "id": "cue-02",
+      "section": "family",
+      "start": 4.1,
+      "end": 9.6,
+      "text": "Choose two coefficients and two starting values. The same machine can grow gently, explode, or oscillate."
+    },
+    {
+      "id": "cue-03",
+      "section": "data",
+      "start": 9.6,
+      "end": 15.8,
+      "text": "The plotted terms make that split visible. Fibonacci and Lucas share a rule, while their seeds shift the trajectory."
+    },
+    {
+      "id": "cue-04",
+      "section": "state-space",
+      "start": 15.8,
+      "end": 20.5,
+      "text": "Pair neighboring terms into a state. A single companion matrix now advances the whole recurrence."
+    },
+    {
+      "id": "cue-05",
+      "section": "roots",
+      "start": 20.5,
+      "end": 26.2,
+      "text": "Its eigenvalues are the characteristic roots. Their magnitudes usually decide which behavior dominates in the long run."
+    },
+    {
+      "id": "cue-06",
+      "section": "edge-case",
+      "start": 26.2,
+      "end": 30.7,
+      "text": "When the roots merge, the usual two-exponential form changes. A factor linear in n appears."
+    },
+    {
+      "id": "cue-07",
+      "section": "recap",
+      "start": 30.7,
+      "end": 34.9,
+      "text": "Coefficients choose the machine, seeds choose the start, and roots reveal the eventual motion."
+    }
+  ]
+}

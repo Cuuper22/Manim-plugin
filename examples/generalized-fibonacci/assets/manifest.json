@@ -1,0 +1,14 @@
+{
+  "schema": "manim-director/assets-v1",
+  "assets": [
+    {
+      "id": "recurrence-knot",
+      "path": "recurrence-knot.svg",
+      "type": "image/svg+xml",
+      "role": "opening recurrence-family symbol",
+      "origin": "project-authored",
+      "license": "CC0-1.0",
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 160" role="img" aria-labelledby="title desc">
+  <title id="title">Manim Director</title>
+  <desc id="desc">Manim Director wordmark beside a mathematical motion mark.</desc>
+  <defs>
+    <linearGradient id="g" x1="18" y1="18" x2="142" y2="142" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B7CFF"/>
+      <stop offset="1" stop-color="#34D1BF"/>
+    </linearGradient>
+  </defs>
+  <rect width="560" height="160" rx="28" fill="#101321"/>
+  <circle cx="80" cy="80" r="50" fill="none" stroke="url(#g)" stroke-width="9"/>
+  <path d="M57 106V54l23 29 23-29v52" fill="none" stroke="#F7F8FF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="123" cy="40" r="10" fill="#FFD166"/>
+  <text x="158" y="77" fill="#F7F8FF" font-family="Inter,Arial,sans-serif" font-size="45" font-weight="700">Manim</text>
+  <text x="158" y="121" fill="#A9B0CA" font-family="Inter,Arial,sans-serif" font-size="39" font-weight="500">Director</text>
+</svg>

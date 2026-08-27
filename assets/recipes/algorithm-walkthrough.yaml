@@ -1,0 +1,23 @@
+version: 1
+name: algorithm-walkthrough
+best_for: Make state changes and invariants legible over an execution trace.
+beats:
+  - role: input
+    duration_fraction: 0.10
+    direction: Establish the input and the operation being sought.
+  - role: state
+    duration_fraction: 0.16
+    direction: Define the active state and persistent data structures.
+  - role: step
+    duration_fraction: 0.34
+    direction: Advance through representative operations with consistent highlights.
+  - role: invariant
+    duration_fraction: 0.16
+    direction: Freeze and explain what remains true after each operation.
+  - role: complexity
+    duration_fraction: 0.14
+    direction: Connect visible work to the complexity claim.
+  - role: result
+    duration_fraction: 0.10
+    direction: Show output and final state without resetting the visual context.
+qa_focus: [state-continuity, trace-correctness, complexity-claim, readable-code]

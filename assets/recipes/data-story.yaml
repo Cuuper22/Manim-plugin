@@ -1,0 +1,23 @@
+version: 1
+name: data-story
+best_for: Explain a source-backed pattern without turning the animation into a dashboard flyover.
+beats:
+  - role: question
+    duration_fraction: 0.10
+    direction: Frame the decision or phenomenon the data can resolve.
+  - role: encoding
+    duration_fraction: 0.16
+    direction: Introduce axes, units, and visual encodings before motion.
+  - role: reveal
+    duration_fraction: 0.28
+    direction: Reveal the central pattern in a controlled sequence.
+  - role: compare
+    duration_fraction: 0.22
+    direction: Hold a meaningful baseline while comparing segments or scenarios.
+  - role: caveat
+    duration_fraction: 0.14
+    direction: Show uncertainty, missingness, or a counter-pattern.
+  - role: takeaway
+    duration_fraction: 0.10
+    direction: Leave the key magnitude and its meaning visible together.
+qa_focus: [source-values, units, rounding, axis-integrity, color-independent-meaning]

@@ -1,0 +1,21 @@
+{
+  "name": "manim-director",
+  "interface": {
+    "displayName": "Manim Director"
+  },
+  "plugins": [
+    {
+      "name": "manim-plugin",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Cuuper22/Manim-plugin.git",
+        "ref": "v1.0.0"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

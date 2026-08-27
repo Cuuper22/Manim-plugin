@@ -1,0 +1,24 @@
+{
+  "midnight": {
+    "colors": {
+      "background": "#090D1A",
+      "foreground": "#F7F8FC",
+      "muted": "#A9B4CC",
+      "primary": "#64D8FF",
+      "secondary": "#B69CFF",
+      "accent": "#FFD166",
+      "negative": "#FF6B8A"
+    }
+  },
+  "high-contrast": {
+    "colors": {
+      "background": "#000000",
+      "foreground": "#FFFFFF",
+      "muted": "#D6D6D6",
+      "primary": "#00E5FF",
+      "secondary": "#E3B5FF",
+      "accent": "#FFE600",
+      "negative": "#FF4773"
+    }
+  }
+}

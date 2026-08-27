@@ -1,0 +1,198 @@
+version: 1
+schema: manim-director/v1
+project:
+  name: Generalized Fibonacci
+  source_dir: .
+  asset_dir: assets
+  output_dir: dist
+  media_dir: .manim-director/media
+  id: generalized-fibonacci
+  title: Generalized Fibonacci
+  description: A source-backed visual tour of second-order linear recurrences.
+  language: en-US
+  seed: 73
+brief:
+  objective: Build intuition for the full second-order recurrence family, then derive its state-space and root forms.
+  audience: Curious adults comfortable with basic algebra
+  rigor: intuition-then-derivation
+  duration_seconds: 34.9
+  assumptions:
+    - Coefficients and seeds are real unless a beat says otherwise.
+  required_claims:
+    - The companion matrix advances the neighboring-term state.
+    - Distinct characteristic roots produce a two-mode closed form.
+    - A repeated root introduces a factor linear in n.
+  forbidden_elements:
+    - unexplained formula teleportation
+    - false line segments across discontinuities
+engine:
+  backend: manim-ce
+  source: scenes.py
+  main_scene: GeneralizedFibonacci
+  compatible: ">=0.18,<1"
+  fallback: manim -pql scenes.py GeneralizedFibonacci
+render:
+  renderer: cairo
+  profile: preview
+  format: mp4
+  transparent: false
+  width: 854
+  height: 480
+  fps: 15
+theme:
+  preset: midnight
+  background: "#090D1A"
+  foreground: "#F7F8FC"
+  accent: "#FFD166"
+  font: Sans
+safe_area:
+  top: 0.08
+  right: 0.08
+  bottom: 0.08
+  left: 0.08
+inputs:
+  data:
+    - data/sequences.csv
+  assets:
+    manifest: assets/manifest.json
+  claims:
+    - "x[n+2] = p*x[n+1] + q*x[n]"
+    - "lambda^2 - p*lambda - q = 0"
+    - "lambda_plus/minus = (p +/- sqrt(p^2 + 4q))/2"
+storyboard:
+  - id: hook
+    objective: Establish Fibonacci as one member of a parameterized family.
+    visual: recurrence knot, title, and color-tokenized recurrence
+    duration: 4.1
+    narration_cue: cue-01
+  - id: family
+    objective: Show how coefficients and seeds change behavior.
+    visual: four computed sequence lanes
+    duration: 5.5
+    narration_cue: cue-02
+  - id: data
+    objective: Compare growth and oscillation using source data.
+    visual: CSV-backed plot with a camera detail move
+    duration: 6.2
+    narration_cue: cue-03
+  - id: state-space
+    objective: Reframe the recurrence as a companion-matrix update.
+    visual: state vector equation and matrix C
+    duration: 4.7
+    narration_cue: cue-04
+  - id: roots
+    objective: Connect the characteristic roots to long-run behavior.
+    visual: polynomial-to-roots-to-closed-form derivation
+    duration: 5.7
+    narration_cue: cue-05
+  - id: edge-case
+    objective: Handle the repeated-root case explicitly.
+    visual: discriminant branch and x[n]=n example
+    duration: 4.5
+    narration_cue: cue-06
+  - id: recap
+    objective: Compress the family into coefficients, seeds, and roots.
+    visual: three responsive recap cards
+    duration: 4.2
+    narration_cue: cue-07
+scenes:
+  - id: narrative
+    class: GeneralizedFibonacci
+    file: scenes.py
+    purpose: Complete intuition-to-derivation cut.
+    duration_seconds: 34.9
+    sections: [hook, family, data, state-space, roots, edge-case, recap]
+  - id: sequence-data
+    class: SequenceData
+    file: scenes.py
+    purpose: Standalone CSV-backed comparison.
+    sections: [csv-to-chart]
+    depends_on: [data/sequences.csv]
+  - id: companion-matrix
+    class: CompanionMatrix
+    file: scenes.py
+    purpose: Standalone geometric state walk.
+    sections: [state-walk]
+  - id: characteristic-roots
+    class: CharacteristicRoots
+    file: scenes.py
+    purpose: Standalone distinct- and repeated-root derivation.
+    sections: [derive, branch]
+  - id: state-orbit-3d
+    class: StateOrbit3D
+    file: scenes.py
+    purpose: Standalone 3D camera view of an oscillatory orbit.
+    sections: [orbit]
+narration:
+  manifest: narration.json
+  timing: cue
+captions:
+  format: vtt
+  burn_in: false
+  source: captions.vtt
+  safe_area_percent: 8
+themes:
+  manifest: themes.json
+  default: midnight
+profiles:
+  preview:
+    resolution: [854, 480]
+    fps: 15
+    renderer: cairo
+    format: mp4
+    quality: low
+  production:
+    resolution: [1920, 1080]
+    fps: 60
+    renderer: cairo
+    format: mp4
+    quality: high
+  vertical:
+    resolution: [1080, 1920]
+    fps: 30
+    renderer: cairo
+    format: mp4
+    quality: high
+    layout: responsive
+  transparent:
+    resolution: [1920, 1080]
+    fps: 30
+    renderer: cairo
+    format: mov
+    alpha: true
+  loop-gif:
+    resolution: [640, 360]
+    fps: 15
+    renderer: cairo
+    format: gif
+    quality: low
+  orbit-3d:
+    resolution: [1280, 720]
+    fps: 30
+    renderer: opengl
+    format: mp4
+    scenes: [StateOrbit3D]
+validation:
+  math:
+    recurrence_samples: data/sequences.csv
+    tolerance: 1.0e-9
+  visual:
+    minimum_text_px: 20
+    minimum_contrast: 4.5
+    safe_area_percent: 8
+  assertions:
+    - fibonacci[7] == 13
+    - lucas[7] == 29
+    - pell[7] == 169
+    - oscillator[6] == 0
+accessibility:
+  captions: sidecar
+  direct_line_labels: true
+  high_contrast_theme: high-contrast
+  reduced_motion_strategy: replace camera travel with short dissolves
+budgets:
+  render_seconds: 1800
+  memory_mb: 4096
+  output_mb: 1024
+outputs:
+  manifest: expected/outputs.json

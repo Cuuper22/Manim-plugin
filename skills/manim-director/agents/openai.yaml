@@ -1,0 +1,13 @@
+interface:
+  display_name: "Manim Director"
+  short_description: "Direct, render, and inspect Manim animations"
+  brand_color: "#6C63FF"
+  default_prompt: "Use $manim-director to create and visually verify a polished Manim animation from my idea."
+policy:
+  allow_implicit_invocation: true
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "manim-director"
+      description: "Fast local Manim project, render, QA, and workbench engine"
+      transport: "stdio"
