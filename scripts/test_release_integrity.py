@@ -21,35 +21,35 @@ import release_integrity  # noqa: E402
 
 class VersionAndChecksumTests(unittest.TestCase):
     def test_repository_versions_match_release_tag(self) -> None:
-        self.assertEqual(release_integrity.validate_versions(tag="v1.0.0"), "1.0.0")
+        self.assertEqual(release_integrity.validate_versions(tag="v1.1.0"), "1.1.0")
         with self.assertRaisesRegex(ValueError, "must exactly equal"):
-            release_integrity.validate_versions(tag="1.0.0")
+            release_integrity.validate_versions(tag="1.1.0")
 
     def test_component_drift_is_rejected(self) -> None:
-        versions = {"plugin": "1.0.0", "workbench": "1.0.1"}
+        versions = {"plugin": "1.1.0", "workbench": "1.1.1"}
         with mock.patch.object(release_integrity, "component_versions", return_value=versions):
             with self.assertRaisesRegex(ValueError, "versions differ"):
                 release_integrity.validate_versions()
 
     def test_release_package_names_are_allowlisted(self) -> None:
         self.assertEqual(
-            package_release.validate_release_name("1.0.0", "x86_64-unknown-linux-musl"),
+            package_release.validate_release_name("1.1.0", "x86_64-unknown-linux-musl"),
             "tar.gz",
         )
         self.assertEqual(
-            package_release.validate_release_name("1.0.0", "x86_64-pc-windows-msvc"),
+            package_release.validate_release_name("1.1.0", "x86_64-pc-windows-msvc"),
             "zip",
         )
         for version, target in (
-            ("../1.0.0", "x86_64-pc-windows-msvc"),
-            ("1.0.0", "../../unexpected"),
+            ("../1.1.0", "x86_64-pc-windows-msvc"),
+            ("1.1.0", "../../unexpected"),
         ):
             with self.subTest(version=version, target=target), self.assertRaises(ValueError):
                 package_release.validate_release_name(version, target)
 
     def test_checksum_parser_requires_one_exact_well_formed_entry(self) -> None:
         digest = "a" * 64
-        asset = "manim-director-v1.0.0-test.tar.gz"
+        asset = "manim-director-v1.1.0-test.tar.gz"
         self.assertEqual(install.expected_sha256(f"{digest}  {asset}\n", asset), digest)
         for manifest in (
             "",
@@ -64,7 +64,7 @@ class VersionAndChecksumTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_tmp:
             directory = Path(raw_tmp)
             names = {
-                f"manim-director-v1.0.0-{target}.{extension}"
+                f"manim-director-v1.1.0-{target}.{extension}"
                 for target, extension in release_integrity.RELEASE_TARGETS.items()
             }
             for name in names:
@@ -208,13 +208,13 @@ class ArchiveExtractionTests(unittest.TestCase):
 
             def fake_download(url: str, path: Path, _max_bytes: int) -> None:
                 if url.endswith("SHA256SUMS"):
-                    asset = "manim-director-v1.0.0-test.tar.gz"
+                    asset = "manim-director-v1.1.0-test.tar.gz"
                     path.write_text(f"{'0' * 64}  {asset}\n", encoding="ascii")
                 else:
                     path.write_bytes(b"not-the-published-archive")
 
             with (
-                mock.patch.object(install, "release_version", return_value="1.0.0"),
+                mock.patch.object(install, "release_version", return_value="1.1.0"),
                 mock.patch.object(install, "release_target", return_value=("test", "tar.gz")),
                 mock.patch.object(install, "download_file", side_effect=fake_download),
                 mock.patch.object(install, "extract_binary") as extract,

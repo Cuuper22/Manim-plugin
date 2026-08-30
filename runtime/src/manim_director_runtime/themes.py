@@ -62,6 +62,39 @@ BUILTIN_THEMES: dict[str, dict[str, Any]] = {
 }
 
 
+# These are design decisions, not knobs authors need to rediscover per scene.
+# Presets keep their existing flat palette keys for compatibility while also
+# carrying the complete direction vocabulary used by DesignSystem.
+_DIRECTION_TOKENS: dict[str, Any] = {
+    "composition": {"density": "spacious", "max_active": 4, "caption_lane": True},
+    "typography": {
+        "scale": {
+            "hero": 64,
+            "title": 44,
+            "section": 36,
+            "body": 30,
+            "math": 48,
+            "label": 24,
+            "caption": 25,
+            "micro": 18,
+        }
+    },
+    "spacing": {"xs": 0.12, "sm": 0.22, "md": 0.36, "lg": 0.58, "xl": 0.90},
+    "motion": {
+        "continuation": "morph",
+        "contrast": "lateral",
+        "reveal": "draw",
+        "chapter": "reset",
+    },
+    "narrative": {
+        "audience": "curious general audience",
+        "principle": "one-idea-per-beat",
+    },
+}
+for _theme in BUILTIN_THEMES.values():
+    _theme.update(deepcopy(_DIRECTION_TOKENS))
+
+
 def get_theme(name: str = "midnight", overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     if name not in BUILTIN_THEMES:
         raise DirectorError(

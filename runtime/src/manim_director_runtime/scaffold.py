@@ -23,18 +23,45 @@ def _deterministic_seed(slug: str) -> int:
 
 
 def _starter_scene_source(name: str, theme: Mapping[str, Any]) -> str:
-    return f'''"""A compact, fully renderable starter scene."""
+    return f'''"""A compact starter that uses Manim Director's composition grammar."""
 from manim import *
+from manim_director_runtime import Beat, DesignSystem, DirectedScene
 
 
-class MainScene(Scene):
+class MainScene(DirectedScene):
+    design = DesignSystem.from_mapping({{"theme": {dict(theme)!r}}})
+
     def construct(self):
-        self.camera.background_color = "{theme['background']}"
-        title = Text({name!r}, font={theme['font']!r}, color="{theme['foreground']}", font_size=52)
-        rule = Line(LEFT * 2.4, RIGHT * 2.4, color="{theme['primary']}", stroke_width=5).next_to(title, DOWN, buff=.35)
-        note = Text("Directed with Manim", font={theme['font']!r}, color="{theme['secondary']}", font_size=28).next_to(rule, DOWN, buff=.45)
-        self.play(Write(title), Create(rule))
-        self.play(FadeIn(note, shift=UP * .15))
+        title = self.styled_text({name!r}, role="title")
+        core = Circle(
+            radius=0.72,
+            color=self.design.color("primary"),
+            fill_color=self.design.color("primary"),
+            fill_opacity=0.16,
+            **self.design.stroke("primary", width=1.15),
+        )
+        echo = Circle(
+            radius=1.12,
+            color=self.design.color("secondary"),
+            stroke_opacity=0.55,
+            stroke_width=self.design.stroke_width * 0.7,
+        )
+        visual = VGroup(echo, core)
+        self.beat(
+            Beat(
+                intent="introduce",
+                audience_question="What single idea should the audience see first?",
+                takeaway="Build one visual relationship before adding detail.",
+                focus="visual",
+                visual_metaphor="A clear signal and its echo",
+                transition="reveal",
+            ),
+            title,
+            visual,
+            keys=("title", "visual"),
+            flow="column",
+        )
+        self.caption("One beat, one focus, one clean visual relationship.")
         self.wait(1)
 '''
 
@@ -100,6 +127,29 @@ safe_area:
   right: 0.05
   bottom: 0.08
   left: 0.05
+direction:
+  composition:
+    density: spacious
+    max_active: 4
+    caption_lane: true
+  typography:
+    scale:
+      hero: 64
+      title: 44
+      section: 36
+      body: 30
+      math: 48
+      label: 24
+      caption: 25
+      micro: 18
+  motion:
+    continuation: morph
+    contrast: lateral
+    reveal: draw
+    chapter: reset
+  narrative:
+    audience: curious general audience
+    principle: one-idea-per-beat
 captions:
   format: vtt
   burn_in: false
@@ -115,17 +165,21 @@ progress_bar = display
         ".gitignore": ".manim-director/media/\n.manim-director/tmp/\n__pycache__/\n*.pyc\n",
         "README.md": f'''# {name}
 
-Render the included scene:
+Preview the included scene in the plugin-managed runtime:
 
 ```bash
-manim -pql scenes/main.py {scene_name}
+manim-director preview --scene {scene_name} --contact-sheet
 ```
 
 Production render:
 
 ```bash
-manim -qh --fps 60 -r 1920,1080 scenes/main.py {scene_name}
+manim-director render --scene {scene_name} --profile production
 ```
+
+The generated source remains ordinary Manim Python. When invoking Manim
+directly, use the same environment in which Manim Director is installed so
+`manim_director_runtime` is importable.
 ''',
     }
     files["scenes/main.py"] = generalized_fibonacci_source(theme=theme_name) if sample else _starter_scene_source(name, theme)

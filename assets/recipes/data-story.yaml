@@ -1,6 +1,12 @@
 version: 1
 name: data-story
 best_for: Explain a source-backed pattern without turning the animation into a dashboard flyover.
+beat_contract:
+  require: [audience_question, takeaway, focus, transition, visual_metaphor, max_active]
+  one_hero: true
+  stage_regions: [header, content, left, right, caption]
+  transition_kinds: [continuation, contrast, reveal, chapter]
+  avoid: Accumulating charts and callout cards instead of revealing one source-backed pattern.
 beats:
   - role: question
     duration_fraction: 0.10

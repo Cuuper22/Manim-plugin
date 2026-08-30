@@ -39,6 +39,8 @@ pub struct DirectorSpec {
     pub render: RenderSpec,
     #[serde(default)]
     pub theme: ThemeSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<DirectionSpec>,
     #[serde(default)]
     pub safe_area: SafeArea,
     #[serde(default)]
@@ -87,6 +89,7 @@ impl DirectorSpec {
             engine: Some(EngineSpec::default()),
             render: RenderSpec::default(),
             theme: ThemeSpec::default(),
+            direction: Some(DirectionSpec::default()),
             safe_area: SafeArea::default(),
             captions: CaptionSpec::default(),
             inputs: None,
@@ -169,6 +172,12 @@ impl DirectorSpec {
             return Err(SpecError::Invalid(
                 "render width, height, and fps must be positive".into(),
             ));
+        }
+        if let Some(direction) = &self.direction {
+            direction.validate()?;
+            for (index, beat) in self.storyboard.iter().enumerate() {
+                beat.validate_direction_contract(index)?;
+            }
         }
         Ok(())
     }
@@ -328,6 +337,325 @@ fn default_accent() -> String {
 }
 fn default_font() -> String {
     "Inter".into()
+}
+
+/// Semantic visual direction consumed by the Python composition runtime.
+///
+/// This deliberately describes intent and bounded defaults, not Manim geometry.
+/// Projects without this section remain valid v1 projects; declaring it opts a
+/// storyboard into the directed beat contract validated below.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DirectionSpec {
+    #[serde(default)]
+    pub composition: CompositionDirectionSpec,
+    #[serde(default)]
+    pub typography: TypographyDirectionSpec,
+    #[serde(default)]
+    pub motion: MotionDirectionSpec,
+    #[serde(default)]
+    pub narrative: NarrativeDirectionSpec,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl Default for DirectionSpec {
+    fn default() -> Self {
+        Self {
+            composition: CompositionDirectionSpec::default(),
+            typography: TypographyDirectionSpec::default(),
+            motion: MotionDirectionSpec::default(),
+            narrative: NarrativeDirectionSpec::default(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+impl DirectionSpec {
+    fn validate(&self) -> Result<(), SpecError> {
+        if !(1..=8).contains(&self.composition.max_active) {
+            return Err(SpecError::Invalid(
+                "direction.composition.max_active must be between 1 and 8".into(),
+            ));
+        }
+        for (role, size) in self.typography.scale.roles() {
+            if !size.is_finite() || !(8.0..=120.0).contains(size) {
+                return Err(SpecError::Invalid(format!(
+                    "direction.typography.scale.{role} must be between 8 and 120"
+                )));
+            }
+        }
+        let scale = &self.typography.scale;
+        if !(scale.hero >= scale.title
+            && scale.title >= scale.section
+            && scale.section >= scale.body
+            && scale.body >= scale.label
+            && scale.label >= scale.micro)
+        {
+            return Err(SpecError::Invalid(
+                "direction.typography.scale must preserve hero >= title >= section >= body >= label >= micro"
+                    .into(),
+            ));
+        }
+        if self.narrative.audience.trim().is_empty() {
+            return Err(SpecError::Invalid(
+                "direction.narrative.audience cannot be empty".into(),
+            ));
+        }
+        if self.narrative.principle.trim().is_empty() {
+            return Err(SpecError::Invalid(
+                "direction.narrative.principle cannot be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompositionDensity {
+    Spacious,
+    Balanced,
+    Dense,
+}
+
+impl Default for CompositionDensity {
+    fn default() -> Self {
+        Self::Spacious
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompositionDirectionSpec {
+    #[serde(default)]
+    pub density: CompositionDensity,
+    #[serde(default = "default_max_active")]
+    pub max_active: u8,
+    #[serde(default = "default_caption_lane")]
+    pub caption_lane: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl Default for CompositionDirectionSpec {
+    fn default() -> Self {
+        Self {
+            density: CompositionDensity::default(),
+            max_active: default_max_active(),
+            caption_lane: default_caption_lane(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_max_active() -> u8 {
+    4
+}
+
+fn default_caption_lane() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TypographyDirectionSpec {
+    #[serde(default)]
+    pub scale: TypeScaleSpec,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl Default for TypographyDirectionSpec {
+    fn default() -> Self {
+        Self {
+            scale: TypeScaleSpec::default(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TypeScaleSpec {
+    #[serde(default = "default_type_hero")]
+    pub hero: f32,
+    #[serde(default = "default_type_title")]
+    pub title: f32,
+    #[serde(default = "default_type_section")]
+    pub section: f32,
+    #[serde(default = "default_type_body")]
+    pub body: f32,
+    #[serde(default = "default_type_math")]
+    pub math: f32,
+    #[serde(default = "default_type_label")]
+    pub label: f32,
+    #[serde(default = "default_type_caption")]
+    pub caption: f32,
+    #[serde(default = "default_type_micro")]
+    pub micro: f32,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl Default for TypeScaleSpec {
+    fn default() -> Self {
+        Self {
+            hero: default_type_hero(),
+            title: default_type_title(),
+            section: default_type_section(),
+            body: default_type_body(),
+            math: default_type_math(),
+            label: default_type_label(),
+            caption: default_type_caption(),
+            micro: default_type_micro(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+impl TypeScaleSpec {
+    fn roles(&self) -> [(&'static str, &f32); 8] {
+        [
+            ("hero", &self.hero),
+            ("title", &self.title),
+            ("section", &self.section),
+            ("body", &self.body),
+            ("math", &self.math),
+            ("label", &self.label),
+            ("caption", &self.caption),
+            ("micro", &self.micro),
+        ]
+    }
+}
+
+fn default_type_hero() -> f32 {
+    64.0
+}
+fn default_type_title() -> f32 {
+    44.0
+}
+fn default_type_section() -> f32 {
+    36.0
+}
+fn default_type_body() -> f32 {
+    30.0
+}
+fn default_type_math() -> f32 {
+    48.0
+}
+fn default_type_label() -> f32 {
+    24.0
+}
+fn default_type_caption() -> f32 {
+    25.0
+}
+fn default_type_micro() -> f32 {
+    18.0
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuationMotion {
+    Morph,
+    Crossfade,
+    Hold,
+}
+
+impl Default for ContinuationMotion {
+    fn default() -> Self {
+        Self::Morph
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContrastMotion {
+    Lateral,
+    Crossfade,
+}
+
+impl Default for ContrastMotion {
+    fn default() -> Self {
+        Self::Lateral
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealMotion {
+    Draw,
+    Fade,
+    Scale,
+}
+
+impl Default for RevealMotion {
+    fn default() -> Self {
+        Self::Draw
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChapterMotion {
+    Reset,
+    Crossfade,
+}
+
+impl Default for ChapterMotion {
+    fn default() -> Self {
+        Self::Reset
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MotionDirectionSpec {
+    #[serde(default)]
+    pub continuation: ContinuationMotion,
+    #[serde(default)]
+    pub contrast: ContrastMotion,
+    #[serde(default)]
+    pub reveal: RevealMotion,
+    #[serde(default)]
+    pub chapter: ChapterMotion,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl Default for MotionDirectionSpec {
+    fn default() -> Self {
+        Self {
+            continuation: ContinuationMotion::default(),
+            contrast: ContrastMotion::default(),
+            reveal: RevealMotion::default(),
+            chapter: ChapterMotion::default(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NarrativeDirectionSpec {
+    #[serde(default = "default_narrative_audience")]
+    pub audience: String,
+    #[serde(default = "default_narrative_principle")]
+    pub principle: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl Default for NarrativeDirectionSpec {
+    fn default() -> Self {
+        Self {
+            audience: default_narrative_audience(),
+            principle: default_narrative_principle(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_narrative_audience() -> String {
+    "curious general audience".into()
+}
+
+fn default_narrative_principle() -> String {
+    "one-idea-per-beat".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -493,10 +821,44 @@ pub enum ClaimSpec {
     },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BeatIntent {
+    Introduce,
+    Explain,
+    Compare,
+    Reveal,
+    Prove,
+    Recap,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionKind {
+    Continuation,
+    Contrast,
+    Reveal,
+    Chapter,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoryboardBeat {
     #[serde(default)]
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<BeatIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience_question: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takeaway: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<TransitionKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_metaphor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_active: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,6 +873,47 @@ pub struct StoryboardBeat {
     pub narration_cue: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
+}
+
+impl StoryboardBeat {
+    fn validate_direction_contract(&self, index: usize) -> Result<(), SpecError> {
+        let label = if self.id.trim().is_empty() {
+            format!("storyboard[{index}]")
+        } else {
+            format!("storyboard beat {:?}", self.id)
+        };
+        if self.intent.is_none() {
+            return Err(SpecError::Invalid(format!(
+                "{label} requires intent when direction is enabled"
+            )));
+        }
+        for (field, value) in [
+            ("audience_question", self.audience_question.as_deref()),
+            ("takeaway", self.takeaway.as_deref()),
+            ("focus", self.focus.as_deref()),
+            ("visual_metaphor", self.visual_metaphor.as_deref()),
+        ] {
+            if value.is_none_or(|text| text.trim().is_empty()) {
+                return Err(SpecError::Invalid(format!(
+                    "{label} requires a non-empty {field} when direction is enabled"
+                )));
+            }
+        }
+        if self.transition.is_none() {
+            return Err(SpecError::Invalid(format!(
+                "{label} requires transition when direction is enabled"
+            )));
+        }
+        if self
+            .max_active
+            .is_some_and(|value| !(1..=8).contains(&value))
+        {
+            return Err(SpecError::Invalid(format!(
+                "{label}.max_active must be between 1 and 8"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -684,6 +1087,102 @@ impl ProjectInventory {
             root,
             spec,
         })
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+
+    const PROJECT: &str = r#"
+version: 1
+project:
+  name: Direction test
+"#;
+
+    #[test]
+    fn legacy_v1_storyboards_remain_valid_without_direction() {
+        let source = format!(
+            "{PROJECT}\nstoryboard:\n  - id: hook\n    objective: Ask the question.\n    visual: A point appears.\n"
+        );
+        let spec: DirectorSpec = serde_yaml::from_str(&source).unwrap();
+        assert!(spec.direction.is_none());
+        spec.validate().unwrap();
+    }
+
+    #[test]
+    fn direction_hydrates_runtime_defaults_and_typed_beat_intent() {
+        let source = format!(
+            r#"{PROJECT}
+direction: {{}}
+storyboard:
+  - id: microscope
+    intent: explain
+    audience_question: Why does a nonzero determinant matter?
+    takeaway: The map is locally invertible.
+    focus: tangent_grid
+    transition: continuation
+    visual_metaphor: A microscope revealing one intact neighborhood
+"#
+        );
+        let spec: DirectorSpec = serde_yaml::from_str(&source).unwrap();
+        spec.validate().unwrap();
+        let direction = spec.direction.unwrap();
+        assert_eq!(direction.composition.density, CompositionDensity::Spacious);
+        assert_eq!(direction.composition.max_active, 4);
+        assert!(direction.composition.caption_lane);
+        assert_eq!(direction.typography.scale.hero, 64.0);
+        assert_eq!(direction.typography.scale.micro, 18.0);
+        assert_eq!(direction.motion.continuation, ContinuationMotion::Morph);
+        assert_eq!(direction.motion.contrast, ContrastMotion::Lateral);
+        assert_eq!(direction.motion.reveal, RevealMotion::Draw);
+        assert_eq!(direction.motion.chapter, ChapterMotion::Reset);
+        assert_eq!(spec.storyboard[0].intent, Some(BeatIntent::Explain));
+        assert_eq!(
+            spec.storyboard[0].transition,
+            Some(TransitionKind::Continuation)
+        );
+    }
+
+    #[test]
+    fn direction_rejects_unbounded_active_count() {
+        let source = format!(
+            r#"{PROJECT}
+direction:
+  composition:
+    max_active: 9
+  typography:
+    scale:
+      caption: 4
+"#
+        );
+        let spec: DirectorSpec = serde_yaml::from_str(&source).unwrap();
+        let error = spec.validate().unwrap_err().to_string();
+        assert!(error.contains("max_active must be between 1 and 8"));
+    }
+
+    #[test]
+    fn directed_storyboard_requires_the_audience_contract() {
+        let source = format!(
+            r#"{PROJECT}
+direction: {{}}
+storyboard:
+  - id: hook
+    intent: introduce
+    transition: reveal
+"#
+        );
+        let spec: DirectorSpec = serde_yaml::from_str(&source).unwrap();
+        let error = spec.validate().unwrap_err().to_string();
+        assert!(error.contains("requires a non-empty audience_question"));
+    }
+
+    #[test]
+    fn declared_motion_grammar_only_accepts_semantic_values() {
+        let source = format!(
+            "{PROJECT}\ndirection:\n  motion:\n    continuation: random_bounce\n"
+        );
+        assert!(serde_yaml::from_str::<DirectorSpec>(&source).is_err());
     }
 }
 

@@ -1,23 +1,71 @@
 version: 1
 name: intuitive-explainer
 best_for: Build a mental model before introducing formal notation.
+beat_contract:
+  require: [audience_question, takeaway, focus, transition, visual_metaphor, max_active]
+  one_hero: true
+  stage_regions: [header, content, left, right, caption]
+  transition_kinds: [continuation, contrast, reveal, chapter]
+  avoid: Accumulating prose cards instead of extending one visual mental model.
 beats:
   - role: hook
     duration_fraction: 0.10
+    intent: introduce
+    audience_question: What concrete behavior is surprising enough to need an explanation?
+    takeaway: The viewer can state the opening puzzle in their own words.
+    focus: one concrete behavior with one unresolved feature
+    transition: reveal
+    visual_metaphor: one surprising behavior opening a visible question
+    max_active: 3
     direction: Show one concrete behavior that creates a question.
   - role: object
     duration_fraction: 0.20
+    intent: explain
+    audience_question: What should I track while the explanation unfolds?
+    takeaway: One persistent object and its visual encoding carry the idea.
+    focus: the persistent visual spine
+    transition: continuation
+    visual_metaphor: one object the viewer can keep recognizing
+    max_active: 3
     direction: Establish the object and the visual encoding the viewer will track.
   - role: variation
     duration_fraction: 0.25
+    intent: explain
+    audience_question: Which visible change causes the behavior?
+    takeaway: Changing one parameter exposes one causal relationship.
+    focus: the varying parameter on the persistent object
+    transition: continuation
+    visual_metaphor: one controlled change traveling through the visual spine
+    max_active: 4
     direction: Change one parameter while preserving object identity.
   - role: formalize
     duration_fraction: 0.25
+    intent: reveal
+    audience_question: How does notation name the behavior I already understand visually?
+    takeaway: The symbols compress the visual operation without replacing it.
+    focus: notation anchored to the visual operation
+    transition: reveal
+    visual_metaphor: notation condensing a behavior already seen
+    max_active: 4
     direction: Introduce notation that names the behavior already seen.
   - role: stress
     duration_fraction: 0.12
+    intent: compare
+    audience_question: Does the mental model survive an edge case?
+    takeaway: The model's boundary is visible and stated honestly.
+    focus: one edge case against retained context
+    transition: contrast
+    visual_metaphor: the same object pushed to the boundary of the model
+    max_active: 4
     direction: Test an edge case or counterexample.
   - role: resolve
     duration_fraction: 0.08
+    intent: recap
+    audience_question: What now answers the opening puzzle?
+    takeaway: One stable visual and one sentence resolve the original question.
+    focus: the opening object in its now-understood state
+    transition: chapter
+    visual_metaphor: the opening puzzle settling into one stable answer
+    max_active: 3
     direction: Answer the opening question in one stable frame.
 qa_focus: [visual-continuity, readable-holds, claim-status]

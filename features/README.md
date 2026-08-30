@@ -1,6 +1,6 @@
 # Behavior contract
 
-These 24 feature files are the product acceptance contract. They cover the whole plugin, so a step may bind to one of four real boundaries: the Codex skill workflow, the Rust control plane, the thin Python runtime, or the React workbench. A scenario does not imply that the local binary invents creative source changes or translations on its own.
+These 25 feature files are the product acceptance contract. They cover the whole plugin, so a step may bind to one of four real boundaries: the Codex skill workflow, the Rust control plane, the thin Python runtime, or the React workbench. A scenario does not imply that the local binary invents creative source changes or translations on its own.
 
 | Tag | Capability | Concrete implementation boundary |
 |---|---|---|
@@ -28,6 +28,7 @@ These 24 feature files are the product acceptance contract. They cover the whole
 | `@F22` | Export | Runtime bundle, MP4, WebM, GIF, and caption-package exporters; Rust job-artifact hydration |
 | `@F23` | Variants/accessibility | Explicit authored variants using profiles, themes, captions, responsive source, and Codex review |
 | `@F24` | Reliability/security | Rust scheduler/cache/artifact checks and process-tree cancellation; trusted host execution with external isolation guidance |
+| `@F25` | Visual direction | Python `DirectedScene` stage/layout primitives plus the Codex audience-state, hierarchy, and semantic-motion authoring contract |
 
 The wording distinguishes implemented automation from authored workflow. In particular, Director does not claim automatic platform publishing, automatic localization/accessibility repair, transparent host sandboxing, or resumable partial Manim segments. It validates complete artifacts, reuses only complete cache entries, and reports when a human or Codex-authored source change is still required.
 

@@ -11,6 +11,7 @@ from .util import confined_path, project_root
 SCENE_BASES = {
     "Scene", "MovingCameraScene", "ThreeDScene", "SpecialThreeDScene", "VectorScene",
     "LinearTransformationScene", "ZoomedScene", "VoiceoverScene", "Slide",
+    "DirectedScene", "DirectedMovingCameraScene", "DirectedThreeDScene",
 }
 
 

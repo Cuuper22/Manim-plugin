@@ -1,6 +1,6 @@
 {
   "name": "manim-plugin",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Create, edit, render, inspect, debug, migrate, and export production Manim animations with a fast local director engine and workbench.",
   "author": {
     "name": "Cuuper22",

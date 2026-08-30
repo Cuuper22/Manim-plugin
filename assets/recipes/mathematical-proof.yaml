@@ -1,23 +1,71 @@
 version: 1
 name: mathematical-proof
 best_for: Present a rigorous argument without losing the construction that makes it intelligible.
+beat_contract:
+  require: [audience_question, takeaway, focus, transition, visual_metaphor, max_active]
+  one_hero: true
+  stage_regions: [header, content, left, right, caption]
+  transition_kinds: [continuation, contrast, reveal, chapter]
+  avoid: Accumulating theorem and equation cards instead of transforming one proof object.
 beats:
   - role: statement
     duration_fraction: 0.12
+    intent: introduce
+    audience_question: What exactly is being claimed, and under which assumptions?
+    takeaway: The claim and assumptions are precise enough to prove.
+    focus: the claim with its assumptions attached
+    transition: reveal
+    visual_metaphor: the claim as a destination connected to its assumptions
+    max_active: 3
     direction: State the claim and assumptions precisely.
   - role: construction
     duration_fraction: 0.20
+    intent: explain
+    audience_question: Which objects make the claim tractable?
+    takeaway: Every proof object has a visible job in the argument.
+    focus: the central proof object being constructed
+    transition: continuation
+    visual_metaphor: one proof object assembled from the definitions
+    max_active: 4
     direction: Build the objects or definitions used by the proof.
   - role: invariant
     duration_fraction: 0.18
+    intent: reveal
+    audience_question: What relationship survives the coming transformations?
+    takeaway: One invariant constrains every legal next step.
+    focus: the invariant on the retained proof object
+    transition: reveal
+    visual_metaphor: one relationship staying fixed while the object changes
+    max_active: 3
     direction: Highlight the relationship that remains fixed.
   - role: argument
     duration_fraction: 0.32
+    intent: prove
+    audience_question: Why does this step follow from the previous one?
+    takeaway: Each transformation preserves the invariant and advances the claim.
+    focus: one justified transformation at a time
+    transition: continuation
+    visual_metaphor: a continuous path of justified transformations
+    max_active: 4
     direction: Transform one justified step at a time with explicit correspondence.
   - role: edge-case
     duration_fraction: 0.10
+    intent: compare
+    audience_question: What happens in the excluded or limiting cases?
+    takeaway: The proof either covers each boundary case or states why it is excluded.
+    focus: one boundary case against the main construction
+    transition: contrast
+    visual_metaphor: the main construction beside its limiting case
+    max_active: 4
     direction: Resolve excluded or limiting cases.
   - role: conclusion
     duration_fraction: 0.08
+    intent: recap
+    audience_question: How do the established steps discharge the original claim?
+    takeaway: The exact opening statement now follows from the visible argument.
+    focus: the original claim connected to the final invariant
+    transition: chapter
+    visual_metaphor: the proof path closing at the original claim
+    max_active: 3
     direction: Return to the exact statement and mark it established.
 qa_focus: [assumptions, equation-equivalence, geometry-constraints, readable-holds]

@@ -168,7 +168,7 @@ The current HTTP mapping is:
 Response:
 
 ```json
-{"ok":true,"version":"1.0.0"}
+{"ok":true,"version":"1.1.0"}
 ```
 
 This checks the Rust service, not optional Python/system dependencies. Use a `doctor` job for those.

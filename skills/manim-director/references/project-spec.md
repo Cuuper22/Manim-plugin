@@ -84,6 +84,30 @@ theme:
   text_font_size: 36
   stroke_width: 4
 
+direction:
+  composition:
+    density: spacious       # spacious | balanced | dense
+    max_active: 4
+    caption_lane: true
+  typography:
+    scale:
+      hero: 64
+      title: 44
+      section: 36
+      body: 30
+      math: 48
+      label: 24
+      caption: 25
+      micro: 18
+  motion:
+    continuation: morph     # morph | crossfade | hold
+    contrast: lateral       # lateral | crossfade
+    reveal: draw            # draw | fade | scale
+    chapter: reset          # reset | crossfade
+  narrative:
+    audience: curious general audience
+    principle: one-idea-per-beat
+
 safe_area:
   top: 0.05
   right: 0.05
@@ -113,7 +137,14 @@ inputs:
 
 storyboard:
   - id: hook
+    intent: introduce
     objective: Establish Fibonacci as one member of a family.
+    audience_question: Is Fibonacci an isolated trick or one example of a pattern?
+    takeaway: One recurrence rule generates a whole visual family.
+    focus: recurrence-family
+    transition: reveal
+    visual_metaphor: A tracked sequence opens into neighboring parameter paths.
+    max_active: 3
     visual: A concrete sequence opens into a parameterized recurrence.
     duration: 18
     narration_cue: cue-01
@@ -195,8 +226,9 @@ The parser preserves unknown keys at the top level and inside typed records. Put
 - `brief` records the creative objective and what kind of claim the animation promises.
 - `engine` names the Manim flavor, entry file, primary scene, and compatible version range.
 - `render` is the active default used when a named profile does not override it.
+- `direction` supplies the default composition density, activity budget, caption reservation, type scale, semantic motion grammar, and narrative principle consumed by `DesignSystem`.
 - `profiles` holds reusable variants. A different aspect ratio is a layout variant, not a crop.
-- `storyboard` contains viewer-facing beats. `scenes` inventories executable scene classes; several beats may live in one scene.
+- `storyboard` contains viewer-facing beats. Its direction fields describe a change in audience state, not a list of text to show. `scenes` inventories executable scene classes; several beats may live in one scene.
 - `inputs` records source-backed data/assets and claims. It points to source files instead of embedding large contents.
 - `validation` describes checks whose results belong in QA reports.
 - `budgets` bounds expensive jobs without weakening the requested output profile.
@@ -209,6 +241,8 @@ The parser preserves unknown keys at the top level and inside typed records. Put
 - Scene IDs, scene classes, beat IDs, section names, source IDs, and claim IDs remain stable after cues/references are attached.
 - Output dimensions and FPS are positive. The format supports every requested stream and alpha requirement.
 - Durations include transitions and intentional holds. Beat totals remain within five percent of `brief.duration_seconds` unless runtime is explicitly flexible.
+- A directed beat uses one `focus`, one `takeaway`, an `intent` from `introduce`, `explain`, `compare`, `reveal`, `prove`, or `recap`, and a `transition` from `continuation`, `contrast`, `reveal`, or `chapter`. `max_active` is from 1 through 8 and should not exceed the project default without a deliberate density change.
+- Type role sizes are 8 through 120. Reflow or split content instead of shrinking below its semantic role. A reserved caption lane is unavailable to content placement.
 - Safe-area values are fractions from `0` through `1`; opposing margins leave a positive content region.
 - A seed is required whenever randomness affects visible output.
 - Secrets and provider tokens never appear in the spec.

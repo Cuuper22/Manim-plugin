@@ -17,17 +17,28 @@ def _class_name(value: str) -> str:
 
 
 def generalized_fibonacci_source(
-    *, class_name: str = "GeneralizedFibonacciScene", p: float = 1, q: float = 1, a0: float = 0, a1: float = 1,
-    terms: int = 9, theme: str = "midnight"
+    *,
+    class_name: str = "GeneralizedFibonacciScene",
+    p: float = 1,
+    q: float = 1,
+    a0: float = 0,
+    a1: float = 1,
+    terms: int = 9,
+    theme: str = "midnight",
 ) -> str:
     if terms < 4 or terms > 24:
         raise DirectorError("invalid_terms", "terms must be between 4 and 24")
     palette = get_theme(theme)
     return rf'''"""Generated generalized Fibonacci explainer: a[n] = p*a[n-1] + q*a[n-2]."""
 from manim import *
+from manim_director_runtime import Beat, DesignSystem, DirectedScene
+
+THEME = {palette!r}
+DESIGN = DesignSystem.from_mapping({{"theme": THEME}})
 
 
-class {class_name}(MovingCameraScene):
+class {class_name}(DirectedScene):
+    design = DESIGN
     P = {p!r}
     Q = {q!r}
     A0 = {a0!r}
@@ -35,66 +46,130 @@ class {class_name}(MovingCameraScene):
     TERMS = {terms}
 
     def construct(self):
-        self.camera.background_color = "{palette['background']}"
-        fg, primary, secondary, accent = map(ManimColor, (
-            "{palette['foreground']}", "{palette['primary']}",
-            "{palette['secondary']}", "{palette['accent']}"
-        ))
-        title = Text("One recurrence, a family of sequences", font="{palette['font']}", color=fg, font_size=42)
-        rule = MathTex(r"a_n=p\,a_{{n-1}}+q\,a_{{n-2}}", color=primary, font_size=58)
-        rule.next_to(title, DOWN, buff=.45)
-        self.play(Write(title), run_time=.8)
-        self.play(Write(rule), run_time=1.0)
-        self.wait(.5)
-        self.next_section("concrete_sequence")
+        title = self.styled_text(
+            "One recurrence, a family of sequences",
+            role="title",
+            color_role="foreground",
+        )
+        rule = self.styled_math(
+            r"a_n=p\,a_{{n-1}}+q\,a_{{n-2}}",
+            role="hero",
+            color_role="primary",
+        )
+        self.place(title, "header", key="title")
+        self.play(Write(title))
+        self.next_section("recurrence")
+        self.beat(
+            Beat(
+                intent="introduce",
+                audience_question="What stays fixed when a whole family of sequences changes?",
+                takeaway="One two-step rule generates every term from the previous two.",
+                focus="rule",
+                visual_metaphor="a two-input sequence machine",
+                transition="reveal",
+                max_active=2,
+            ),
+            rule,
+            region="content",
+            keys=("rule",),
+        )
+        self.caption("Two remembered values are enough to make the next one.")
 
         values = [self.A0, self.A1]
         for _ in range(self.TERMS - 2):
             values.append(self.P * values[-1] + self.Q * values[-2])
+
         def shown(value):
             return str(int(value)) if float(value).is_integer() else f"{{value:.3g}}"
-        cells = VGroup(*[
-            VGroup(
-                MathTex("a_{{" + str(i) + "}}", color=secondary, font_size=30),
-                Text(shown(v), font="{palette['font']}", color=fg, font_size=30),
-            ).arrange(DOWN, buff=.15)
-            for i, v in enumerate(values)
-        ]).arrange(RIGHT, buff=.44).scale_to_fit_width(12.4).to_edge(DOWN, buff=.7)
-        parameters = MathTex(
-            rf"p={{self.P:g}},\ q={{self.Q:g}},\ a_0={{self.A0:g}},\ a_1={{self.A1:g}}",
-            color=fg, font_size=36,
-        ).next_to(rule, DOWN, buff=.45)
-        self.play(FadeIn(parameters, shift=UP * .15))
-        for cell in cells:
-            self.play(FadeIn(cell, shift=UP * .18), run_time=.18)
-        self.wait(.7)
-        self.next_section("state_space")
 
-        state = MathTex(
+        cells = []
+        for index, value in enumerate(values):
+            label = self.styled_math(
+                "a_{{" + str(index) + "}}", role="label", color_role="secondary"
+            )
+            number = self.styled_text(shown(value), role="label", color_role="foreground")
+            cells.append(self.panel(VGroup(label, number).arrange(DOWN, buff=.10)))
+        parameters = self.styled_math(
+            rf"p={{self.P:g}},\ q={{self.Q:g}},\ a_0={{self.A0:g}},\ a_1={{self.A1:g}}",
+            role="math",
+            color_role="foreground",
+        )
+        sequence = VGroup(*cells).arrange_in_grid(rows=2, buff=(.16, .12))
+        self.next_section("concrete_sequence")
+        self.beat(
+            Beat(
+                intent="explain",
+                audience_question="What sequence do these particular settings produce?",
+                takeaway="The same local rule propagates the chosen seeds across the row.",
+                focus="sequence",
+                visual_metaphor="a two-input sequence machine",
+                transition="continuation",
+                max_active=2,
+            ),
+            sequence,
+            parameters,
+            region="content",
+            flow="column",
+            keys=("sequence", "parameters"),
+        )
+        self.caption("Change the seeds or coefficients; the machine itself does not change.")
+        self.wait(.5)
+
+        self.clear_stage()
+        self.next_section("state_space")
+        state = self.styled_math(
             r"\begin{{bmatrix}}a_n\\a_{{n-1}}\end{{bmatrix}}="
             r"\begin{{bmatrix}}p&q\\1&0\end{{bmatrix}}"
             r"\begin{{bmatrix}}a_{{n-1}}\\a_{{n-2}}\end{{bmatrix}}",
-            color=fg, font_size=48,
+            role="hero",
+            color_role="foreground",
         )
-        state.set_color_by_tex("p", primary)
-        state.set_color_by_tex("q", secondary)
-        self.play(FadeOut(cells), FadeOut(parameters), Transform(rule, state), run_time=1.2)
-        self.play(self.camera.frame.animate.set(width=state.width + 2.0), run_time=.7)
-        self.wait(.7)
-        self.next_section("characteristic_roots")
+        state.set_color_by_tex("p", THEME["primary"])
+        state.set_color_by_tex("q", THEME["secondary"])
+        self.beat(
+            Beat(
+                intent="reveal",
+                audience_question="Why is remembering two values the natural state?",
+                takeaway="The recurrence is repeated multiplication by one two-by-two matrix.",
+                focus="state",
+                visual_metaphor="a two-input sequence machine",
+                transition="chapter",
+                max_active=2,
+            ),
+            state,
+            region="content",
+            keys=("state",),
+        )
+        self.focus(state)
+        self.caption("The sequence has become an orbit of a linear transformation.")
+        self.wait(.5)
+        self.release_focus()
 
-        roots = MathTex(r"r^2-pr-q=0", color=accent, font_size=58)
-        solution = MathTex(r"a_n=C_1r_1^n+C_2r_2^n", color=fg, font_size=52)
-        pair = VGroup(roots, solution).arrange(DOWN, buff=.55)
-        self.play(Transform(rule, roots), run_time=.8)
-        self.play(Write(solution), run_time=.9)
-        self.wait(1.2)
-        recap = Text(
-            "Change p, q, or the seeds—and the same machine makes a new sequence.",
-            font="{palette['font']}", color=primary, font_size=30,
-        ).to_edge(DOWN, buff=.5)
-        self.play(FadeIn(recap, shift=UP * .2))
-        self.wait(1.4)
+        roots = self.styled_math(
+            r"r^2-pr-q=0", role="hero", color_role="accent"
+        )
+        solution = self.styled_math(
+            r"a_n=C_1r_1^n+C_2r_2^n", role="math", color_role="foreground"
+        )
+        self.next_section("characteristic_roots")
+        self.beat(
+            Beat(
+                intent="recap",
+                audience_question="What controls the long-term shape of the sequence?",
+                takeaway="The matrix's two characteristic roots set the growth modes.",
+                focus="roots",
+                visual_metaphor="a two-input sequence machine",
+                transition="continuation",
+                max_active=2,
+            ),
+            roots,
+            solution,
+            region="content",
+            flow="column",
+            keys=("roots", "solution"),
+        )
+        self.caption("Different parameters tune the machine by moving those roots.")
+        self.wait(1)
 '''
 
 
@@ -114,5 +189,13 @@ def generate_sample(params: Mapping[str, Any]) -> dict[str, Any]:
         terms=int(params.get("terms", 9)),
         theme=str(params.get("theme", "midnight")),
     )
+    compile(source, str(target), "exec")
     atomic_write(target, source)
-    return {"path": str(target), "scene": class_name, "parameters": {k: params.get(k, v) for k, v in {"p": 1, "q": 1, "a0": 0, "a1": 1, "terms": 9}.items()}}
+    return {
+        "path": str(target),
+        "scene": class_name,
+        "parameters": {
+            key: params.get(key, default)
+            for key, default in {"p": 1, "q": 1, "a0": 0, "a1": 1, "terms": 9}.items()
+        },
+    }

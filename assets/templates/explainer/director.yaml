@@ -36,6 +36,29 @@ theme:
   foreground: "#F7F8FC"
   accent: "#FF6188"
   font: DejaVu Sans
+direction:
+  composition:
+    density: spacious
+    max_active: 4
+    caption_lane: true
+  typography:
+    scale:
+      hero: 64
+      title: 44
+      section: 36
+      body: 30
+      math: 48
+      label: 24
+      caption: 25
+      micro: 18
+  motion:
+    continuation: morph
+    contrast: lateral
+    reveal: draw
+    chapter: reset
+  narrative:
+    audience: Curious adults comfortable with basic algebra
+    principle: one-idea-per-beat
 safe_area:
   top: 0.05
   right: 0.05
@@ -46,18 +69,46 @@ captions:
   burn_in: false
 storyboard:
   - id: hook
+    intent: introduce
+    audience_question: Where does the next number come from?
+    takeaway: The missing term depends on the two values immediately before it.
+    focus: sequence
+    transition: reveal
+    visual_metaphor: A number row with one waiting position
+    max_active: 3
     objective: Ask where the next value comes from.
     visual: A missing term waits at the end of a number row.
     duration: 4
   - id: construction
+    intent: explain
+    audience_question: What operation turns the visible pair into the missing value?
+    takeaway: Adding the active pair produces the next term.
+    focus: construction
+    transition: continuation
+    visual_metaphor: Two remembered values converging into one result
+    max_active: 4
     objective: Show the recurrence acting on the last two values.
     visual: Colored arcs carry the two terms into the sum.
     duration: 12
   - id: rule
+    intent: reveal
+    audience_question: How can the repeated motion be named once and reused?
+    takeaway: The recurrence equation is a compact name for the operation already seen.
+    focus: rule
+    transition: continuation
+    visual_metaphor: Concrete motion condensing into notation
+    max_active: 3
     objective: Name the repeated operation with notation.
     visual: The concrete row compresses into the recurrence equation.
     duration: 5
   - id: resolve
+    intent: recap
+    audience_question: Can the viewer now predict what happens next?
+    takeaway: Remember the latest pair, add it, then advance the window.
+    focus: resolved-sequence
+    transition: reveal
+    visual_metaphor: A two-term window stepping along the sequence
+    max_active: 3
     objective: Return to the now-predictable next term.
     visual: The row completes and the active pair advances.
     duration: 3

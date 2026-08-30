@@ -626,7 +626,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "manim-director-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "manim-director-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "manim-director-engine"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "axum",

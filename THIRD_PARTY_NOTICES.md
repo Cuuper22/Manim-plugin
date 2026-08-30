@@ -8,4 +8,4 @@ The optional Python/Manim environment is installed separately from PyPI rather t
 
 Manim Director's own source and release binaries are provided under the MIT License in `LICENSE`. The complete corresponding source for this release is available at:
 
-https://github.com/Cuuper22/Manim-plugin/tree/v1.0.0
+https://github.com/Cuuper22/Manim-plugin/tree/v1.1.0

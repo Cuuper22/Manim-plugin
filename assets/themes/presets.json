@@ -12,7 +12,14 @@
       "font": "DejaVu Sans",
       "math_font_size": 48,
       "text_font_size": 36,
-      "stroke_width": 4
+      "stroke_width": 4,
+      "typography": {
+        "scale": {"hero": 64, "title": 44, "section": 36, "body": 30, "math": 48, "label": 24, "caption": 25, "micro": 18}
+      },
+      "spacing": {"xs": 0.12, "sm": 0.22, "md": 0.36, "lg": 0.58, "xl": 0.9},
+      "motion": {"continuation": "morph", "contrast": "lateral", "reveal": "draw", "chapter": "reset"},
+      "composition": {"density": "spacious", "max_active": 4, "caption_lane": true},
+      "narrative": {"audience": "curious general audience", "principle": "one-idea-per-beat"}
     },
     "paper": {
       "background": "#FAF7F0",
@@ -25,7 +32,14 @@
       "font": "DejaVu Sans",
       "math_font_size": 48,
       "text_font_size": 36,
-      "stroke_width": 4
+      "stroke_width": 4,
+      "typography": {
+        "scale": {"hero": 64, "title": 44, "section": 36, "body": 30, "math": 48, "label": 24, "caption": 25, "micro": 18}
+      },
+      "spacing": {"xs": 0.12, "sm": 0.22, "md": 0.36, "lg": 0.58, "xl": 0.9},
+      "motion": {"continuation": "morph", "contrast": "lateral", "reveal": "draw", "chapter": "reset"},
+      "composition": {"density": "spacious", "max_active": 4, "caption_lane": true},
+      "narrative": {"audience": "curious general audience", "principle": "one-idea-per-beat"}
     },
     "neon": {
       "background": "#050608",
@@ -38,7 +52,14 @@
       "font": "DejaVu Sans",
       "math_font_size": 50,
       "text_font_size": 36,
-      "stroke_width": 5
+      "stroke_width": 5,
+      "typography": {
+        "scale": {"hero": 64, "title": 44, "section": 36, "body": 30, "math": 48, "label": 24, "caption": 25, "micro": 18}
+      },
+      "spacing": {"xs": 0.12, "sm": 0.22, "md": 0.36, "lg": 0.58, "xl": 0.9},
+      "motion": {"continuation": "morph", "contrast": "lateral", "reveal": "draw", "chapter": "reset"},
+      "composition": {"density": "spacious", "max_active": 4, "caption_lane": true},
+      "narrative": {"audience": "curious general audience", "principle": "one-idea-per-beat"}
     },
     "colorblind": {
       "background": "#111111",
@@ -51,7 +72,14 @@
       "font": "DejaVu Sans",
       "math_font_size": 48,
       "text_font_size": 36,
-      "stroke_width": 5
+      "stroke_width": 5,
+      "typography": {
+        "scale": {"hero": 64, "title": 44, "section": 36, "body": 30, "math": 48, "label": 24, "caption": 25, "micro": 18}
+      },
+      "spacing": {"xs": 0.12, "sm": 0.22, "md": 0.36, "lg": 0.58, "xl": 0.9},
+      "motion": {"continuation": "morph", "contrast": "lateral", "reveal": "draw", "chapter": "reset"},
+      "composition": {"density": "spacious", "max_active": 4, "caption_lane": true},
+      "narrative": {"audience": "curious general audience", "principle": "one-idea-per-beat"}
     }
   }
 }

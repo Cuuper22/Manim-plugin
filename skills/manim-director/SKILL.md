@@ -31,6 +31,10 @@ Start with `project_inspect` for an existing project or `project_init` for a new
 
 For a new animation, establish the objective, audience, rigor level, target duration, output profile, and any supplied mathematical/data sources. Infer ordinary aesthetic defaults. Ask one focused question only if competing interpretations would produce materially different content.
 
+Before writing scene code, choose one visual spine: the object, spatial metaphor, or transformation the viewer will keep recognizing across the film. Plan each beat as a change in the viewer's mental state, not as a list of facts to display. Every beat must name the audience question it answers, its single takeaway, one primary focus, retained context, and the semantic reason for its transition. If a beat needs several unrelated text blocks, split it or replace the prose with a visual operation.
+
+Use `DirectedScene`, `DesignSystem`, and `Beat` for substantial new work. Treat header, content (or its left/right split), and caption lanes as allocated space; do not position independent elements into the same lane and hope z-order hides the conflict. Let `place`/`layout` reflow content or let `beat` replace prior occupants rather than shrinking text below its role minimum. Use `focus` to subordinate retained context. Keep one hero, a small amount of context, and one consistent meaning per color and movement throughout a chapter.
+
 Use `project_apply` with `ingest` paths for supplied notes, data, code, documents, or media so the project receives bounded summaries and a source manifest without placing full source contents in tool output.
 
 ## Produce and verify the actual result

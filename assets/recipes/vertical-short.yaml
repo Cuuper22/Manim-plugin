@@ -1,6 +1,12 @@
 version: 1
 name: vertical-short
 best_for: Deliver one strong idea in a phone-safe composition with fast but readable pacing.
+beat_contract:
+  require: [audience_question, takeaway, focus, transition, visual_metaphor, max_active]
+  one_hero: true
+  stage_regions: [header, content, left, right, caption]
+  transition_kinds: [continuation, contrast, reveal, chapter]
+  avoid: Stacking headline, subtitles, captions, and payoff over the same phone-safe region.
 beats:
   - role: hook
     duration_fraction: 0.16
