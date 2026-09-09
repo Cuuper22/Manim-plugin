@@ -1179,9 +1179,7 @@ storyboard:
 
     #[test]
     fn declared_motion_grammar_only_accepts_semantic_values() {
-        let source = format!(
-            "{PROJECT}\ndirection:\n  motion:\n    continuation: random_bounce\n"
-        );
+        let source = format!("{PROJECT}\ndirection:\n  motion:\n    continuation: random_bounce\n");
         assert!(serde_yaml::from_str::<DirectorSpec>(&source).is_err());
     }
 }
