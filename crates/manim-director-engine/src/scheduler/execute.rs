@@ -58,11 +58,7 @@ impl Inner {
                     .events
                     .send(EngineEvent::Job(Arc::new(running.clone())));
                 let recorder = Recorder::start(self.store.clone(), self.events.clone(), id);
-                recorder.engine_phase(
-                    ProgressPhase::Starting,
-                    None,
-                    Some("waiting for the runtime"),
-                );
+                recorder.engine_phase(ProgressPhase::Starting, Some("waiting for the runtime"));
                 let (outcome, start) = match out_dir {
                     _ if active.token.is_cancelled() => {
                         (Outcome::Cancelled(active.cancelled_by()), None)
@@ -132,9 +128,11 @@ impl Inner {
         };
         let outcome = match outcome {
             BridgeOutcome::Succeeded(value) => {
-                let count = value["artifacts"].as_array().map_or(0, Vec::len) as u64;
-                if count > 0 {
-                    recorder.engine_phase(ProgressPhase::Validate, Some(count), None);
+                if value["artifacts"]
+                    .as_array()
+                    .is_some_and(|list| !list.is_empty())
+                {
+                    recorder.engine_phase(ProgressPhase::Validate, None);
                 }
                 let root = self.root.clone();
                 let task = job.task.clone();
@@ -240,7 +238,6 @@ impl Inner {
                 announced = true;
                 recorder.engine_phase(
                     ProgressPhase::Starting,
-                    None,
                     Some(&format!("Waiting for another render of {key}")),
                 );
             }

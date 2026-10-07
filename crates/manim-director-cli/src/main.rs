@@ -7,9 +7,9 @@ use args::{Cli, Command, EditArgs, SourceArgs, TargetArgs};
 use clap::Parser;
 use manim_director_core::{
     find_project, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams, EngineError,
-    ExportParams, FrameParams, IngestParams, IngestSource, InitParams, JobOrigin, JobRecord,
-    JobStatus, OperationRequest, ProgressPhase, QaParams, RenderParams, SourceRef, StillParams,
-    ValidateMathParams,
+    EngineEvent, ExportParams, FrameParams, IngestParams, IngestSource, InitParams, JobOrigin,
+    JobRecord, JobStatus, OperationRequest, Progress, QaParams, RenderParams, SourceRef,
+    StillParams, ValidateMathParams,
 };
 use manim_director_engine::{
     cli_project_path, current_revision, init_project, inspect, run_mcp, shutdown_signal,
@@ -422,36 +422,44 @@ fn exit_code(job: &JobRecord) -> ExitCode {
     }
 }
 
-/// One stderr line per phase change, at most one per second within a phase.
+/// One stderr line per change of phase or message; within one, at most one
+/// per second.
 async fn print_progress(scheduler: Scheduler, id: uuid::Uuid) {
     let mut events = scheduler.subscribe();
-    let mut last: Option<(ProgressPhase, Instant)> = None;
+    let mut last: Option<(Progress, Instant)> = None;
     while let Ok(event) = events.recv().await {
-        let manim_director_core::EngineEvent::Progress { job_id, progress } = event else {
+        let EngineEvent::Progress { job_id, progress } = event else {
             continue;
         };
         if job_id != id {
             continue;
         }
-        let quiet = last.is_some_and(|(phase, at)| {
-            phase == progress.phase && at.elapsed() < Duration::from_secs(1)
+        let repeat = last.as_ref().is_some_and(|(shown, at)| {
+            (shown.phase, &shown.message) == (progress.phase, &progress.message)
+                && at.elapsed() < Duration::from_secs(1)
         });
-        if quiet {
-            continue;
+        if !repeat {
+            eprintln!("{}", progress_line(&progress));
+            last = Some((progress, Instant::now()));
         }
-        last = Some((progress.phase, Instant::now()));
-        let phase = progress.phase;
-        let count = match progress.total {
-            Some(total) => format!(" {}/{total}", progress.current),
-            None if progress.current > 0 => format!(" {}", progress.current),
-            None => String::new(),
-        };
-        let message = progress
-            .message
-            .map(|message| format!(" {message}"))
-            .unwrap_or_default();
-        eprintln!("{phase}{count}{message}");
     }
+}
+
+/// `animate 3 (4.1 s)`, `extract 2/8`, `starting: waiting for the runtime`.
+fn progress_line(progress: &Progress) -> String {
+    let mut line = progress.phase.to_string();
+    match progress.total {
+        Some(total) => line += &format!(" {}/{total}", progress.current),
+        None if progress.current > 0 => line += &format!(" {}", progress.current),
+        None => {}
+    }
+    if let Some(seconds) = progress.scene_seconds {
+        line += &format!(" ({seconds:.1} s)");
+    }
+    if let Some(message) = &progress.message {
+        line += &format!(": {message}");
+    }
+    line
 }
 
 async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
@@ -530,4 +538,34 @@ async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
         println!("{} @ {}", result.path, result.revision);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manim_director_core::{ProgressPhase::*, Timestamp};
+
+    #[test]
+    fn progress_lines_read_as_phase_count_and_message() {
+        let line = |phase, current, total, scene_seconds, message: Option<&str>| {
+            progress_line(&Progress {
+                phase,
+                current,
+                total,
+                scene_seconds,
+                message: message.map(str::to_owned),
+                updated_at: Timestamp::now(),
+            })
+        };
+        assert_eq!(
+            line(Starting, 0, None, None, Some("waiting for the runtime")),
+            "starting: waiting for the runtime"
+        );
+        assert_eq!(
+            line(Animate, 3, None, Some(4.07), None),
+            "animate 3 (4.1 s)"
+        );
+        assert_eq!(line(Extract, 2, Some(8), None, None), "extract 2/8");
+        assert_eq!(line(Validate, 0, None, None, None), "validate");
+    }
 }
