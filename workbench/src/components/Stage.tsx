@@ -144,7 +144,8 @@ function Activity({ job, onLogs, onDiagnose }: ActivityProps) {
   if (dismissed) return null;
   const failed = job.status === "failed";
   return (
-    <div className="activity" data-tone={failed ? "danger" : undefined} role="status">
+    // Not a live region: progress changes several times a second; the job tray announces starts and ends.
+    <div className="activity" data-tone={failed ? "danger" : undefined}>
       {failed ? <Icon name="alert" /> : null}
       <p className="activity-text">
         <span className="activity-title">{activityText(job)}</span>
