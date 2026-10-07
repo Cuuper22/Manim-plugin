@@ -87,6 +87,11 @@ impl Recorder {
         }
     }
 
+    /// A milestone of the engine's own (stream `engine`).
+    pub(super) fn engine_log(&self, level: LogLevel, message: &str) {
+        self.log(LogStream::Engine, level, message);
+    }
+
     /// Progress the engine itself reports (`starting`, `validate`).
     pub(super) fn engine_phase(
         &self,

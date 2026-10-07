@@ -81,6 +81,14 @@ CREATE TABLE scene_locks (
     job_id TEXT NOT NULL,
     owner TEXT NOT NULL,
     acquired_at TEXT NOT NULL
+);
+CREATE TABLE runtime_identity (
+    python TEXT PRIMARY KEY,
+    runtime_version TEXT NOT NULL,
+    manim TEXT,
+    catalog TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    seen_at TEXT NOT NULL
 );";
 
 /// Brings the database to `SCHEMA_VERSION`. The version is re-read inside an

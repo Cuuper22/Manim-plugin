@@ -110,20 +110,9 @@ pub(crate) struct ResolvedJob {
 
 impl ResolvedJob {
     fn new(task: Task, spec: Option<&DirectorSpec>) -> Self {
-        let budgets = spec.map(|spec| &spec.budgets);
-        let timeout_seconds = env_u64("MANIM_DIRECTOR_TIMEOUT_SECONDS")
-            .or(budgets.and_then(|budgets| budgets.render_seconds))
-            .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
-            .clamp(10, 86_400);
-        let memory_mb = env_u64("MANIM_DIRECTOR_MEMORY_MB")
-            .or(budgets.and_then(|budgets| budgets.memory_mb))
-            .filter(|megabytes| *megabytes > 0);
         Self {
             task,
-            limits: Limits {
-                timeout_seconds,
-                memory_mb,
-            },
+            limits: limits(spec),
             scene_class: None,
             scene_file: None,
             scene_revision: None,
@@ -142,6 +131,23 @@ impl ResolvedJob {
         }
         self.source = Some(source);
         self
+    }
+}
+
+/// A job's timeout and opt-in memory ceiling: the environment overrides
+/// `budgets` in `director.yaml` (OPS §1.2).
+pub(crate) fn limits(spec: Option<&DirectorSpec>) -> Limits {
+    let budgets = spec.map(|spec| &spec.budgets);
+    let timeout_seconds = env_u64("MANIM_DIRECTOR_TIMEOUT_SECONDS")
+        .or(budgets.and_then(|budgets| budgets.render_seconds))
+        .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
+        .clamp(10, 86_400);
+    let memory_mb = env_u64("MANIM_DIRECTOR_MEMORY_MB")
+        .or(budgets.and_then(|budgets| budgets.memory_mb))
+        .filter(|megabytes| *megabytes > 0);
+    Limits {
+        timeout_seconds,
+        memory_mb,
     }
 }
 
@@ -508,23 +514,6 @@ fn keep_tail(text: &str, max: usize) -> &str {
         start += 1;
     }
     &text[start..]
-}
-
-/// The bytes the runtime will read, checked before a worker is assigned.
-pub(crate) fn check_request_size(
-    root: &Path,
-    request_id: &str,
-    task: &Task,
-) -> Result<(), EngineError> {
-    let encoded = crate::encode_request(request_id, root, task).map_err(EngineError::internal)?;
-    let actual = encoded.len() + 1;
-    if actual > crate::MAX_REQUEST_BYTES {
-        return Err(EngineError::RequestTooLarge {
-            limit_bytes: crate::MAX_REQUEST_BYTES as u64,
-            actual_bytes: Some(actual as u64),
-        });
-    }
-    Ok(())
 }
 
 /// blake3 of the scene file, from the fingerprint when it was hashed there.

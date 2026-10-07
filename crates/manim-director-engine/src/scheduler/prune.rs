@@ -192,7 +192,7 @@ mod tests {
                 .finish_success(id, &crate::db::testing::diagnosis(), None)
                 .unwrap(),
             _ => store
-                .finish_error(id, status, &ErrorBody::internal("x"))
+                .finish_error(id, status, &ErrorBody::internal("x"), None)
                 .unwrap(),
         };
         assert!(matches!(finish, Finish::Ended(_)));

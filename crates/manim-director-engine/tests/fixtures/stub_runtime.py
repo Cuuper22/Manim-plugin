@@ -3,12 +3,16 @@
 
 The engine runs `<python> -P -m <module> bridge [--preload]`; tests point
 `<python>` at this file, so the module name arrives as an argument and selects
-how the handshake misbehaves. The request's params select how a method does.
+how the process misbehaves. The request's params select how a method does.
+Each start and each request is appended to `.manim-director/stub-spawns.txt`
+and `stub-requests.txt` (outside every fingerprint) so tests can tell which
+process served a job.
 """
 
 import json
 import os
 import re
+import resource
 import subprocess
 import sys
 import time
@@ -22,13 +26,22 @@ def send(frame):
     PROTO.flush()
 
 
-def ready(protocol=2):
+def ready(protocol, preload):
     send({
         "type": "ready", "protocol": protocol, "runtime_version": "2.0.0-stub", "python": "3",
-        "manim": None, "preloaded": [], "preload_failed": [], "preload_ms": 0,
+        "manim": None, "preloaded": ["numpy"] if preload else [],
+        "preload_failed": [{"module": "moderngl", "message": "No module named 'moderngl'"}]
+        if preload else [],
+        "preload_ms": 1 if preload else 0,
         "catalog": {"themes": [{"name": "midnight", "tokens": [["background", "#0B1020"]]}],
                     "project_templates": ["explainer"], "scene_templates": []},
     })
+
+
+def record(name, line):
+    if os.path.isdir(".manim-director"):
+        with open(os.path.join(".manim-director", name), "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
 
 
 def relative(path, root):
@@ -68,6 +81,14 @@ def diagnose(task, root, rid):
         raise StubError("render_failed", "Scene raised NameError.", {"stage": "construct"})
     if text == "unknown-code":
         raise StubError("exploded", "Something odd.", None)
+    if text == "null-id":
+        send({"type": "error", "request_id": None,
+              "error": {"code": "invalid_request", "message": "Request is not valid JSON.",
+                        "data": None}})
+        return None
+    if text == "rlimit":
+        soft = resource.getrlimit(resource.RLIMIT_AS)[0]
+        text = "unlimited" if soft == resource.RLIM_INFINITY else str(soft)
     if text == "chatty":
         for index in range(500):
             print(f"chatter {index}", file=sys.stderr)
@@ -170,15 +191,24 @@ METHODS = {"doctor": doctor, "diagnose": diagnose, "validate_math": validate_mat
 
 def main():
     module = sys.argv[sys.argv.index("-m") + 1]
+    preload = "--preload" in sys.argv
+    record("stub-spawns.txt", f"{os.getpid()} {'preload' if preload else 'plain'}")
     if module == "stub_without_ready":
         print("usage: unknown option --preload", file=sys.stderr)
         return 2
-    ready(1 if module == "stub_protocol_1" else 2)
+    if module == "stub_dies_idle":
+        # Nobody reads stdin any more, so a request write fails at once.
+        os.close(0)
+        ready(2, preload)
+        time.sleep(0.1)
+        return 0
+    ready(1 if module == "stub_protocol_1" else 2, preload)
     line = sys.stdin.readline()
     if not line.endswith("\n"):
         return 0
     request = json.loads(line)
     rid = request["request_id"]
+    record("stub-requests.txt", f"{os.getpid()} {rid}")
     method = request["method"]
     if method not in METHODS:
         send({"type": "error", "request_id": rid,
@@ -189,7 +219,8 @@ def main():
     except StubError as error:
         send({"type": "error", "request_id": rid, "error": error.body})
         return 0
-    send({"type": "result", "request_id": rid, "result": result})
+    if result is not None:
+        send({"type": "result", "request_id": rid, "result": result})
     return 0
 
 

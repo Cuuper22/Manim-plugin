@@ -61,19 +61,19 @@ pub struct Limits {
     pub memory_mb: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProgressPhase {
-    Starting,
-    Import,
-    Animate,
-    Encode,
-    Extract,
-    Analyze,
-    Package,
-    Transcode,
-    Ingest,
-    Validate,
+named_enum! {
+    pub enum ProgressPhase {
+        Starting = "starting",
+        Import = "import",
+        Animate = "animate",
+        Encode = "encode",
+        Extract = "extract",
+        Analyze = "analyze",
+        Package = "package",
+        Transcode = "transcode",
+        Ingest = "ingest",
+        Validate = "validate",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

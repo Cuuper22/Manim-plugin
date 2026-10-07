@@ -1,44 +1,36 @@
 //! Direct operations (`init`, `discover`): run synchronously through a
-//! non-preloaded worker, with no job row and their own timeouts.
+//! worker that preloads nothing, with no job row and their own timeouts.
 
-use super::accept_result;
-use crate::{BridgeConfig, BridgeOutcome, Invocation, RuntimeBridge};
+use super::{accept_result, Inner};
+use crate::{cache, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge};
 use manim_director_core::{
-    DirectorSpec, EngineError, ErrorBody, InitMode, InitParams, InitResult, InitTask,
-    OperationRequest, OperationResult, Task,
+    python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
+    ErrorBody, Finding, InitMode, InitParams, InitResult, InitTask, Operation, OperationRequest,
+    OperationResult, Task,
 };
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(120);
+const DISCOVER_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_TEMPLATE: &str = "explainer";
 const MAX_LISTED_ENTRIES: usize = 20;
 
 /// Runs one direct task to completion or its timeout.
-pub(crate) async fn run(
+async fn run(
     bridge: &RuntimeBridge,
     root: &Path,
     task: &Task,
     timeout: Duration,
 ) -> Result<OperationResult, EngineError> {
-    let request_id = Uuid::new_v4().to_string();
     let cancel = CancellationToken::new();
-    let run = bridge.run(
-        Invocation {
-            request_id: &request_id,
-            project_root: root,
-            task,
-            preload: false,
-            memory_mb: None,
-        },
-        cancel.clone(),
-        |_| {},
-    );
+    let mut ignore = |_: BridgeEvent<'_>| {};
+    let run = bridge.run_direct(root, task, &cancel, &mut ignore);
     tokio::pin!(run);
     let outcome = tokio::select! {
         outcome = &mut run => outcome,
@@ -53,7 +45,7 @@ pub(crate) async fn run(
         BridgeOutcome::Failed(error) => return Err(EngineError::Operation(error)),
         BridgeOutcome::Cancelled => {
             return Err(EngineError::Operation(ErrorBody::cancelled(
-                manim_director_core::CancelledBy::Shutdown,
+                CancelledBy::Shutdown,
             )))
         }
     };
@@ -63,6 +55,111 @@ pub(crate) async fn run(
         .await
         .map_err(EngineError::internal)?
         .map_err(EngineError::Operation)
+}
+
+struct PreparedDiscover {
+    task: Task,
+    spec: DirectorSpec,
+    cached: Option<DiscoverResult>,
+    files: u32,
+    truncated: bool,
+    oversized: Vec<String>,
+}
+
+/// Scans the project's Python sources, answering from the cache when the
+/// files and the runtime identity are unchanged.
+pub(super) async fn discover(inner: &Arc<Inner>) -> Result<DiscoverResult, EngineError> {
+    let prepared = {
+        let inner = inner.clone();
+        tokio::task::spawn_blocking(move || prepare_discover(&inner))
+            .await
+            .map_err(EngineError::internal)??
+    };
+    let mut result = match prepared.cached {
+        Some(result) => result,
+        None => {
+            let outcome = run(&inner.bridge, &inner.root, &prepared.task, DISCOVER_TIMEOUT).await?;
+            let OperationResult::Discover(result) = outcome else {
+                return Err(EngineError::internal("discover returned another result"));
+            };
+            let (inner, task, spec) = (inner.clone(), prepared.task, prepared.spec);
+            let cached = OperationResult::Discover(result.clone());
+            tokio::task::spawn_blocking(move || cache_discover(&inner, &spec, &task, &cached))
+                .await
+                .map_err(EngineError::internal)??;
+            result
+        }
+    };
+    result.files = prepared.files;
+    result.truncated |= prepared.truncated;
+    for path in prepared.oversized {
+        result.findings.push(Finding::warning(
+            "file_too_large",
+            format!("{path} is over 2 MiB and was not scanned."),
+        ));
+    }
+    if prepared.truncated {
+        result.findings.push(Finding::warning(
+            "index_truncated",
+            "Only the first 500 Python files were scanned.",
+        ));
+    }
+    Ok(result)
+}
+
+fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
+    let spec = inner
+        .load_spec()
+        .ok()
+        .or_else(|| inner.last_valid_spec.lock().clone())
+        .unwrap_or_else(DirectorSpec::defaults);
+    let sources = python_sources(&inner.root, &spec);
+    let truncated = sources.truncated();
+    let files = sources.files.len() as u32;
+    let task = Task::Discover(DiscoverTask {
+        files: sources.files,
+    });
+    let cached = match inner.known_runtime()? {
+        Some(runtime) => {
+            let fingerprint = cache::fingerprint(&inner.root, &spec, &runtime, &task)
+                .map_err(EngineError::internal)?;
+            let entry = inner
+                .store
+                .cache_get(&fingerprint.value)
+                .map_err(EngineError::internal)?;
+            match entry.map(|entry| entry.result) {
+                Some(OperationResult::Discover(result)) => Some(result),
+                _ => None,
+            }
+        }
+        None => None,
+    };
+    Ok(PreparedDiscover {
+        task,
+        spec,
+        cached,
+        files,
+        truncated,
+        oversized: sources.oversized,
+    })
+}
+
+/// Caches a scan under the identity of the worker that just ran it.
+fn cache_discover(
+    inner: &Inner,
+    spec: &DirectorSpec,
+    task: &Task,
+    result: &OperationResult,
+) -> Result<(), EngineError> {
+    let Some(runtime) = inner.known_runtime()? else {
+        return Ok(());
+    };
+    let fingerprint =
+        cache::fingerprint(&inner.root, spec, &runtime, task).map_err(EngineError::internal)?;
+    inner
+        .store
+        .cache_put(&fingerprint.value, None, result, Operation::Discover)
+        .map_err(EngineError::internal)
 }
 
 /// Creates a project in `target` from a template, or adds one scene template

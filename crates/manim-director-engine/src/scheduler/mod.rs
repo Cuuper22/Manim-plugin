@@ -5,11 +5,13 @@
 mod active;
 mod artifacts;
 mod direct;
+mod execute;
 mod latest;
 mod maintenance;
 mod prune;
 mod recorder;
 mod request;
+mod runtime;
 
 pub use artifacts::probe_media;
 pub use direct::init_project;
@@ -18,30 +20,27 @@ pub use prune::{prune, PrunePolicy, Pruned};
 pub use request::{cli_project_path, parse_params, parse_request, Frontend};
 
 use crate::{
-    cache, now_millis, state_db_path, BridgeConfig, BridgeOutcome, EngineMode, Finish, Invocation,
-    NewJob, RuntimeBridge, Store,
+    cache, now_millis, state_db_path, BridgeConfig, EngineMode, NewJob, PrewarmPolicy,
+    RuntimeBridge, RuntimeIdentity, Store,
 };
 use active::Active;
+use execute::accept_result;
 use manim_director_core::{
-    python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
-    EngineEvent, ErrorBody, Finding, JobOrigin, JobRecord, JobStatus, JobSummary, MediaInfo,
-    MediaSource, Operation, OperationRequest, OperationResult, ProgressPhase, Task,
+    CancelledBy, DirectorSpec, DiscoverResult, EngineError, EngineEvent, ErrorBody, JobOrigin,
+    JobRecord, JobSummary, MediaInfo, MediaSource, Operation, OperationRequest, OperationResult,
 };
 use parking_lot::Mutex;
-use recorder::Recorder;
 use request::{ProjectContext, ResolvedJob};
-use serde_json::json;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Weak},
     time::Duration,
 };
-use tokio::sync::{broadcast, mpsc, Semaphore};
+use tokio::sync::{broadcast, mpsc, watch, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-const DISCOVER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Covers the bridge's kill grace for every running job.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
@@ -54,16 +53,22 @@ pub struct SchedulerConfig {
     pub queue_capacity: usize,
     pub bridge: BridgeConfig,
     pub prune: PrunePolicy,
+    /// Keep one preloaded worker idle; `None` spawns a worker per job.
+    pub prewarm: Option<PrewarmPolicy>,
 }
 
 impl SchedulerConfig {
+    /// Long-lived engines pre-warm unless `MANIM_DIRECTOR_PREWARM=0`.
     pub fn new(mode: EngineMode) -> Self {
+        let prewarm = mode.is_long_lived()
+            && std::env::var("MANIM_DIRECTOR_PREWARM").map_or(true, |value| value.trim() != "0");
         Self {
             mode,
             workers: env_usize("MANIM_DIRECTOR_WORKERS", 2).clamp(1, 32),
             queue_capacity: env_usize("MANIM_DIRECTOR_QUEUE", 128).clamp(1, 4096),
             bridge: BridgeConfig::default(),
             prune: PrunePolicy::from_env(),
+            prewarm: prewarm.then(PrewarmPolicy::default),
         }
     }
 }
@@ -108,6 +113,8 @@ struct Inner {
     mode: EngineMode,
     store: Arc<Store>,
     bridge: RuntimeBridge,
+    /// The identity of the newest `ready` frame this engine saw.
+    runtime: watch::Sender<Option<RuntimeIdentity>>,
     events: broadcast::Sender<EngineEvent>,
     queue: mpsc::UnboundedSender<Queued>,
     slots: Arc<Semaphore>,
@@ -130,6 +137,8 @@ struct RunContext {
     source_media: Option<MediaInfo>,
     source: Option<MediaSource>,
     artifact_budget: u64,
+    /// The submit-time spec of a cacheable job, for its start fingerprint.
+    spec: Option<Arc<DirectorSpec>>,
 }
 
 impl Scheduler {
@@ -146,7 +155,7 @@ impl Scheduler {
     }
 
     /// Starts an engine instance: takes its lease, fails the jobs of engines
-    /// whose lease went stale, then accepts work.
+    /// whose lease went stale, starts pre-warming, then accepts work.
     pub async fn start(
         root: impl AsRef<Path>,
         store: Arc<Store>,
@@ -155,15 +164,26 @@ impl Scheduler {
         let instance_id = Uuid::new_v4();
         let mode = config.mode;
         let root = root.as_ref().to_path_buf();
-        let root = store
+        let python = config.bridge.python.clone();
+        let (root, known, spawn_key) = store
             .blocking(move |store| {
                 let root = root.canonicalize()?;
                 store.renew_lease(instance_id, mode, now_millis())?;
                 let reaped = store.reap(instance_id, now_millis())?;
                 maintenance::remove_out_dirs(&root, &reaped);
-                Ok(root)
+                let known = store.runtime(&python)?.map(|stored| stored.identity);
+                let spec = DirectorSpec::load(&root).ok();
+                let key = runtime::spawn_key(&root, &request::limits(spec.as_ref()));
+                Ok((root, known, key))
             })
             .await?;
+        let (runtime, _) = watch::channel(known);
+        let sink =
+            runtime::ready_sink(store.clone(), config.bridge.python.clone(), runtime.clone());
+        let mut bridge = RuntimeBridge::with_ready_sink(config.bridge, sink);
+        if let Some(policy) = config.prewarm {
+            bridge.start_prewarm(&root, spawn_key, policy);
+        }
         let (queue, receiver) = mpsc::unbounded_channel();
         let (events, _) = broadcast::channel(1024);
         let inner = Arc::new(Inner {
@@ -171,7 +191,8 @@ impl Scheduler {
             instance_id,
             mode,
             store,
-            bridge: RuntimeBridge::new(config.bridge),
+            bridge,
+            runtime,
             events,
             queue,
             slots: Arc::new(Semaphore::new(config.queue_capacity)),
@@ -201,6 +222,16 @@ impl Scheduler {
     /// The interpreter the bridge runs, for tools that need the same Python.
     pub fn python(&self) -> &Path {
         &self.inner.bridge.config().python
+    }
+
+    pub fn bridge_config(&self) -> &BridgeConfig {
+        self.inner.bridge.config()
+    }
+
+    /// The identity and catalog of the newest `ready` frame this engine saw
+    /// (seeded from the store), updated as workers start.
+    pub fn runtime(&self) -> watch::Receiver<Option<RuntimeIdentity>> {
+        self.inner.runtime.subscribe()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
@@ -326,6 +357,7 @@ impl Scheduler {
         while !self.inner.active.lock().is_empty() && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        self.inner.bridge.close().await;
         let me = self.inner.instance_id;
         if let Err(error) = self
             .inner
@@ -339,50 +371,7 @@ impl Scheduler {
 
     /// Scans the project's Python sources (a direct, cached operation).
     pub async fn discover(&self) -> Result<DiscoverResult, EngineError> {
-        let inner = self.inner.clone();
-        let prepared = tokio::task::spawn_blocking(move || inner.prepare_discover())
-            .await
-            .map_err(EngineError::internal)??;
-        let mut result = match prepared.cached {
-            Some(result) => result,
-            None => {
-                let outcome = direct::run(
-                    &self.inner.bridge,
-                    &self.inner.root,
-                    &prepared.task,
-                    DISCOVER_TIMEOUT,
-                )
-                .await?;
-                let OperationResult::Discover(result) = outcome else {
-                    return Err(EngineError::internal("discover returned another result"));
-                };
-                let cached = OperationResult::Discover(result.clone());
-                let fingerprint = prepared.fingerprint.clone();
-                self.inner
-                    .store
-                    .blocking(move |store| {
-                        store.cache_put(&fingerprint, None, &cached, Operation::Discover)
-                    })
-                    .await
-                    .map_err(EngineError::internal)?;
-                result
-            }
-        };
-        result.files = prepared.files;
-        result.truncated |= prepared.truncated;
-        for path in prepared.oversized {
-            result.findings.push(Finding::warning(
-                "file_too_large",
-                format!("{path} is over 2 MiB and was not scanned."),
-            ));
-        }
-        if prepared.truncated {
-            result.findings.push(Finding::warning(
-                "index_truncated",
-                "Only the first 500 Python files were scanned.",
-            ));
-        }
-        Ok(result)
+        direct::discover(&self.inner).await
     }
 
     #[cfg(test)]
@@ -428,15 +417,7 @@ struct Pending {
     resolved: ResolvedJob,
     fingerprint: Option<String>,
     scene_revision: Option<String>,
-}
-
-struct PreparedDiscover {
-    task: Task,
-    fingerprint: String,
-    cached: Option<DiscoverResult>,
-    files: u32,
-    truncated: bool,
-    oversized: Vec<String>,
+    spec: Option<Arc<DirectorSpec>>,
 }
 
 enum Outcome {
@@ -452,12 +433,9 @@ impl Inner {
         Ok(spec)
     }
 
-    /// Stands in for the runtime's own identity until the bridge records it.
-    fn runtime_identity(&self) -> String {
-        let config = self.bridge.config();
-        format!("{}\0{}", config.python.display(), config.module)
-    }
-
+    /// Resolves a request and answers it from the cache or an in-flight job
+    /// when its submit fingerprint allows; that needs a known runtime
+    /// identity and a request that is not `fresh`.
     fn plan(&self, origin: JobOrigin, request: OperationRequest) -> Result<Plan, EngineError> {
         let spec = self.load_spec();
         let id = Uuid::new_v4();
@@ -467,14 +445,19 @@ impl Inner {
             store: &self.store,
         };
         let resolved = request::resolve(&context, id, &request)?;
-        request::check_request_size(&self.root, &id.to_string(), &resolved.task)?;
+        crate::request_line(&id.to_string(), &self.root, &resolved.task)?;
+        let cacheable = request.operation().cacheable();
         let fresh = matches!(
             &request,
             OperationRequest::Render(params) if params.fresh
         ) || matches!(&request, OperationRequest::Still(params) if params.fresh);
-        let fingerprint = match &spec {
-            Ok(spec) if request.operation().cacheable() && !fresh => Some(
-                cache::fingerprint(&self.root, spec, &self.runtime_identity(), &resolved.task)
+        let runtime = match cacheable && !fresh {
+            true => self.known_runtime()?,
+            false => None,
+        };
+        let fingerprint = match (&spec, runtime) {
+            (Ok(spec), Some(runtime)) => Some(
+                cache::fingerprint(&self.root, spec, &runtime, &resolved.task)
                     .map_err(EngineError::internal)?,
             ),
             _ => None,
@@ -531,6 +514,7 @@ impl Inner {
             resolved,
             fingerprint: fingerprint.map(|fingerprint| fingerprint.value),
             scene_revision,
+            spec: spec.ok().filter(|_| cacheable).map(Arc::new),
         })))
     }
 
@@ -542,6 +526,7 @@ impl Inner {
             resolved,
             fingerprint,
             scene_revision,
+            spec,
         } = *pending;
         let source = resolved.source.as_ref();
         let job = self
@@ -565,44 +550,9 @@ impl Inner {
             source_media: source.map(|source| source.media.clone()),
             source: source.map(|source| source.reference.clone()),
             artifact_budget: resolved.artifact_budget,
+            spec,
         };
         Ok((job, context))
-    }
-
-    fn prepare_discover(&self) -> Result<PreparedDiscover, EngineError> {
-        let spec = self
-            .load_spec()
-            .ok()
-            .or_else(|| self.last_valid_spec.lock().clone())
-            .unwrap_or_else(DirectorSpec::defaults);
-        let sources = python_sources(&self.root, &spec);
-        let truncated = sources.truncated();
-        let files = sources.files.len() as u32;
-        let task = Task::Discover(DiscoverTask {
-            files: sources.files,
-        });
-        let fingerprint = cache::fingerprint(&self.root, &spec, &self.runtime_identity(), &task)
-            .map_err(EngineError::internal)?
-            .value;
-        let cached = match self
-            .store
-            .cache_get(&fingerprint)
-            .map_err(EngineError::internal)?
-        {
-            Some(entry) => match entry.result {
-                OperationResult::Discover(result) => Some(result),
-                _ => None,
-            },
-            None => None,
-        };
-        Ok(PreparedDiscover {
-            task,
-            fingerprint,
-            cached,
-            files,
-            truncated,
-            oversized: sources.oversized,
-        })
     }
 
     /// Cancels one of this engine's jobs. A queued job ends here; a running
@@ -625,185 +575,6 @@ impl Inner {
         Ok(())
     }
 
-    async fn run(self: Arc<Self>, queued: Queued) {
-        let Queued {
-            job,
-            context,
-            active,
-        } = queued;
-        active.leave_queue();
-        let id = job.id;
-        let root = self.root.clone();
-        let started =
-            self.store
-                .blocking(move |store| {
-                    let Some(running) = store.set_running(id)? else {
-                        return Ok(Err(store.get_job(id)?));
-                    };
-                    let out_dir = match running.task.out_dir() {
-                        Some(out_dir) => artifacts::create_out_dir(&root, out_dir)
-                            .map_err(|error| error.to_string()),
-                        None => Ok(()),
-                    };
-                    Ok(Ok((running, out_dir)))
-                })
-                .await;
-        match started {
-            Ok(Ok((running, out_dir))) => {
-                let _ = self.events.send(EngineEvent::JobStarted {
-                    job: JobSummary::from(&running),
-                });
-                let recorder = Recorder::start(self.store.clone(), self.events.clone(), id);
-                recorder.engine_phase(
-                    ProgressPhase::Starting,
-                    None,
-                    Some("waiting for the runtime"),
-                );
-                let outcome = match out_dir {
-                    _ if active.token.is_cancelled() => Outcome::Cancelled(active.cancelled_by()),
-                    Err(error) => Outcome::Failed(ErrorBody::internal(format!(
-                        "Could not create the job's artifact directory: {error}"
-                    ))),
-                    Ok(()) => self.execute(&job, &context, &active, &recorder).await,
-                };
-                recorder.close().await;
-                self.finish(&job, &active, outcome).await;
-            }
-            // Cancelled while queued, or failed by another engine's reaper.
-            Ok(Err(current)) => {
-                if let Some(current) = current.filter(|job| job.status.is_terminal()) {
-                    self.publish(&active, &current);
-                }
-            }
-            Err(error) => tracing::error!(%id, %error, "could not start the job"),
-        }
-        self.active.lock().remove(&id);
-    }
-
-    async fn execute(
-        &self,
-        job: &JobRecord,
-        context: &RunContext,
-        active: &Active,
-        recorder: &Recorder,
-    ) -> Outcome {
-        let request_id = job.id.to_string();
-        let attempt = active.token.child_token();
-        let timeout = Duration::from_secs(job.limits.timeout_seconds);
-        let (outcome, timed_out) = {
-            let run = self.bridge.run(
-                Invocation {
-                    request_id: &request_id,
-                    project_root: &self.root,
-                    task: &job.task,
-                    preload: true,
-                    memory_mb: job.limits.memory_mb,
-                },
-                attempt.clone(),
-                |event| recorder.record(event),
-            );
-            tokio::pin!(run);
-            tokio::select! {
-                outcome = &mut run => (outcome, false),
-                _ = tokio::time::sleep(timeout) => {
-                    attempt.cancel();
-                    ((&mut run).await, true)
-                }
-            }
-        };
-        match outcome {
-            BridgeOutcome::Succeeded(value) => {
-                let count = value["artifacts"].as_array().map_or(0, Vec::len) as u64;
-                if count > 0 {
-                    recorder.engine_phase(ProgressPhase::Validate, Some(count), None);
-                }
-                let root = self.root.clone();
-                let task = job.task.clone();
-                let source_media = context.source_media.clone();
-                let budget = context.artifact_budget;
-                let accepted = tokio::task::spawn_blocking(move || {
-                    accept_result(&root, &task, value, source_media.as_ref(), budget)
-                })
-                .await
-                .unwrap_or_else(|error| Err(ErrorBody::internal(error.to_string())));
-                match accepted {
-                    Ok(mut result) => {
-                        if let Some(source) = &context.source {
-                            result.set_source(source.clone());
-                        }
-                        Outcome::Succeeded(Box::new(result))
-                    }
-                    Err(error) => Outcome::Failed(error),
-                }
-            }
-            BridgeOutcome::Failed(error) => Outcome::Failed(error),
-            BridgeOutcome::Cancelled if timed_out => {
-                Outcome::Failed(ErrorBody::timeout(job.limits.timeout_seconds))
-            }
-            BridgeOutcome::Cancelled => Outcome::Cancelled(active.cancelled_by()),
-        }
-    }
-
-    /// Records the job's one terminal transition. Losing that race to another
-    /// engine's reaper is logged and the winner's record is published instead.
-    async fn finish(&self, job: &JobRecord, active: &Active, outcome: Outcome) {
-        let id = job.id;
-        let root = self.root.clone();
-        let job_file = job.scene_file.clone();
-        let fingerprint = job.fingerprint.clone();
-        let operation = job.operation;
-        let out_dir = job.task.out_dir().cloned();
-        let recorded = self
-            .store
-            .blocking(move |store| {
-                let finish = match &outcome {
-                    Outcome::Succeeded(result) => {
-                        let revision = result
-                            .scene()
-                            .filter(|scene| job_file.as_deref() != Some(scene.file.as_str()))
-                            .and_then(|scene| cache::file_revision(&root.join(&scene.file)).ok());
-                        store.finish_success(id, result, revision.as_deref())?
-                    }
-                    Outcome::Failed(error) => store.finish_error(id, JobStatus::Failed, error)?,
-                    Outcome::Cancelled(by) => store.finish_error(
-                        id,
-                        JobStatus::Cancelled,
-                        &ErrorBody::cancelled(*by),
-                    )?,
-                };
-                let kept = matches!(
-                    (&finish, &outcome),
-                    (Finish::Ended(_), Outcome::Succeeded(_))
-                );
-                if let (true, Some(fingerprint), Outcome::Succeeded(result)) =
-                    (kept, &fingerprint, &outcome)
-                {
-                    if let Err(error) = store.cache_put(fingerprint, Some(id), result, operation) {
-                        tracing::warn!(%id, %error, "could not cache the result");
-                    }
-                }
-                if let (false, Some(out_dir)) = (kept, &out_dir) {
-                    if let Err(error) = artifacts::remove_out_dir(&root, out_dir) {
-                        tracing::warn!(%id, %error, "could not remove the job's artifact directory");
-                    }
-                }
-                Ok(finish)
-            })
-            .await;
-        match recorded {
-            Ok(Finish::Ended(record)) => self.publish(active, &record),
-            Ok(Finish::Superseded(record)) => {
-                tracing::warn!(
-                    %id,
-                    status = %record.status,
-                    "the job had already ended elsewhere; this run's outcome was discarded"
-                );
-                self.publish(active, &record);
-            }
-            Err(error) => tracing::error!(%id, %error, "could not record the job outcome"),
-        }
-    }
-
     /// Publishes a job's terminal state at most once per job.
     fn publish(&self, active: &Active, job: &JobRecord) {
         if active.claim_publication() {
@@ -818,35 +589,6 @@ impl Inner {
             error: job.error.clone(),
         });
     }
-}
-
-/// Parses a runtime result into the operation's type and enforces the
-/// artifact contract, filling in each artifact's (engine) fields.
-pub(crate) fn accept_result(
-    root: &Path,
-    task: &Task,
-    value: serde_json::Value,
-    source_media: Option<&MediaInfo>,
-    budget_bytes: u64,
-) -> Result<OperationResult, ErrorBody> {
-    let operation = task.operation();
-    let mut result = OperationResult::from_json(operation, value).map_err(|detail| {
-        ErrorBody::new(
-            "runtime_protocol",
-            format!("The runtime's {operation} result does not match the contract: {detail}."),
-            Some(json!({"detail": detail, "stderr_tail": null})),
-        )
-    })?;
-    artifacts::validate(
-        &artifacts::Expectations {
-            root,
-            task,
-            source: source_media,
-            budget_bytes,
-        },
-        &mut result,
-    )?;
-    Ok(result)
 }
 
 #[cfg(test)]

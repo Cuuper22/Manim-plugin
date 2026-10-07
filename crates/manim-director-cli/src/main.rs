@@ -418,10 +418,7 @@ async fn print_progress(scheduler: Scheduler, id: uuid::Uuid) {
             continue;
         }
         last = Some((progress.phase, Instant::now()));
-        let phase = serde_json::to_value(progress.phase)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_default();
+        let phase = progress.phase;
         let count = match progress.total {
             Some(total) => format!(" {}/{total}", progress.current),
             None if progress.current > 0 => format!(" {}", progress.current),

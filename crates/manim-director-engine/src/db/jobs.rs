@@ -135,6 +135,15 @@ impl Store {
         Ok(record)
     }
 
+    /// Re-keys a running job on its start fingerprint (OPS §1.5).
+    pub fn set_fingerprint(&self, id: Uuid, fingerprint: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE jobs SET fingerprint=?2 WHERE id=?1 AND status='running'",
+            params![id.to_string(), fingerprint],
+        )?;
+        Ok(())
+    }
+
     pub fn set_progress(&self, id: Uuid, progress: &Progress) -> Result<()> {
         self.conn.lock().execute(
             "UPDATE jobs SET progress=?2 WHERE id=?1 AND status='running'",
@@ -170,19 +179,27 @@ impl Store {
     }
 
     /// `queued|running → failed|cancelled`.
-    pub fn finish_error(&self, id: Uuid, status: JobStatus, error: &ErrorBody) -> Result<Finish> {
+    pub fn finish_error(
+        &self,
+        id: Uuid,
+        status: JobStatus,
+        error: &ErrorBody,
+        scene_revision: Option<&str>,
+    ) -> Result<Finish> {
         if !matches!(status, JobStatus::Failed | JobStatus::Cancelled) {
             bail!("an error ends a job as failed or cancelled, not {status}");
         }
         self.finish(
             id,
-            "UPDATE jobs SET status=?2, error=?3, progress=NULL, finished_at=?4
+            "UPDATE jobs SET status=?2, error=?3, progress=NULL, finished_at=?4,
+                scene_revision=COALESCE(?5, scene_revision)
              WHERE id=?1 AND status IN ('queued','running')",
             params![
                 id.to_string(),
                 status.as_str(),
                 serde_json::to_string(error)?,
-                Timestamp::now().to_string()
+                Timestamp::now().to_string(),
+                scene_revision,
             ],
         )
     }
@@ -442,7 +459,9 @@ mod tests {
         store.set_running(id).unwrap();
         let reaped = ErrorBody::new("engine_lost", "gone", None);
         assert!(matches!(
-            store.finish_error(id, JobStatus::Failed, &reaped).unwrap(),
+            store
+                .finish_error(id, JobStatus::Failed, &reaped, None)
+                .unwrap(),
             Finish::Ended(_)
         ));
         let Finish::Superseded(winner) = store.finish_success(id, &diagnosis(), None).unwrap()

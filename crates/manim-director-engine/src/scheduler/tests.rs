@@ -3,8 +3,8 @@
 
 use super::*;
 use manim_director_core::{
-    ArtifactKind, CaptionsParams, DiagnoseParams, DoctorParams, FrameParams, InitParams, LogStream,
-    RenderParams, ARTIFACTS_DIR,
+    ArtifactKind, CaptionsParams, DiagnoseParams, DoctorParams, FrameParams, InitParams, JobStatus,
+    LogStream, ProgressPhase, RenderParams, ARTIFACTS_DIR,
 };
 use serde_json::Value;
 use std::{fs, time::Instant};
@@ -70,6 +70,7 @@ impl Project {
                     keep_jobs: 500,
                     keep_days: 30,
                 },
+                prewarm: None,
             },
         )
         .await
@@ -197,6 +198,12 @@ async fn bridge_violations_fail_jobs_with_engine_codes() {
         let job = run(&scheduler, diagnose(text)).await;
         assert_eq!(error_code(&job), "runtime_protocol", "{text}");
     }
+    let anonymous = run(&scheduler, diagnose("null-id")).await;
+    assert_eq!(error_code(&anonymous), "runtime_protocol");
+    assert!(error_data(&anonymous)["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Request is not valid JSON."));
 
     let silent = project.scheduler("stub_without_ready", 1, 8).await;
     let job = run(&silent, OperationRequest::Doctor(DoctorParams {})).await;
@@ -360,7 +367,7 @@ async fn captions_jobs_publish_their_validated_output() {
 }
 
 #[tokio::test]
-async fn identical_renders_coalesce_while_one_is_in_flight() {
+async fn identical_renders_coalesce_once_the_runtime_identity_is_known() {
     let project = Project::new("");
     let scheduler = project.scheduler("stub", 1, 8).await;
     let render = || {
@@ -374,6 +381,28 @@ async fn identical_renders_coalesce_while_one_is_in_flight() {
     let Submission::Queued(first) = first else {
         panic!("expected a new job")
     };
+    assert!(
+        first.fingerprint.is_none(),
+        "no submit fingerprint before any worker reported its identity"
+    );
+    let mut started = None;
+    for _ in 0..200 {
+        started = scheduler
+            .store()
+            .get_job(first.id)
+            .unwrap()
+            .unwrap()
+            .fingerprint;
+        if started.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(started.is_some(), "the start fingerprint is recorded");
+    let identity = scheduler.runtime().borrow().clone().unwrap();
+    assert_eq!(identity.runtime_version, "2.0.0-stub");
+    assert_eq!(identity.catalog.themes[0].name, "midnight");
+
     let second = scheduler.submit(JobOrigin::Http, render()).await.unwrap();
     let Submission::Coalesced(second) = second else {
         panic!("expected coalescing")
@@ -540,6 +569,157 @@ async fn init_creates_a_project_through_the_runtime() {
     assert!(target.join("director.yaml").is_file());
 }
 
+/// `(pid, detail)` per line of a stub record file.
+fn stub_records(project: &Project, name: &str) -> Vec<(u32, String)> {
+    fs::read_to_string(project.root.join(".manim-director").join(name))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            let (pid, detail) = line.split_once(' ').unwrap();
+            (pid.parse().unwrap(), detail.to_owned())
+        })
+        .collect()
+}
+
+fn job_logs(scheduler: &Scheduler, id: Uuid) -> Vec<String> {
+    let records = scheduler.store().logs(id, None, 100).unwrap().items;
+    records.into_iter().map(|record| record.message).collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn long_lived_engines_serve_jobs_from_a_prewarmed_worker() {
+    let project = Project::new("");
+    let mut config = SchedulerConfig::new(EngineMode::Serve);
+    config.bridge = stub("stub");
+    config.prewarm = Some(PrewarmPolicy::default());
+    let scheduler = Scheduler::open(&project.root, config).await.unwrap();
+    let mut runtime = scheduler.runtime();
+    tokio::time::timeout(Duration::from_secs(10), runtime.wait_for(Option::is_some))
+        .await
+        .expect("the idle worker reports ready")
+        .unwrap();
+    let idle = stub_records(&project, "stub-spawns.txt");
+    assert_eq!(idle.len(), 1);
+
+    let job = run(&scheduler, diagnose("warm")).await;
+    assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
+    let served = stub_records(&project, "stub-requests.txt");
+    assert_eq!(served[0].0, idle[0].0, "the idle worker served the job");
+    let logs = job_logs(&scheduler, job.id);
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("Runtime 2.0.0-stub ready")));
+    assert!(logs
+        .iter()
+        .any(|line| line.contains("Preloading moderngl failed")));
+    let stored = scheduler
+        .store()
+        .runtime(scheduler.python())
+        .unwrap()
+        .expect("the identity is recorded");
+    assert_eq!(stored.identity.catalog.project_templates, ["explainer"]);
+
+    for _ in 0..200 {
+        if stub_records(&project, "stub-spawns.txt").len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let replacement = stub_records(&project, "stub-spawns.txt")[1].0;
+    scheduler.shutdown().await;
+    // SAFETY: signal 0 only checks whether the process exists.
+    let alive = unsafe { libc::kill(replacement as i32, 0) } == 0;
+    assert!(!alive, "shutdown retires the idle worker");
+}
+
+#[tokio::test]
+async fn renders_of_one_scene_wait_for_each_other() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 2, 8).await;
+    let render = || {
+        OperationRequest::Render(RenderParams {
+            scene: Some("SlowScene".into()),
+            profile: Some("draft".into()),
+            fresh: true,
+            ..Default::default()
+        })
+    };
+    let first = scheduler
+        .submit(JobOrigin::Cli, render())
+        .await
+        .unwrap()
+        .into_job();
+    wait_until_running(&scheduler, first.id).await;
+    let second = scheduler
+        .submit(JobOrigin::Http, render())
+        .await
+        .unwrap()
+        .into_job();
+    wait_until_running(&scheduler, second.id).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let waiting = scheduler.store().get_job(second.id).unwrap().unwrap();
+    let progress = waiting.progress.expect("progress while waiting");
+    assert_eq!(progress.phase, ProgressPhase::Starting);
+    assert_eq!(
+        progress.message.as_deref(),
+        Some("Waiting for another render of SlowScene")
+    );
+    assert_eq!(
+        stub_records(&project, "stub-requests.txt").len(),
+        1,
+        "the second render has not reached the runtime"
+    );
+
+    scheduler.cancel(first.id).await.unwrap();
+    for _ in 0..200 {
+        if stub_records(&project, "stub-requests.txt").len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(stub_records(&project, "stub-requests.txt").len(), 2);
+    scheduler.cancel(second.id).await.unwrap();
+    assert_eq!(
+        scheduler.wait(second.id).await.unwrap().status,
+        JobStatus::Cancelled
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_memory_ceiling_comes_from_the_budget_only_when_set() {
+    let limited = Project::new("budgets:\n  memory_mb: 4096\n");
+    let scheduler = limited.scheduler("stub", 1, 8).await;
+    let job = run(&scheduler, diagnose("rlimit")).await;
+    assert_eq!(job.limits.memory_mb, Some(4096));
+    let Some(OperationResult::Diagnose(result)) = &job.result else {
+        panic!("expected a diagnose result: {:?}", job.error)
+    };
+    assert_eq!(result.findings[0].message, (4096_u64 << 20).to_string());
+
+    let open = Project::new("");
+    let scheduler = open.scheduler("stub", 1, 8).await;
+    let job = run(&scheduler, diagnose("rlimit")).await;
+    assert_eq!(job.limits.memory_mb, None);
+    let Some(OperationResult::Diagnose(result)) = &job.result else {
+        panic!("expected a diagnose result: {:?}", job.error)
+    };
+    assert_eq!(result.findings[0].message, "unlimited");
+}
+
+#[tokio::test]
+async fn a_request_the_worker_cannot_take_is_retried_once_on_a_fresh_worker() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub_dies_idle", 1, 8).await;
+    let job = run(&scheduler, diagnose("x")).await;
+    assert_eq!(error_code(&job), "runtime_crashed");
+    assert_eq!(stub_records(&project, "stub-spawns.txt").len(), 2);
+    assert!(job_logs(&scheduler, job.id)
+        .iter()
+        .any(|line| line.contains("retrying with a fresh one")));
+}
+
 fn finishes(events: &mut broadcast::Receiver<EngineEvent>) -> HashMap<Uuid, Vec<JobSummary>> {
     let mut finished: HashMap<Uuid, Vec<JobSummary>> = HashMap::new();
     while let Ok(event) = events.try_recv() {
@@ -702,7 +882,7 @@ async fn a_finish_that_loses_to_another_engine_publishes_the_winner_once() {
     let lost = ErrorBody::new("engine_lost", "reaped elsewhere", None);
     scheduler
         .store()
-        .finish_error(job.id, JobStatus::Failed, &lost)
+        .finish_error(job.id, JobStatus::Failed, &lost, None)
         .unwrap();
     scheduler
         .inner

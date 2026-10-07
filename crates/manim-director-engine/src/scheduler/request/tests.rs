@@ -504,6 +504,7 @@ fn diagnosing_a_job_reads_its_error_and_logs() {
                 "Scene raised.",
                 Some(serde_json::json!({"traceback": "File \"scenes/main.py\", line 3"})),
             ),
+            None,
         )
         .unwrap();
     let resolved = project
@@ -637,16 +638,6 @@ fn media_exports_default_to_the_scene_name_in_the_output_dir() {
     assert_eq!(task.output, project.root.join("output/Intro.gif"));
     assert_eq!(task.gif.map(|gif| (gif.fps, gif.width)), Some((12, 960)));
     assert!(!task.alpha);
-}
-
-#[test]
-fn oversized_requests_are_refused_before_any_worker() {
-    let task = Task::Discover(manim_director_core::DiscoverTask {
-        files: vec![PathBuf::from("x".repeat(1024)); 4200],
-    });
-    let error = check_request_size(Path::new("/p"), "id", &task).unwrap_err();
-    assert_eq!(error.code(), "request_too_large");
-    assert!(check_request_size(Path::new("/p"), "id", &Task::Doctor(DoctorTask {})).is_ok());
 }
 
 #[test]
