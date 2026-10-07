@@ -18,20 +18,21 @@ export function ConnectionScreen({ connection, root }: ConnectionScreenProps) {
 
   const command = <Command text={engineCommand(root, BEHIND_DEV_SERVER)} />;
   // Behind the dev server the engine's link must be opened on this server's address instead.
-  const openLink = BEHIND_DEV_SERVER
-    ? `Then open its Workbench link with this page's address (${window.location.origin}/?token=…).`
-    : "Then open the Workbench link it prints.";
+  const address = BEHIND_DEV_SERVER ? ` with this page's address (${window.location.origin}/?token=…)` : "";
+  const openLink = `Then open the Workbench link it prints${address}.`;
 
   if (connection.status === "unauthorized") {
+    // Usually the engine restarted and still holds the port, so starting another one would fail.
     return (
       <Screen title="This page is not signed in">
         <p>
-          It signs in through the Workbench link the engine prints when it starts; a restarted engine prints a new one.
-          Use the latest link, or start the engine:
+          Pages sign in through the Workbench link the engine prints when it starts, and a restarted engine prints a
+          new one. Open the newest link from the engine's terminal in this browser{address}.
         </p>
+        <p>If no engine is running, start it:</p>
         {command}
         <p>{openLink}</p>
-        <Retrying>Opening it in another tab signs this page in again, unsaved edits included.</Retrying>
+        <Retrying>Opening the link in another tab signs this page in again, unsaved edits included.</Retrying>
       </Screen>
     );
   }
