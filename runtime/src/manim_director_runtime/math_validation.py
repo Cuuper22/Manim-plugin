@@ -12,7 +12,11 @@ import math
 import operator
 import random
 import re
-from collections.abc import Callable, Mapping
+import signal
+import sys
+import threading
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -46,9 +50,21 @@ _FUNCTIONS = (
     "min",
     "max",
 )
+_ONE_ARGUMENT = (1, 1, "one argument")
+_ARITY = {
+    "log": (1, 2, "one or two arguments"),
+    "min": (2, math.inf, "two or more arguments"),
+    "max": (2, math.inf, "two or more arguments"),
+}
 _CONSTANTS = ("pi", "e", "tau")
 _TOKEN = re.compile(r"[A-Za-z_]\w*|.", re.DOTALL)
 _KEYWORD_PREFIX = "_reserved_"
+# A float sample is off only by more than round-off: 32 ulp of the largest value met on the way.
+_ROUND_OFF = 32 * sys.float_info.epsilon
+_WITNESS = 1e-30  # an exact difference at least this large at a sampled point disproves a step
+_MAX_POWER_BITS = 100_000  # larger exact powers (10^10^10) are left to the numeric check
+_SYMBOLIC_SECONDS = 20.0
+_WITNESS_POINTS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,9 +76,11 @@ class Symbolic:
 
 @dataclass(frozen=True, slots=True)
 class Counterexample:
+    """The first failing sample; a side is null where it has no real value (the other has)."""
+
     variables: dict[str, float]
-    left: float
-    right: float
+    left: float | None
+    right: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,8 +114,8 @@ def validate_math(task: ValidateMathTask, ctx: Context) -> ValidateMathResult:
     ranges = {name: task.ranges.get(name, DEFAULT_RANGE) for name in variables}
     pairs = []
     for index, (left, right) in enumerate(pairwise(trees)):
-        symbolic = _symbolic(left, right, ranges)
-        numeric = _numeric(left, right, ranges, task.samples, task.tolerance, task.seed)
+        numeric, points = _numeric(left, right, ranges, task.samples, task.tolerance, task.seed)
+        symbolic = _symbolic(left, right, ranges, points)
         pairs.append(Pair(index, _verdict(symbolic, numeric), symbolic, numeric))
     verdicts = [pair.equivalent for pair in pairs]
     valid = False if False in verdicts else None if None in verdicts else True
@@ -167,17 +185,22 @@ def _unsupported(node: ast.AST) -> str | None:
     )
     if not isinstance(node, allowed):
         return f"{type(node).__name__} is not part of the expression language"
-    if isinstance(node, ast.Constant) and (
-        isinstance(node.value, bool) or not isinstance(node.value, (int, float))
-    ):
-        return "only numbers are allowed as literals"
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            return "only numbers are allowed as literals"
+        if isinstance(node.value, float) and not math.isfinite(node.value):
+            return "the number is too large"
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name) or node.func.id in _CONSTANTS:
             return "implicit multiplication is not supported; write the * explicitly"
-        if node.func.id not in _FUNCTIONS:
-            return f"unknown function {node.func.id}; write a*(...) for multiplication"
+        name = node.func.id
+        if name not in _FUNCTIONS:
+            return f"unknown function {name}; write a*(...) for multiplication"
         if node.keywords:
             return "functions take positional arguments only"
+        low, high, wanted = _ARITY.get(name, _ONE_ARGUMENT)
+        if not low <= len(node.args) <= high:
+            return f"{name} takes {wanted}"
     return None
 
 
@@ -203,20 +226,39 @@ def _build(
     leaf: Callable[[ast.Name | ast.Constant], Any],
     ops: Mapping[Any, Any],
     call: Callable[[str, list[Any]], Any],
+    seen: Callable[[Any], Any] = lambda value: value,
 ) -> Any:
-    """Fold a validated step tree with one arithmetic backend (floats or SymPy)."""
+    """Fold a validated step tree with one arithmetic backend (floats or SymPy); `seen` sees
+    every intermediate value. Iterative, so deep nesting (`- - - x`) cannot overflow the stack."""
 
-    if isinstance(tree, (ast.Name, ast.Constant)):
-        return leaf(tree)
-    if isinstance(tree, ast.UnaryOp):
-        operand = _build(tree.operand, leaf, ops, call)
-        return -operand if isinstance(tree.op, ast.USub) else operand
-    if isinstance(tree, ast.BinOp):
-        left = _build(tree.left, leaf, ops, call)
-        right = _build(tree.right, leaf, ops, call)
-        return ops[type(tree.op)](left, right)
-    assert isinstance(tree, ast.Call) and isinstance(tree.func, ast.Name)
-    return call(tree.func.id, [_build(arg, leaf, ops, call) for arg in tree.args])
+    values: list[Any] = []
+    stack: list[tuple[ast.expr, bool]] = [(tree, False)]
+    while stack:
+        node, operands_done = stack.pop()
+        if isinstance(node, (ast.Name, ast.Constant)):
+            values.append(seen(leaf(node)))
+            continue
+        operands = (
+            [node.operand]
+            if isinstance(node, ast.UnaryOp)
+            else [node.left, node.right]
+            if isinstance(node, ast.BinOp)
+            else node.args
+        )
+        if not operands_done:
+            stack.append((node, True))
+            stack += [(operand, False) for operand in reversed(operands)]
+            continue
+        args = values[len(values) - len(operands) :]
+        del values[len(values) - len(operands) :]
+        if isinstance(node, ast.UnaryOp):
+            values.append(-args[0] if isinstance(node.op, ast.USub) else args[0])
+        elif isinstance(node, ast.BinOp):
+            values.append(seen(ops[type(node.op)](*args)))
+        else:
+            assert isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            values.append(seen(call(node.func.id, args)))
+    return values[0]
 
 
 _FLOAT_OPS = {
@@ -252,18 +294,38 @@ _FLOAT_FUNCTIONS: dict[str, Callable[..., float]] = {
 _FLOAT_CONSTANTS = {"pi": math.pi, "e": math.e, "tau": math.tau}
 
 
-def evaluate(tree: ast.expr, values: Mapping[str, float]) -> float:
-    """Evaluate with floats; raises ArithmeticError/ValueError/TypeError outside the domain."""
+def evaluate(tree: ast.expr, values: Mapping[str, float]) -> tuple[float, float]:
+    """Evaluate with floats: the value and the largest magnitude met on the way (it bounds the
+    round-off). Raises ValueError or ZeroDivisionError outside the domain and OverflowError
+    when a value is not finite."""
+
+    largest = 0.0
 
     def leaf(node: ast.Name | ast.Constant) -> float:
         if isinstance(node, ast.Constant):
             return float(node.value)
         return _FLOAT_CONSTANTS[node.id] if node.id in _FLOAT_CONSTANTS else values[node.id]
 
-    result = _build(tree, leaf, _FLOAT_OPS, lambda name, args: _FLOAT_FUNCTIONS[name](*args))
-    if not math.isfinite(result):
-        raise ValueError("the value is not finite")
-    return float(result)
+    def seen(value: float) -> float:
+        nonlocal largest
+        if not math.isfinite(value):
+            raise OverflowError("the value is not finite")
+        largest = max(largest, abs(value))
+        return value
+
+    def call(name: str, args: list[float]) -> float:
+        return _FLOAT_FUNCTIONS[name](*args)
+
+    return float(_build(tree, leaf, _FLOAT_OPS, call, seen)), largest
+
+
+def _side(tree: ast.expr, point: Mapping[str, float]) -> tuple[float, float] | str:
+    try:
+        return evaluate(tree, point)
+    except OverflowError:
+        return "overflow"
+    except (ValueError, ZeroDivisionError):
+        return "undefined"
 
 
 def _numeric(
@@ -273,30 +335,51 @@ def _numeric(
     samples: int,
     tolerance: float,
     seed: int,
-) -> Numeric:
+) -> tuple[Numeric, list[dict[str, float]]]:
+    """Compare the steps at seeded random points; also returns points where both are defined
+    (the counterexample first) for SymPy to test a disproof against."""
+
     rng = random.Random(seed)
     valid = skipped = 0
     max_abs = max_rel = 0.0
-    counterexample = None
+    mismatch = gap = None
+    points: list[dict[str, float]] = []
     for _ in range(samples):
         point = {name: rng.uniform(low, high) for name, (low, high) in ranges.items()}
-        try:
-            a, b = evaluate(left, point), evaluate(right, point)
-        except (ArithmeticError, ValueError, TypeError):
+        a, b = _side(left, point), _side(right, point)
+        defined = [isinstance(side, tuple) for side in (a, b)]
+        if not all(defined):
             skipped += 1
+            if gap is None and any(defined) and "undefined" in (a, b):
+                # Defined on one side only: a branch or a real root the other step lost.
+                values = [side[0] if isinstance(side, tuple) else None for side in (a, b)]
+                gap = Counterexample(point, *values)
             continue
         valid += 1
+        (a, a_largest), (b, b_largest) = a, b
         absolute = abs(a - b)
         scale = max(abs(a), abs(b))
         relative = absolute / scale if scale else 0.0
         max_abs, max_rel = max(max_abs, absolute), max(max_rel, relative)
-        if counterexample is None and absolute > tolerance and relative > tolerance:
-            counterexample = Counterexample(variables=point, left=a, right=b)
-    return Numeric(valid, skipped, max_abs, max_rel, counterexample)
+        excess = absolute - _ROUND_OFF * max(a_largest, b_largest)
+        if mismatch is None and excess > tolerance and excess > tolerance * scale:
+            mismatch = Counterexample(variables=point, left=a, right=b)
+            points.insert(0, point)
+        elif len(points) < _WITNESS_POINTS:
+            points.append(point)
+    numeric = Numeric(valid, skipped, max_abs, max_rel, mismatch or gap)
+    return numeric, points[:_WITNESS_POINTS]
+
+
+class _Undecided(BaseException):
+    """SymPy cannot answer within reason. A BaseException, so SymPy's own handlers let it pass."""
 
 
 def _symbolic(
-    left: ast.expr, right: ast.expr, ranges: Mapping[str, tuple[float, float]]
+    left: ast.expr,
+    right: ast.expr,
+    ranges: Mapping[str, tuple[float, float]],
+    points: list[dict[str, float]],
 ) -> Symbolic:
     try:
         import sympy
@@ -304,14 +387,7 @@ def _symbolic(
         return Symbolic(available=False, equivalent=None, difference=None)
 
     # Ranges become assumptions, so log(a*b) = log(a) + log(b) holds when a, b > 0.
-    symbols = {
-        name: sympy.Symbol(name, positive=True)
-        if low > 0
-        else sympy.Symbol(name, nonnegative=True)
-        if low >= 0
-        else sympy.Symbol(name, real=True)
-        for name, (low, high) in ranges.items()
-    }
+    symbols = {name: _symbol(sympy, name, low, high) for name, (low, high) in ranges.items()}
     constants = {"pi": sympy.pi, "e": sympy.E, "tau": 2 * sympy.pi}
     functions: dict[str, Callable[..., Any]] = {
         "abs": sympy.Abs,
@@ -334,7 +410,7 @@ def _symbolic(
         "min": sympy.Min,
         "max": sympy.Max,
     }
-    ops = {**_FLOAT_OPS, ast.Mod: sympy.Mod, ast.Pow: operator.pow}
+    ops = {**_FLOAT_OPS, ast.Mod: sympy.Mod, ast.Pow: _exact_power}
 
     def leaf(node: ast.Name | ast.Constant) -> Any:
         if isinstance(node, ast.Constant):
@@ -342,23 +418,94 @@ def _symbolic(
             return sympy.Rational(repr(node.value))
         return constants[node.id] if node.id in constants else symbols[node.id]
 
+    def build(tree: ast.expr) -> Any:
+        return _build(tree, leaf, ops, lambda n, a: functions[n](*a))
+
     try:
-        difference = sympy.simplify(
-            _build(left, leaf, ops, lambda n, a: functions[n](*a))
-            - _build(right, leaf, ops, lambda n, a: functions[n](*a))
-        )
-        if difference == 0:
-            return Symbolic(available=True, equivalent=True, difference="0")
-        proof = difference.equals(0)
-    except (TypeError, ValueError, ArithmeticError, sympy.SympifyError):
+        with _time_limit(_SYMBOLIC_SECONDS):
+            difference = sympy.simplify(build(left) - build(right))
+            if difference == 0:
+                return Symbolic(available=True, equivalent=True, difference="0")
+            if difference.has(sympy.nan, sympy.zoo, sympy.oo, -sympy.oo):
+                proof = None  # a step is undefined somewhere, so the difference proves nothing
+            else:
+                proof = difference.equals(0)
+            # equals(0) is a heuristic and can say False for a true identity (atan(x) +
+            # atan(1/x) = pi/2 for x > 0): a disproof needs a point in range that shows it.
+            if proof is False and not _witnessed(difference, symbols, points):
+                proof = None
+            text = str(difference)[:2000]
+    except (_Undecided, RecursionError, TypeError, ValueError, ArithmeticError, sympy.SympifyError):
         return Symbolic(available=True, equivalent=None, difference=None)
-    equivalent = True if proof is True else False if proof is False else None
-    return Symbolic(available=True, equivalent=equivalent, difference=str(difference)[:2000])
+    return Symbolic(available=True, equivalent=proof, difference=text)
+
+
+def _symbol(sympy: Any, name: str, low: float, high: float) -> Any:
+    if low > 0:
+        return sympy.Symbol(name, positive=True)
+    if low >= 0:
+        return sympy.Symbol(name, nonnegative=True)
+    if high < 0:
+        return sympy.Symbol(name, negative=True)
+    if high <= 0:
+        return sympy.Symbol(name, nonpositive=True)
+    return sympy.Symbol(name, real=True)
+
+
+def _exact_power(base: Any, exponent: Any) -> Any:
+    """`base ** exponent`, refusing exact numbers too large to write down (10^10^10)."""
+
+    if base.is_Rational and exponent.is_Rational and base not in (0, 1, -1):
+        bits = max(abs(base.p).bit_length(), base.q.bit_length())
+        if abs(exponent) * bits > _MAX_POWER_BITS:
+            raise _Undecided
+    return base**exponent
+
+
+def _witnessed(difference: Any, symbols: Mapping[str, Any], points: list[dict[str, float]]) -> bool:
+    """Whether the exact difference is clearly non-zero and real at one of the points."""
+
+    for point in points:
+        try:
+            value = difference.evalf(50, subs={symbols[name]: v for name, v in point.items()})
+            if value.is_extended_real and value.is_finite and abs(float(value)) > _WITNESS:
+                return True
+        except (TypeError, ValueError, ArithmeticError):
+            continue
+    return False
+
+
+@contextmanager
+def _time_limit(seconds: float) -> Iterator[None]:
+    """Raise _Undecided after `seconds` (a SIGALRM timer, so main thread and POSIX only)."""
+
+    if (
+        not hasattr(signal, "setitimer")
+        or threading.current_thread() is not threading.main_thread()
+    ):
+        yield
+        return
+
+    def expire(signum: int, frame: Any) -> NoReturn:
+        raise _Undecided
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _verdict(symbolic: Symbolic, numeric: Numeric) -> bool | None:
-    if symbolic.equivalent is False or numeric.counterexample is not None:
-        return False
-    if symbolic.equivalent is True or numeric.samples_valid > 0:
-        return True
-    return None
+    """SymPy decides when it can (a simplification to 0 is a proof; a disproof is witnessed);
+    otherwise a value mismatch is False, a step defined where the other is not is undecided,
+    and samples that all agree are True."""
+
+    if symbolic.equivalent is not None:
+        return symbolic.equivalent
+    example = numeric.counterexample
+    if example is not None:
+        return False if None not in (example.left, example.right) else None
+    return True if numeric.samples_valid > 0 else None

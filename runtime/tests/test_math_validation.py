@@ -85,3 +85,63 @@ def test_powers_stay_real(ctx) -> None:
     numeric = result["pairs"][0]["numeric"]
     assert numeric["samples_skipped"] > 0
     assert numeric["samples_valid"] + numeric["samples_skipped"] == 40
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [("cosh(x)^2 - sinh(x)^2", "1"), ("exp(x)^2 - exp(2*x) + x", "x"), ("x^10 - (x^5)^2", "0")],
+)
+def test_float_round_off_is_not_a_counterexample(ctx, steps) -> None:
+    pair = check(ctx, *steps, samples=200)["pairs"][0]
+    assert pair["equivalent"] is True and pair["numeric"]["counterexample"] is None
+
+
+@pytest.mark.parametrize(
+    ("steps", "ranges"),
+    [
+        (("atan(x) + atan(1/x)", "pi/2"), {"x": (0.1, 10)}),  # SymPy's equals(0) says False
+        (("sqrt((x-1)^2)", "x - 1"), {"x": (1, 5)}),
+        (("sqrt(x^2)", "-x"), {"x": (-5, -1)}),
+    ],
+)
+def test_an_unwitnessed_symbolic_disproof_does_not_reject_an_identity(ctx, steps, ranges) -> None:
+    pair = check(ctx, *steps, ranges=ranges)["pairs"][0]
+    assert pair["equivalent"] is True and pair["symbolic"]["equivalent"] is not False
+
+
+def test_a_difference_below_the_tolerance_is_still_disproved(ctx) -> None:
+    pair = check(ctx, "x + 0.0000000001", "x")["pairs"][0]
+    assert pair["numeric"]["counterexample"] is None
+    assert pair["symbolic"]["equivalent"] is False and pair["equivalent"] is False
+
+
+def test_a_step_defined_where_the_other_is_not_is_undecided(ctx) -> None:
+    pair = check(ctx, "x^(1/3)", "abs(x)^(1/3)")["pairs"][0]
+    assert pair["equivalent"] is None
+    example = pair["numeric"]["counterexample"]
+    assert example["left"] is None and example["right"] > 0 and example["variables"]["x"] < 0
+
+
+def test_undefined_steps_and_huge_powers_are_undecided_not_hung(ctx) -> None:
+    assert check(ctx, "1/0", "2/0")["valid"] is None
+    assert check(ctx, "10^10^10", "1")["valid"] is None
+
+
+def test_deep_nesting_is_folded_without_recursion(ctx) -> None:
+    assert check(ctx, "-" * 1500 + "x", "x")["valid"] is True
+    assert check(ctx, "+".join(["x"] * 600), "600*x")["valid"] is True
+
+
+@pytest.mark.parametrize(
+    ("step", "reason"),
+    [
+        ("sin(x, y)", "sin takes one argument"),
+        ("min()", "min takes two or more arguments"),
+        ("log(x, 2, 3)", "log takes one or two arguments"),
+        ("1e400", "the number is too large"),
+    ],
+)
+def test_arity_and_literals_are_checked(ctx, step, reason) -> None:
+    with pytest.raises(DirectorError) as raised:
+        check(ctx, step, "1")
+    assert raised.value.code == "invalid_expression" and reason in raised.value.message

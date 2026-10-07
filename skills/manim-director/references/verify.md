@@ -57,7 +57,8 @@ mid-transition can be legitimately faint.
   (seeded) in -10..10 per variable, or in `ranges`. A range with a lower bound ≥ 0 also tells SymPy
   the variable is nonnegative (`sqrt(x^2)` equals `x` only with `ranges: {"x": [0, 5]}`).
 - `valid: false` comes with the failing pair, the symbolic difference and a counterexample. `valid:
-  null` means it could not decide (for example every sample was outside the domain).
+  null` means it could not decide: every sample was outside the domain, or one step is defined where
+  the other is not (the counterexample's `left` or `right` is null there; narrow `ranges`).
 - For sums with `\cdots`, check a concrete instance:
   `["(1 - r^4)/(1 - r)", "1 + r + r^2 + r^3"]` with `ranges: {"r": [-0.9, 0.9]}`.
 
