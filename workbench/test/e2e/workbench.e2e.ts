@@ -45,10 +45,12 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const problems: string[] = [];
+  /** Requests the test cuts off on purpose fail loudly in the console. */
+  let outage = false;
   page.on("pageerror", (error) => problems.push(error.message));
   page.on("console", (message) => {
     // A save that loses a revision race is answered 409, which the browser logs.
-    if (message.type() === "error" && !message.text().includes("status of 409")) problems.push(message.text());
+    if (message.type() === "error" && !outage && !message.text().includes("status of 409")) problems.push(message.text());
   });
 
   await page.goto(engine.url);
@@ -137,6 +139,27 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     assert.equal(await page.evaluate(() => document.querySelector(".cm-content")?.textContent?.includes("# mine")), false);
   });
 
+  await t.test("unsaved edits wait out a lost connection, guarded against leaving", async () => {
+    await page.locator(".cm-line", { hasText: "self.place(growth_chart(self))" }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("  # offline");
+    assert.equal(await leaveIsGuarded(page), true);
+
+    outage = true;
+    await page.route("**/api/**", (route) => route.abort());
+    await page.keyboard.press("Control+s");
+    await page.getByRole("heading", { name: "Not connected to the engine" }).waitFor();
+    assert.equal(await page.locator(".workbench").isVisible(), false);
+    await page.unroute("**/api/**");
+    await page.locator(".workbench").waitFor({ timeout: STEP_MS });
+    outage = false;
+
+    await page.keyboard.press("Control+s");
+    await until(page, async () => (await page.locator(".code > .bar").innerText()).includes("Saved"), "saved after reconnecting");
+    assert.match(readFileSync(join(engine.root, "scenes.py"), "utf8"), /growth_chart\(self\)\)  # offline\n/);
+    assert.equal(await leaveIsGuarded(page), false);
+  });
+
   await t.test("a running render cancels from the stage", async () => {
     await sceneButton("GeneralizedFibonacci").click();
     await action("Preview").click();
@@ -167,6 +190,15 @@ async function until(page: Page, check: () => Promise<boolean>, what: string, ti
     if (Date.now() > deadline) throw new Error(`timed out waiting for: ${what}`);
     await page.waitForTimeout(100);
   }
+}
+
+/** Whether leaving the page now would make the browser ask first. */
+function leaveIsGuarded(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
 }
 
 async function activeLine(page: Page): Promise<number> {

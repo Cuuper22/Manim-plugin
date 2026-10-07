@@ -2,7 +2,7 @@ import { EngineClient } from "../api/client.ts";
 import { ApiError, asApiError } from "../api/errors.ts";
 import { EventFeed, type OpenStream } from "../api/events.ts";
 import type { JobSummary, OperationRequest } from "../api/types.ts";
-import { initialState, reduce, type StoreAction, type WorkbenchState } from "./reducer.ts";
+import { initialState, reduce, type Connection, type StoreAction, type WorkbenchState } from "./reducer.ts";
 
 /** How often a lost engine is tried again. */
 export const RECONNECT_MS = 3000;
@@ -146,11 +146,11 @@ export class WorkbenchStore {
 
   #lost(error: ApiError): void {
     this.#stop();
-    if (error.code === "unauthorized") {
-      this.#dispatch({ type: "connection", connection: { status: "unauthorized" } });
-      return;
-    }
-    this.#dispatch({ type: "connection", connection: { status: "disconnected", reason: error.message } });
+    const connection: Connection = error.code === "unauthorized"
+      ? { status: "unauthorized" }
+      : { status: "disconnected", reason: error.message };
+    this.#dispatch({ type: "connection", connection });
+    // A session comes back too: the engine's new link, opened in any tab of this browser, sets the cookie.
     this.#retryLater();
   }
 

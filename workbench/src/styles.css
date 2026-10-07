@@ -37,6 +37,11 @@ a {
 
 /* ── primitives ───────────────────────────────────────────────────────── */
 
+/* A class that sets `display` must not show an element marked hidden. */
+[hidden] {
+  display: none !important;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

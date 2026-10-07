@@ -163,6 +163,7 @@ export class EditorSession {
     if (!doc || doc.saving) return false;
     const current = await this.#access.revision(doc.path);
     if (!current.ok) return false;
+    this.#disk.set(doc.path, current.value);
     doc.revision = current.value;
     doc.issue = null;
     return this.#save(doc);
@@ -223,22 +224,28 @@ export class EditorSession {
   async #save(doc: OpenDoc): Promise<boolean> {
     if (doc.saving || doc.issue?.kind === "changed") return false;
     const text = doc.state.doc;
+    // Recreating a deleted file must not find one there.
+    const expected = doc.issue?.kind === "deleted" ? null : doc.revision;
     doc.saving = true;
     this.#emit();
     const outcome = await this.#access.write({
       path: doc.path,
-      // Recreating a deleted file must not find one there.
-      expected_revision: doc.issue?.kind === "deleted" ? null : doc.revision,
+      expected_revision: expected,
       edit: { kind: "replace_all", content: doc.state.sliceDoc() },
     });
     doc.saving = false;
     if (outcome.ok) {
+      // The disk now holds this save, unless an event already reported it or a newer write. Only indexed files
+      // get `file` events, and they may come after the response.
+      if (this.#disk.get(doc.path) === expected) this.#disk.set(doc.path, outcome.value.revision);
       doc.revision = outcome.value.revision;
       doc.saved = text;
       doc.dirty = !doc.state.doc.eq(text);
       doc.issue = null;
     } else if (outcome.error.code === "revision_conflict") {
-      doc.issue = outcome.error.data?.current_revision ? { kind: "changed" } : { kind: "deleted" };
+      const current = outcome.error.data?.current_revision;
+      this.#disk.set(doc.path, typeof current === "string" ? current : null);
+      doc.issue = current ? { kind: "changed" } : { kind: "deleted" };
     } else if (outcome.error.code === "source_invalid") {
       const line = outcome.error.data?.line;
       doc.issue = { kind: "invalid", message: outcome.error.message, line: typeof line === "number" ? line : null };

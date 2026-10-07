@@ -39,21 +39,29 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
   const [loaded, setLoaded] = useState(false);
   const cursor = useRef<string | undefined>(undefined);
   const fetching = useRef(false);
+  /** Asked for while a fetch ran, which may have been answered before the lines that prompted it. */
+  const refetch = useRef(false);
   const list = useRef<HTMLOListElement>(null);
   const pinned = useRef(true);
 
   const fetchPage = useCallback(async () => {
-    if (fetching.current) return;
+    if (fetching.current) {
+      refetch.current = true;
+      return;
+    }
     fetching.current = true;
-    const page = { after: cursor.current, limit: PAGE_SIZE };
-    const outcome = await store.perform(`logs:${jobId}`, (client) => client.jobLogs(jobId, page));
+    do {
+      refetch.current = false;
+      const page = { after: cursor.current, limit: PAGE_SIZE };
+      const outcome = await store.perform(`logs:${jobId}`, (client) => client.jobLogs(jobId, page));
+      if (!outcome.ok) break;
+      const { items, next_after } = outcome.value;
+      cursor.current = items.at(-1)?.cursor ?? cursor.current;
+      if (items.length > 0) setEntries((current) => [...current, ...items].slice(-MAX_ENTRIES));
+      setMore(next_after !== null);
+      setLoaded(true);
+    } while (refetch.current);
     fetching.current = false;
-    if (!outcome.ok) return;
-    const { items, next_after } = outcome.value;
-    cursor.current = items.at(-1)?.cursor ?? cursor.current;
-    if (items.length > 0) setEntries((current) => [...current, ...items].slice(-MAX_ENTRIES));
-    setMore(next_after !== null);
-    setLoaded(true);
   }, [store, jobId]);
 
   const active = job !== null && isActive(job);

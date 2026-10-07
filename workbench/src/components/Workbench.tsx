@@ -41,7 +41,15 @@ function firstView(latest: SceneLatest | null): StageView {
   return latest.contact_sheet ? "sheet" : "video";
 }
 
-export function Workbench({ workspace, reconnecting }: { workspace: Workspace; reconnecting: boolean }) {
+interface WorkbenchProps {
+  workspace: Workspace;
+  /** The event stream is reconnecting; what shows may be out of date. */
+  reconnecting: boolean;
+  /** The engine cannot be used: hidden and inert, but kept so nothing typed is lost. */
+  suspended: boolean;
+}
+
+export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps) {
   const actions = useWorkbench((state) => state.actions);
   const jobs = useWorkbench((state) => state.jobs);
   const { project, scenes, profiles, latest, findings } = workspace;
@@ -105,6 +113,10 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
     }
     // A render is identified by its URL, which carries the file version.
   }, [playback, sceneId, videoUrl]);
+
+  useEffect(() => {
+    if (suspended) playback.shuttle(0);
+  }, [playback, suspended]);
 
   const onFinished = ({ action, sceneId: launchedFor }: Launch, job: JobSummary) => {
     if (job.status !== "succeeded") return;
@@ -173,7 +185,7 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
     }
   };
 
-  useShortcuts({
+  useShortcuts(suspended ? {} : {
     toggle_play: onVideo(() => playback.toggle()),
     frame_back: onVideo(() => playback.stepFrames(-1)),
     frame_forward: onVideo(() => playback.stepFrames(1)),
@@ -198,7 +210,7 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
   };
 
   return (
-    <div className="workbench">
+    <div className="workbench" hidden={suspended}>
       <TopBar
         project={project.name}
         scenes={scenes}
@@ -303,8 +315,9 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
           />
         </Inspector>
       </div>
-      <LogsDialog jobId={logsJob} onClose={() => setLogsJob(null)} onDiagnose={diagnose} />
-      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {/* A modal dialog would keep the connection screen inert. */}
+      <LogsDialog jobId={suspended ? null : logsJob} onClose={() => setLogsJob(null)} onDiagnose={diagnose} />
+      <ShortcutsDialog open={shortcutsOpen && !suspended} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }

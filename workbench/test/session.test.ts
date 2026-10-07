@@ -153,6 +153,51 @@ test("a save that races an external write reports the conflict and keeps the buf
   assert.equal(view.state.sliceDoc(), "a\nmine\n");
 });
 
+test("a save is not mistaken for an external change, whether its file event comes late or never", async () => {
+  const { access } = engine({ "notes.md": "a\n" });
+  let loads = 0;
+  const counted: SourceAccess = {
+    ...access,
+    load: (path, quiet) => {
+      loads += 1;
+      return access.load(path, quiet);
+    },
+  };
+  const session = new EditorSession(counted, () => []);
+  const view = port(session);
+  session.attach(view);
+  await session.open("notes.md", null);
+  view.type("b\n");
+  const saving = session.save();
+  view.type("c\n");
+  assert.equal(await saving, true);
+  assert.equal(session.getSnapshot().docs[0]?.issue, null, "typing on during a save is no conflict");
+  assert.equal(session.getSnapshot().docs[0]?.dirty, true);
+  assert.equal(loads, 1, "the file just written is not read back");
+
+  session.diskChanged("notes.md", "r2");
+  assert.equal(session.getSnapshot().docs[0]?.issue, null);
+  assert.equal(await session.save(), true);
+});
+
+test("a conflict's revision is remembered, so recreating a file deleted without an event still saves cleanly", async () => {
+  const { access, external, disk } = engine({ "notes.md": "a\n" });
+  const session = new EditorSession(access, () => []);
+  const view = port(session);
+  session.attach(view);
+  await session.open("notes.md", null);
+  view.type("b\n");
+  external("notes.md", null);
+  assert.equal(await session.save(), false);
+  assert.deepEqual(session.getSnapshot().docs[0]?.issue, { kind: "deleted" });
+
+  const saving = session.save();
+  view.type("c\n");
+  assert.equal(await saving, true);
+  assert.equal(disk.get("notes.md")?.content, "a\nb\n");
+  assert.equal(session.getSnapshot().docs[0]?.issue, null);
+});
+
 test("invalid source stays unsaved with the engine's line; a deleted file is recreated only if still absent", async () => {
   const { access, writes, external, disk } = engine({ "a.py": "a\n" });
   const session = new EditorSession(access, () => []);

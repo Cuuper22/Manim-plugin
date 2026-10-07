@@ -21,7 +21,7 @@ export type Connection =
   | { status: "reconnecting" }
   /** The engine cannot be used; `reason` says why. Reconnects on its own. */
   | { status: "disconnected"; reason: string }
-  /** The session is gone (e.g. the engine restarted): only a new link helps. */
+  /** The session is gone (e.g. the engine restarted) until the engine's new link is opened in this browser. */
   | { status: "unauthorized" };
 
 export interface Workspace extends WorkspaceSections {

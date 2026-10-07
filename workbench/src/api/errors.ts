@@ -1,13 +1,11 @@
 import type { ErrorBody } from "./types.ts";
 
 /**
- * Codes the client produces itself; none of them collide with engine codes.
- * `unreachable`: nothing answered, or something other than the engine did.
- * `source_incomplete`: a paged source load did not add up to one revision.
+ * Every failure the client reports. Branch on `code`, never on `message`.
+ * Besides the engine's codes, the client has two of its own:
+ * `unreachable` (nothing answered, or something other than the engine did) and
+ * `source_incomplete` (a paged source load did not add up to one revision).
  */
-export type ClientErrorCode = "unreachable" | "source_incomplete";
-
-/** Every failure the client reports. Branch on `code`, never on `message`. */
 export class ApiError extends Error {
   readonly code: string;
   readonly data: Record<string, unknown> | null;

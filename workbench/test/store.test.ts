@@ -59,14 +59,24 @@ test("an unreachable engine shows why and is retried until it answers", async (t
   store.disconnect();
 });
 
-test("a rejected session signs out and is not retried", async (t) => {
+test("a rejected session signs out, and signs back in once the browser has a session again", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { store, requested } = setup({ "/api/state": envelope("unauthorized", 401) });
+  const routes: Record<string, Answer> = { "/api/state": envelope("unauthorized", 401) };
+  const { store } = setup(routes);
   await store.connect();
   assert.equal(store.getState().connection.status, "unauthorized");
-  t.mock.timers.tick(RECONNECT_MS * 3);
+  assert.deepEqual(store.getState().toasts, []);
+
+  t.mock.timers.tick(RECONNECT_MS);
   await settle();
-  assert.equal(requested.length, 1);
+  assert.equal(store.getState().connection.status, "unauthorized");
+
+  // The engine's new link was opened in another tab: its cookie now comes along.
+  routes["/api/state"] = json(workspaceState());
+  t.mock.timers.tick(RECONNECT_MS);
+  await settle();
+  assert.equal(store.getState().connection.status, "online");
+  store.disconnect();
 });
 
 test("actions are pending while they run; failures keep their error and toast unless quiet", async () => {

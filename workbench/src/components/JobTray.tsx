@@ -34,7 +34,7 @@ export function JobTray({ open, onOpenChange, onLogs, onDiagnose }: JobTrayProps
 
   return (
     <div className="menu-anchor" ref={root}>
-      <button type="button" aria-expanded={open} aria-controls="job-tray" onClick={() => onOpenChange(!open)}>
+      <button type="button" aria-expanded={open} aria-controls={open ? "job-tray" : undefined} onClick={() => onOpenChange(!open)}>
         Jobs
         {running > 0 ? <span className="muted"> · {running} active</span> : null}
       </button>

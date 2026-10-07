@@ -31,6 +31,7 @@ export function ConnectionScreen({ connection, root }: ConnectionScreenProps) {
         </p>
         {command}
         <p>{openLink}</p>
+        <Retrying>Opening it in another tab signs this page in again, unsaved edits included.</Retrying>
       </Screen>
     );
   }
@@ -43,11 +44,17 @@ export function ConnectionScreen({ connection, root }: ConnectionScreenProps) {
       <p>Start it from a terminal:</p>
       {command}
       <p>{openLink}</p>
-      <p className="row meta retrying">
-        <span className="dot" data-state="running" aria-hidden="true" />
-        This page keeps trying to reconnect.
-      </p>
+      <Retrying>This page keeps trying to reconnect; unsaved edits stay here meanwhile.</Retrying>
     </Screen>
+  );
+}
+
+function Retrying({ children }: { children: string }) {
+  return (
+    <p className="row meta retrying">
+      <span className="dot" data-state="running" aria-hidden="true" />
+      {children}
+    </p>
   );
 }
 

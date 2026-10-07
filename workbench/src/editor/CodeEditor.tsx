@@ -2,7 +2,7 @@ import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref, type RefObject } from "react";
 import { CodeSkeleton } from "../components/CodeSkeleton.tsx";
-import { TabList, tabId } from "../components/TabList.tsx";
+import { TabList, panelId, tabId } from "../components/TabList.tsx";
 import { baseName } from "../model/format.ts";
 import type { WorkbenchStore } from "../store/store.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
@@ -109,6 +109,7 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
   }, [session, request]);
 
   useDiskSync(session);
+  useLeaveGuard(snapshot.docs.some((doc) => doc.dirty));
 
   const active = snapshot.docs.find((doc) => doc.path === snapshot.active) ?? null;
   return (
@@ -160,6 +161,7 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
         ref={host}
         className="code-host"
         role="tabpanel"
+        id={active ? panelId("file", active.path) : undefined}
         aria-labelledby={active ? tabId("file", active.path) : undefined}
         hidden={!active}
       />
@@ -204,6 +206,16 @@ function IssueBanner({ doc, session }: { doc: DocStatus; session: EditorSession 
       ) : null}
     </div>
   );
+}
+
+/** While edits are unsaved, the browser asks before the tab closes or navigates away (e.g. to a new sign-in link). */
+function useLeaveGuard(unsaved: boolean): void {
+  useEffect(() => {
+    if (!unsaved) return;
+    const ask = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [unsaved]);
 }
 
 /** Forwards `file` events, and re-checks open files after every snapshot (events may have been missed). */
