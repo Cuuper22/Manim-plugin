@@ -6,8 +6,8 @@ use crate::{
     process::wait_bounded,
 };
 use manim_director_core::{
-    files, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat, MediaInfo,
-    OperationResult, Task, Timeline, ARTIFACTS_DIR,
+    files, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat, MediaFormat,
+    MediaInfo, OperationResult, Task, Timeline, ARTIFACTS_DIR,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -373,7 +373,11 @@ fn contract(expect: &Expectations<'_>, artifact: &Artifact, transcode: Transcode
             let settings = &render.settings;
             size(settings.width, settings.height);
             check_container(&mut mismatches, media, settings.format.as_str());
-            check_fps(&mut mismatches, media, f64::from(settings.fps));
+            let fps = match settings.format {
+                MediaFormat::Gif => gif_rate(settings.fps, media.fps),
+                _ => f64::from(settings.fps),
+            };
+            check_fps(&mut mismatches, media, fps);
             check_alpha(&mut mismatches, media, settings.transparent);
         }
         (Task::Render(render), ArtifactKind::Section) => {
@@ -445,6 +449,20 @@ fn check_fps(mismatches: &mut Vec<Mismatch>, media: &MediaInfo, expected: f64) {
             expected: json!(expected),
             actual: json!(media.fps),
         });
+    }
+}
+
+/// GIF frame delays are whole centiseconds, so a GIF rendered at `fps`
+/// probes at 100/n for a delay n either side of 100/fps: the one of those
+/// two rates nearest `actual`.
+fn gif_rate(fps: u32, actual: Option<f64>) -> f64 {
+    let delay = 100.0 / f64::from(fps);
+    let [fast, slow] = [delay.floor(), delay.ceil()].map(|delay| 100.0 / delay.max(1.0));
+    let distance = |rate: f64| actual.map_or(0.0, |actual| (rate - actual).abs());
+    if distance(fast) <= distance(slow) {
+        fast
+    } else {
+        slow
     }
 }
 
@@ -718,6 +736,48 @@ mod tests {
             has_alpha: true,
         });
         assert!(contract(&expect, &video, Transcode::default()).is_empty());
+    }
+
+    #[test]
+    fn a_gif_render_may_probe_at_the_centisecond_rate_next_to_its_fps() {
+        let root = Path::new("/p");
+        let probed = |fps: u32, actual: f64| {
+            let mut task = render_task(root, false);
+            if let Task::Render(render) = &mut task {
+                render.settings.fps = fps;
+                render.settings.format = MediaFormat::Gif;
+            }
+            let expect = Expectations {
+                root,
+                task: &task,
+                source: None,
+                budget_bytes: u64::MAX,
+            };
+            let mut video = artifact(ArtifactKind::Video, "v.gif");
+            video.media = Some(MediaInfo {
+                container: "gif".into(),
+                codec: Some("gif".into()),
+                width: 854,
+                height: 480,
+                fps: Some(actual),
+                duration_seconds: Some(1.0),
+                has_alpha: false,
+            });
+            contract(&expect, &video, Transcode::default())
+                .iter()
+                .map(|mismatch| mismatch.field)
+                .collect::<Vec<_>>()
+        };
+        for (fps, actual) in [(15, 50.0 / 3.0), (30, 100.0 / 3.0), (24, 25.0), (60, 100.0)] {
+            assert!(
+                probed(fps, actual).is_empty(),
+                "{fps} fps probed at {actual}"
+            );
+        }
+        assert!(probed(15, 100.0 / 7.0).is_empty(), "the slower neighbour");
+        assert!(probed(25, 25.0).is_empty());
+        assert_eq!(probed(15, 25.0), ["fps"]);
+        assert_eq!(probed(25, 50.0 / 3.0), ["fps"]);
     }
 
     #[test]
