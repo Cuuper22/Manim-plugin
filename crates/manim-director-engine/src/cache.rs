@@ -31,16 +31,43 @@ pub fn fingerprint(
     runtime_identity: &str,
     task: &Task,
 ) -> io::Result<Fingerprint> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(CACHE_SCHEMA);
-    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
-    hasher.update(b"\0");
-    hasher.update(runtime_identity.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(task.operation().as_str().as_bytes());
-    hasher.update(b"\0");
-    hasher.update(&serde_json::to_vec(&task.cache_identity())?);
+    Fingerprint::new(runtime_identity, task, input_hashes(root, spec, task)?)
+}
 
+impl Fingerprint {
+    /// The key over files hashed earlier by [`input_hashes`].
+    pub fn new(
+        runtime_identity: &str,
+        task: &Task,
+        files: BTreeMap<String, String>,
+    ) -> io::Result<Self> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(CACHE_SCHEMA);
+        hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+        hasher.update(b"\0");
+        hasher.update(runtime_identity.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(task.operation().as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&serde_json::to_vec(&task.cache_identity())?);
+        for (relative, hash) in &files {
+            hasher.update(relative.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(hash.as_bytes());
+        }
+        Ok(Self {
+            value: hasher.finalize().to_hex().to_string(),
+            files,
+        })
+    }
+}
+
+/// blake3 hex of every project file `task` reads, by project-relative path.
+pub fn input_hashes(
+    root: &Path,
+    spec: &DirectorSpec,
+    task: &Task,
+) -> io::Result<BTreeMap<String, String>> {
     let paths = match task {
         Task::Discover(discover) => discover.files.clone(),
         _ => {
@@ -58,15 +85,7 @@ pub fn fingerprint(
             .replace('\\', "/");
         hashes.insert(relative, file_revision(&path)?);
     }
-    for (relative, hash) in &hashes {
-        hasher.update(relative.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(hash.as_bytes());
-    }
-    Ok(Fingerprint {
-        value: hasher.finalize().to_hex().to_string(),
-        files: hashes,
-    })
+    Ok(hashes)
 }
 
 /// blake3 hex of a file's bytes.

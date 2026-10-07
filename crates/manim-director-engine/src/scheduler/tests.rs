@@ -542,6 +542,26 @@ async fn discover_is_cached_and_reports_engine_findings() {
 }
 
 #[tokio::test]
+async fn a_scan_that_raced_an_edit_is_not_cached() {
+    let project = Project::new("");
+    fs::write(
+        project.root.join("scenes/main.py"),
+        "# edited during the scan\nclass MainScene(Scene):\n    pass\n",
+    )
+    .unwrap();
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let names = |index: DiscoverResult| -> Vec<String> {
+        index.scenes.into_iter().map(|scene| scene.name).collect()
+    };
+    assert_eq!(names(scheduler.discover().await.unwrap()), ["MainScene"]);
+    assert_eq!(
+        names(scheduler.discover().await.unwrap()),
+        ["MainScene", "Late"],
+        "the edit is scanned, not hidden behind the older scan"
+    );
+}
+
+#[tokio::test]
 async fn direct_operations_are_not_jobs() {
     let project = Project::new("");
     let scheduler = project.scheduler("stub", 1, 8).await;

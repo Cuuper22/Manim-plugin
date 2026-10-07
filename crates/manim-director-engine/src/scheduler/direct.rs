@@ -9,6 +9,7 @@ use manim_director_core::{
     OperationResult, Task,
 };
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -60,6 +61,8 @@ async fn run(
 struct PreparedDiscover {
     task: Task,
     spec: DirectorSpec,
+    /// The scanned files' hashes from before the scan.
+    inputs: BTreeMap<String, String>,
     cached: Option<DiscoverResult>,
     files: u32,
     truncated: bool,
@@ -83,10 +86,12 @@ pub(super) async fn discover(inner: &Arc<Inner>) -> Result<DiscoverResult, Engin
                 return Err(EngineError::internal("discover returned another result"));
             };
             let (inner, task, spec) = (inner.clone(), prepared.task, prepared.spec);
-            let cached = OperationResult::Discover(result.clone());
-            tokio::task::spawn_blocking(move || cache_discover(&inner, &spec, &task, &cached))
-                .await
-                .map_err(EngineError::internal)??;
+            let (inputs, cached) = (prepared.inputs, OperationResult::Discover(result.clone()));
+            tokio::task::spawn_blocking(move || {
+                cache_discover(&inner, &spec, &task, inputs, &cached)
+            })
+            .await
+            .map_err(EngineError::internal)??;
             result
         }
     };
@@ -119,9 +124,10 @@ fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
     let task = Task::Discover(DiscoverTask {
         files: sources.files,
     });
+    let inputs = cache::input_hashes(&inner.root, &spec, &task).map_err(EngineError::internal)?;
     let cached = match inner.known_runtime()? {
         Some(runtime) => {
-            let fingerprint = cache::fingerprint(&inner.root, &spec, &runtime, &task)
+            let fingerprint = cache::Fingerprint::new(&runtime, &task, inputs.clone())
                 .map_err(EngineError::internal)?;
             let entry = inner
                 .store
@@ -137,6 +143,7 @@ fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
     Ok(PreparedDiscover {
         task,
         spec,
+        inputs,
         cached,
         files,
         truncated,
@@ -144,18 +151,24 @@ fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
     })
 }
 
-/// Caches a scan under the identity of the worker that just ran it.
+/// Caches a scan under the identity of the worker that just ran it, unless a
+/// scanned file changed meanwhile: the scan may then describe either version,
+/// so the next discover must look again.
 fn cache_discover(
     inner: &Inner,
     spec: &DirectorSpec,
     task: &Task,
+    inputs: BTreeMap<String, String>,
     result: &OperationResult,
 ) -> Result<(), EngineError> {
     let Some(runtime) = inner.known_runtime()? else {
         return Ok(());
     };
+    if cache::input_hashes(&inner.root, spec, task).ok().as_ref() != Some(&inputs) {
+        return Ok(());
+    }
     let fingerprint =
-        cache::fingerprint(&inner.root, spec, &runtime, task).map_err(EngineError::internal)?;
+        cache::Fingerprint::new(&runtime, task, inputs).map_err(EngineError::internal)?;
     inner
         .store
         .cache_put(&fingerprint.value, None, result, Operation::Discover)
