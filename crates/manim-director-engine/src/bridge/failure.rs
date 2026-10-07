@@ -71,9 +71,5 @@ pub(super) fn truncate(value: &str, max: usize) -> String {
     if value.len() <= max {
         return value.to_owned();
     }
-    let mut end = max;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &value[..end])
+    format!("{}…", &value[..value.floor_char_boundary(max)])
 }

@@ -506,14 +506,7 @@ fn failure_text(ctx: &ProjectContext<'_>, id: Uuid) -> Result<String, EngineErro
 
 /// The last `max` bytes of `text`, starting on a character boundary.
 fn keep_tail(text: &str, max: usize) -> &str {
-    if text.len() <= max {
-        return text;
-    }
-    let mut start = text.len() - max;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    &text[start..]
+    &text[text.ceil_char_boundary(text.len().saturating_sub(max))..]
 }
 
 /// blake3 of the scene file, from the fingerprint when it was hashed there.
