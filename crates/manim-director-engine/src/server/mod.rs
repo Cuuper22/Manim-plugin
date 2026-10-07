@@ -43,7 +43,7 @@ pub const REMOTE_WARNING: &str = "WARNING: --allow-remote: the API is reachable 
 pub struct ServeConfig {
     pub address: SocketAddr,
     pub workbench_dir: Option<PathBuf>,
-    /// Accept any Host header and allow binding a non-loopback address.
+    /// Accept any Host header and allow binding any address.
     pub allow_remote: bool,
 }
 
