@@ -178,14 +178,27 @@ fn cache_discover(
 }
 
 /// Creates a project in `target` from a template, or adds one scene template
-/// to the project there.
+/// to the project there. A failure removes `target` if this call created it
+/// and it is still empty.
 pub async fn init_project(
     bridge: &BridgeConfig,
     target: &Path,
     params: InitParams,
 ) -> Result<InitResult, EngineError> {
     OperationRequest::Init(params.clone()).validate()?;
-    let target = target.to_path_buf();
+    let created = !target.exists();
+    let result = init(bridge, target.to_path_buf(), params).await;
+    if result.is_err() && created {
+        let _ = fs::remove_dir(target);
+    }
+    result
+}
+
+async fn init(
+    bridge: &BridgeConfig,
+    target: PathBuf,
+    params: InitParams,
+) -> Result<InitResult, EngineError> {
     let (root, task) = tokio::task::spawn_blocking(move || preflight(&target, &params))
         .await
         .map_err(EngineError::internal)??;
@@ -336,6 +349,20 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_init_removes_the_directory_it_created() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("film");
+        let unreachable = BridgeConfig {
+            python: "/nonexistent/python".into(),
+            module: "missing".into(),
+        };
+        init_project(&unreachable, &target, InitParams::default())
+            .await
+            .unwrap_err();
+        assert!(!target.exists());
     }
 
     #[tokio::test]
