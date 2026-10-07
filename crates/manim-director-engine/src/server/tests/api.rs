@@ -298,6 +298,37 @@ async fn source_pages_and_writes_are_exact_and_revision_checked() {
     assert_eq!(bad_line.json()["error"]["data"]["field"], "start_line");
 }
 
+#[tokio::test]
+async fn an_unchanged_save_announces_nothing() {
+    let harness = Harness::new("").await;
+    let content = fs::read_to_string(harness.root.join("director.yaml")).unwrap();
+    let page = harness.get("/api/source?path=director.yaml").await.json();
+    let revision = page["revision"].as_str().unwrap();
+    let save = async |content: String| {
+        harness
+            .json(
+                Method::PUT,
+                "/api/source",
+                &json!({"path": "director.yaml", "expected_revision": revision,
+                        "edit": {"kind": "replace_all", "content": content}}),
+            )
+            .await
+    };
+    let mut events = harness.events("", None).await;
+    let unchanged = save(content.clone()).await;
+    assert_eq!(unchanged.status, StatusCode::OK, "{:?}", unchanged.body);
+    assert_eq!(unchanged.json()["revision"], revision);
+    assert!(events
+        .next_within(Duration::from_millis(300))
+        .await
+        .is_none());
+    let changed = save(format!("{content}# edited\n")).await;
+    assert_eq!(changed.status, StatusCode::OK, "{:?}", changed.body);
+    let file = events.until(|event| event.name == "file").await;
+    assert_eq!(file.data["path"], "director.yaml");
+    assert_eq!(file.data["revision"], changed.json()["revision"]);
+}
+
 /// Replaces values that differ between runs, keeping the shape.
 fn normalize(state: &mut Value) {
     for pointer in [

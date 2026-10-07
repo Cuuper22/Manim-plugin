@@ -289,6 +289,47 @@ fn creation_makes_parents_and_overwrites_leave_an_undo_snapshot() {
 }
 
 #[test]
+fn an_unchanged_save_skips_the_check_the_snapshot_and_the_write() {
+    let project = Project::new();
+    project.file("scenes/a.py", b"x = 1\r\ny = 2\r\n");
+    let file = project.root.join("scenes/a.py");
+    let long_ago = std::time::UNIX_EPOCH + Duration::from_secs(86_400);
+    File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(long_ago)
+        .unwrap();
+    let revision = project.revision("scenes/a.py");
+    // Any Python check would fail with this interpreter.
+    let python = Path::new("/nonexistent/python");
+    let save = |expected_revision: Option<String>, edit: SourceEdit| {
+        let write = SourceWrite {
+            path: "scenes/a.py".into(),
+            expected_revision,
+            edit,
+        };
+        write_source(&project.root, python, &write, None)
+    };
+    for edit in [replace_all("x = 1\r\ny = 2\r\n"), lines(2, 2, "y = 2")] {
+        let saved = save(revision.clone(), edit).unwrap();
+        assert_eq!(Some(&saved.revision), revision.as_ref());
+        assert_eq!(saved.previous_revision, revision);
+        assert!(!saved.changed());
+        assert_eq!((saved.bytes, saved.total_lines), (14, 2));
+    }
+    assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), long_ago);
+    assert!(!project.root.join(UNDO_DIR).exists());
+    // The revision is still checked, and a real change is still validated.
+    assert!(matches!(
+        save(None, replace_all("x = 1\r\ny = 2\r\n")),
+        Err(EngineError::RevisionConflict { .. })
+    ));
+    let error = save(revision, replace_all("x = 3\n")).unwrap_err();
+    assert!(error.to_string().contains("/nonexistent/python"), "{error}");
+}
+
+#[test]
 fn paths_are_rejected_before_anything_is_created() {
     let project = Project::new();
     let invalid = |path: &str| match project.write(path, None, replace_all("x")) {

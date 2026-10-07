@@ -80,9 +80,12 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     await page.keyboard.press("Enter");
     // A wide bar at the frame's right edge leaves the safe area, which QA reports below.
     await page.keyboard.type("self.add(Rectangle(width=2, height=4, fill_opacity=1, color=YELLOW).to_edge(RIGHT, buff=0))");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type('self.add_subcaption("A bar at the edge", duration=1)');
     await page.keyboard.press("Control+s");
     await until(page, async () => (await page.locator(".code > .bar").innerText()).includes("Saved"), "saved");
-    assert.match(readFileSync(join(engine.root, "scenes.py"), "utf8"), /color=YELLOW\)\.to_edge\(RIGHT, buff=0\)/);
+    const saved = readFileSync(join(engine.root, "scenes.py"), "utf8");
+    assert.match(saved, /color=YELLOW\)\.to_edge\(RIGHT, buff=0\)\)\n +self\.add_subcaption\("A bar at the edge", duration=1\)\n/);
   });
 
   await t.test("a render plays and seeks", async () => {
@@ -105,6 +108,13 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     await page.keyboard.press("ArrowRight");
     const stepped = await video.evaluate((element: HTMLVideoElement) => element.currentTime);
     assert.ok(stepped > seeked && stepped - seeked < 0.15, `one frame from ${seeked} is ${stepped}`);
+  });
+
+  await t.test("the render's subcaptions download beside it", async () => {
+    const link = page.locator(".stage-meta").getByRole("link", { name: "SRT captions" });
+    const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+    assert.equal(download.suggestedFilename(), "SequenceData.srt");
+    assert.match(readFileSync(await download.path(), "utf8"), /^1\n[\d:,]+ --> [\d:,]+\nA bar at the edge\n/);
   });
 
   await t.test("a mid-width window keeps the stage's tabs, meta and track apart", async () => {

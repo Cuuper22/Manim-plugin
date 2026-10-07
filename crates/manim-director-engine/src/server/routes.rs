@@ -239,7 +239,8 @@ pub async fn source_page(
     Ok(Json(page))
 }
 
-/// Writes, then announces the new revision and refreshes what depends on it.
+/// Writes, then announces the new revision and refreshes what depends on it;
+/// a write that changed nothing announces nothing.
 pub async fn source_write(
     State(state): State<AppState>,
     body: Result<Bytes, BytesRejection>,
@@ -255,6 +256,9 @@ pub async fn source_write(
     })
     .await
     .map_err(EngineError::internal)??;
+    if !result.changed() {
+        return Ok(Json(result));
+    }
     let is_spec = result.path == SPEC_FILE;
     if is_spec || files::has_extension(&result.path, &["py"]) {
         state.file_changed(&result.path, Some(result.revision.clone()));

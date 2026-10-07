@@ -15,7 +15,7 @@ mod workbench;
 mod tests;
 
 use crate::{shutdown_signal, Scheduler};
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use auth::Session;
 use axum::{
     extract::{DefaultBodyLimit, Request},
@@ -28,6 +28,7 @@ use axum::{
 use events::{EventHub, RING_CAPACITY};
 use state::{AppState, REQUEST_BODY_BYTES, SOURCE_BODY_BYTES};
 use std::{
+    io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
@@ -61,7 +62,15 @@ impl Server {
         if ip != Ipv4Addr::LOCALHOST && ip != Ipv6Addr::LOCALHOST && !config.allow_remote {
             bail!("{ip} is not 127.0.0.1 or ::1; pass --allow-remote to serve another address");
         }
-        let listener = TcpListener::bind(config.address).await?;
+        let listener = TcpListener::bind(config.address)
+            .await
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::AddrInUse => anyhow!(
+                    "port {} is in use, probably by a running engine: open the workbench link it printed, or pass --port",
+                    config.address.port()
+                ),
+                _ => anyhow!("cannot listen on {}: {error}", config.address),
+            })?;
         let port = listener.local_addr()?.port();
         let workbench = match config.workbench_dir.filter(|path| path.is_dir()) {
             Some(directory) => Workbench::Directory(directory),

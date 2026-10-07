@@ -14,7 +14,7 @@ import {
   stageActivity,
   statusText,
 } from "../src/model/jobs.ts";
-import { downloadUrl, playback } from "../src/model/media.ts";
+import { captionsLabel, downloadUrl, playback } from "../src/model/media.ts";
 import { commandFor, type FocusZone, type KeyInput } from "../src/model/shortcuts.ts";
 import { lanes, markAt, markStep, rulerTicks, shuttleRate, stepFrames, tickLabel } from "../src/model/timeline.ts";
 import { job, progress } from "./fixtures.ts";
@@ -49,7 +49,7 @@ function video(overrides: Partial<Artifact["media"] & object> = {}): Artifact {
 }
 
 const rendered: SceneLatest = {
-  video: { job_id: "j1", finished_at: null, artifact: video(), outdated: false, profile: "draft", timeline: [] },
+  video: { job_id: "j1", finished_at: null, artifact: video(), outdated: false, profile: "draft", timeline: [], captions: [] },
   still: null,
   contact_sheet: null,
 };
@@ -131,6 +131,11 @@ test("only browser codecs play; GIFs show as images", () => {
   assert.equal(playback(latest({ container: "mov", codec: "h264" }), false), "unplayable");
   assert.equal(playback(latest({ container: "mov", codec: "h264" }), true), "video");
   assert.equal(downloadUrl(video()), `${video().url}&download=1`);
+});
+
+test("caption files are named by their format", () => {
+  assert.equal(captionsLabel({ path: ".manim-director/artifacts/j1/Recurrence.srt" }), "SRT captions");
+  assert.equal(captionsLabel({ path: "captions/en.vtt" }), "VTT captions");
 });
 
 test("findings group by severity and jump only to project files", () => {

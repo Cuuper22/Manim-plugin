@@ -34,3 +34,9 @@ export function mediaSummary(artifact: Artifact): string {
 export function downloadUrl(artifact: Pick<Artifact, "url">): string {
   return `${artifact.url}${artifact.url.includes("?") ? "&" : "?"}download=1`;
 }
+
+/** `SRT captions` for `Recurrence.srt`. */
+export function captionsLabel(artifact: Pick<Artifact, "path">): string {
+  const extension = artifact.path.slice(artifact.path.lastIndexOf(".") + 1);
+  return `${extension.toUpperCase()} captions`;
+}
