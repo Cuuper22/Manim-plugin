@@ -203,7 +203,8 @@ manim-director validate-math "(x + h)^2 - x^2" "2*x*h + h^2" "h*(2*x + h)"
 manim-director validate-math "sqrt(x^2)" "x" --range x=0:5
 ```
 
-Expressions use Python syntax with `^` for powers. Variables are sampled in -10..10 unless
+Expressions use Python syntax with `^` for powers; an equation is checked as `lhs - rhs`, divided by
+any factor the step applied to both sides. Variables are sampled in -10..10 unless
 `--range` says otherwise, and a range starting at or above 0 tells SymPy the variable is
 nonnegative: without `--range x=0:5` the second check fails at a negative `x`. A failed check is a
 successful job whose verdict is "a step is not equivalent"; `--json` gives the counterexample.

@@ -97,8 +97,9 @@ The full API, transition semantics, regions and pitfalls are in
    and `at_seconds` for one moment. Open the PNG paths from the answer with your image viewer and
    look: overlaps, clipped or tiny formulas, wrong colors, empty frames, a confusing order.
 3. `qa`. Its findings name the time, the beat and the line where that beat starts.
-4. `validate_math` on the algebra behind each derivation (Python syntax, `^` allowed, each side of
-   an equation as its own expression; `ranges` for domain assumptions).
+4. `validate_math` on the algebra behind each derivation: Python syntax, `^` allowed, each equation
+   written as `lhs - rhs` and divided by any factor the step applied to both sides, `ranges` for
+   domain assumptions.
 5. Fix and repeat. Stop after two or three passes that do not converge and report what remains.
 6. Render the requested profile (`production` by default for delivery) and `export` if a file is
    wanted.
@@ -140,7 +141,8 @@ finding), run `doctor` and tell the user what to install rather than changing th
 
 - `qa` measures pixels: it cannot see overlapping formulas inside the content area, unreadable
   notation or wrong mathematics. Your own look at the frames is the real check.
-- `validate_math` checks expression equality, not LaTeX, equations, inequalities or limits.
+- `validate_math` checks expression equality (an equation only as `lhs - rhs`), not LaTeX,
+  inequalities or limits.
 - There is no voice-over or speech synthesis; captions are validated and retimed, not written.
 - Manim Community 0.21 only (not ManimGL). OpenGL rendering needs a display; Cairo is the default.
 
