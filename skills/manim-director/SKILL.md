@@ -22,7 +22,9 @@ engine renders, inspects and checks.
    - No MCP tools at all, or only a `setup` tool: the engine is not installed. In Claude Code,
      `setup` prints the exact command. Otherwise give the user
      `python3 <this skill's directory>/../../scripts/install.py --with-manim` (Python 3.11+; it
-     also needs FFmpeg and TeX with dvisvgm) and ask them to restart the session afterwards.
+     also needs FFmpeg and TeX with dvisvgm). Codex starts `manim-director mcp` from `PATH`, so the
+     installer's `bin` directory (`~/.local/bin` by default) must be on `PATH`; then ask them to
+     restart the session.
 2. Call `doctor` before the first render on an unfamiliar machine, and after any
    `runtime_unavailable` or `dependency_missing` error. It says whether the project is ready to
    render and what is missing.
@@ -65,7 +67,7 @@ class CompletingTheSquare(DirectedScene):
                 (r"\left(x + \frac{b}{2a}\right)^2 = \frac{b^2 - 4ac}{4a^2}", "complete the square"),
                 replaces=claim,
             )
-        self.highlight(steps.lines[-1], r"b^2 - 4ac", box=True)
+        self.highlight(steps.lines[-1], r"b^2 - 4ac", color="success", box=True)
         self.wait()
 ```
 
@@ -97,8 +99,9 @@ The full API, transition semantics, regions and pitfalls are in
    and `at_seconds` for one moment. Open the PNG paths from the answer with your image viewer and
    look: overlaps, clipped or tiny formulas, wrong colors, empty frames, a confusing order.
 3. `qa`. Its findings name the time, the beat and the line where that beat starts.
-4. `validate_math` on the algebra behind each derivation (Python syntax, `^` allowed, each side of
-   an equation as its own expression; `ranges` for domain assumptions).
+4. `validate_math` on the algebra behind each derivation: Python syntax, `^` allowed, each equation
+   written as `lhs - rhs` and divided by any factor the step applied to both sides, `ranges` for
+   domain assumptions.
 5. Fix and repeat. Stop after two or three passes that do not converge and report what remains.
 6. Render the requested profile (`production` by default for delivery) and `export` if a file is
    wanted.
@@ -140,7 +143,8 @@ finding), run `doctor` and tell the user what to install rather than changing th
 
 - `qa` measures pixels: it cannot see overlapping formulas inside the content area, unreadable
   notation or wrong mathematics. Your own look at the frames is the real check.
-- `validate_math` checks expression equality, not LaTeX, equations, inequalities or limits.
+- `validate_math` checks expression equality (an equation only as `lhs - rhs`), not LaTeX,
+  inequalities or limits.
 - There is no voice-over or speech synthesis; captions are validated and retimed, not written.
 - Manim Community 0.21 only (not ManimGL). OpenGL rendering needs a display; Cairo is the default.
 

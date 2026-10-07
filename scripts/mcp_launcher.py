@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +24,7 @@ from typing import BinaryIO, Mapping
 VERSION = "2.0.0"
 PROTOCOL_VERSION = "2025-06-18"
 ENGINE = "manim-director"
+EXE = ".exe" if os.name == "nt" else ""
 INSTALLER = Path(__file__).resolve().with_name("install.py")
 MIN_PYTHON = (3, 11)
 SETUP_TOOL = {
@@ -48,15 +48,32 @@ def install_prefixes(env: Mapping[str, str]) -> list[Path]:
     return prefixes
 
 
+def on_path(name: str, env: Mapping[str, str]) -> str | None:
+    """`name` (plus `.exe` on Windows) in an absolute `PATH` directory.
+
+    Not `shutil.which`: on Windows it searches the current directory first and
+    tries `.bat`/`.cmd`, so a file in the opened project would run in place of
+    the engine.
+    """
+    name += EXE
+    for entry in env.get("PATH", os.defpath).split(os.pathsep):
+        directory = entry.strip('"')
+        if not os.path.isabs(directory):
+            continue
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def find_engine(env: Mapping[str, str]) -> tuple[str | None, list[str]]:
     """Return the engine executable, if any, and every location searched."""
     searched = ["PATH"]
-    on_path = shutil.which(ENGINE, path=env.get("PATH", os.defpath))
-    if on_path:
-        return on_path, searched
-    name = ENGINE + (".exe" if os.name == "nt" else "")
+    found = on_path(ENGINE, env)
+    if found:
+        return found, searched
     for prefix in install_prefixes(env):
-        candidate = prefix / "bin" / name
+        candidate = prefix / "bin" / (ENGINE + EXE)
         searched.append(str(candidate))
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate), searched
@@ -79,10 +96,15 @@ def installer_python() -> str | None:
     if sys.version_info >= MIN_PYTHON:
         return sys.executable
     for minor in range(20, MIN_PYTHON[1] - 1, -1):
-        found = shutil.which(f"python3.{minor}")
+        found = on_path(f"python3.{minor}", os.environ)
         if found:
             return found
     return None
+
+
+def command_line(argv: list[str]) -> str:
+    """`argv` quoted for the user's shell: cmd.exe rules on Windows, POSIX elsewhere."""
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
 
 
 def setup_text(searched: list[str], problem: str | None = None) -> str:
@@ -93,12 +115,12 @@ def setup_text(searched: list[str], problem: str | None = None) -> str:
         lines += [
             f"The installer needs Python 3.11 or newer; {sys.executable} is {found}.",
             "Install a newer Python, then run its interpreter on:",
-            f"    {shlex.quote(str(INSTALLER))} --with-manim",
+            f"    {command_line([str(INSTALLER), '--with-manim'])}",
         ]
     else:
         lines += [
             "Install the engine and its Manim runtime (into ~/.local by default):",
-            f"    {shlex.join([python, str(INSTALLER), '--with-manim'])}",
+            f"    {command_line([python, str(INSTALLER), '--with-manim'])}",
         ]
     lines += [
         "",

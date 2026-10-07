@@ -7,13 +7,17 @@ import argparse
 import gzip
 import io
 import stat
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
 
+from install import MAX_NOTICE_BYTES
 from release_integrity import RELEASE_TARGETS, ROOT, SEMVER
+from third_party_licenses import collect as collect_licenses
 
 LEGAL_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
+LICENSES_MEMBER = "THIRD_PARTY_LICENSES.txt"
 
 
 def validate_release_name(version: str, target: str) -> str:
@@ -25,14 +29,22 @@ def validate_release_name(version: str, target: str) -> str:
         raise ValueError(f"Unsupported release target: {target!r}") from exc
 
 
-def release_members(binary: Path, binary_name: str) -> list[tuple[str, bytes, int]]:
-    members = [(binary_name, binary.read_bytes(), 0o755)]
+def release_members(binary: Path, binary_name: str, licenses: str) -> list[tuple[str, bytes, int]]:
+    notices = []
     for name in LEGAL_FILES:
         path = ROOT / name
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"Release notice must be a regular non-symlink file: {path}")
-        members.append((name, path.read_bytes(), 0o644))
-    return members
+        notices.append((name, path.read_bytes()))
+    notices.append((LICENSES_MEMBER, licenses.encode()))
+    for name, payload in notices:
+        if not 0 < len(payload) <= MAX_NOTICE_BYTES:
+            raise ValueError(
+                f"{name} must hold 1 to {MAX_NOTICE_BYTES} bytes, as install.py expects"
+            )
+    return [(binary_name, binary.read_bytes(), 0o755)] + [
+        (name, payload, 0o644) for name, payload in notices
+    ]
 
 
 def write_zip(output: Path, members: list[tuple[str, bytes, int]]) -> None:
@@ -82,8 +94,8 @@ def main() -> None:
     stem = f"manim-director-v{args.version}-{args.target}"
     binary_name = "manim-director.exe" if archive_kind == "zip" else "manim-director"
     try:
-        members = release_members(binary, binary_name)
-    except (OSError, ValueError) as exc:
+        members = release_members(binary, binary_name, collect_licenses(args.target))
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         raise SystemExit(str(exc)) from exc
 
     if archive_kind == "zip":

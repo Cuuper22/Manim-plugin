@@ -148,6 +148,7 @@ class ArchiveExtractionTests(unittest.TestCase):
             (binary_name, contents),
             ("LICENSE", b"MIT license"),
             ("THIRD_PARTY_NOTICES.md", b"Third-party notices"),
+            ("THIRD_PARTY_LICENSES.txt", b"Third-party licenses"),
         ]
 
     @staticmethod
@@ -158,6 +159,7 @@ class ArchiveExtractionTests(unittest.TestCase):
             (tarfile.TarInfo(binary_name), contents),
             (tarfile.TarInfo("LICENSE"), b"MIT license"),
             (tarfile.TarInfo("THIRD_PARTY_NOTICES.md"), b"Third-party notices"),
+            (tarfile.TarInfo("THIRD_PARTY_LICENSES.txt"), b"Third-party licenses"),
         ]
 
     @staticmethod
@@ -176,7 +178,7 @@ class ArchiveExtractionTests(unittest.TestCase):
                 else:
                     bundle.addfile(member)
 
-    def test_extracts_binary_from_exact_signed_release_layout(self) -> None:
+    def test_extracts_binary_from_the_release_layout(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             directory = Path(raw_tmp)
             zip_path = directory / "release.zip"
@@ -194,7 +196,7 @@ class ArchiveExtractionTests(unittest.TestCase):
     def test_zip_rejects_unsafe_paths_symlinks_and_extra_members(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             directory = Path(raw_tmp)
-            notices = [("LICENSE", b"MIT"), ("THIRD_PARTY_NOTICES.md", b"notices")]
+            notices = self._zip_release_members("unused", b"")[1:]
             unsafe_members: list[list[tuple[zipfile.ZipInfo | str, bytes]]] = [
                 [("../manim-director", b"binary"), *notices],
                 [("/manim-director", b"binary"), *notices],
@@ -249,7 +251,7 @@ class ArchiveExtractionTests(unittest.TestCase):
             self._write_tar(
                 multiple, [*self._tar_release_members("manim-director", b"x"), (extra, b"x")]
             )
-            with self.assertRaisesRegex(RuntimeError, "exact signed release layout"):
+            with self.assertRaisesRegex(RuntimeError, "expected release layout"):
                 install.extract_binary(
                     multiple, "tar.gz", "manim-director", directory / "multiple-output"
                 )

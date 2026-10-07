@@ -54,7 +54,7 @@ class LauncherTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def launch(
-        self, messages: list[dict], extra_input: bytes = b""
+        self, messages: list[dict], extra_input: bytes = b"", cwd: Path | None = None
     ) -> tuple[list[dict], subprocess.CompletedProcess]:
         stdin = b"".join(json.dumps(message).encode() + b"\n" for message in messages) + extra_input
         process = subprocess.run(
@@ -62,14 +62,15 @@ class LauncherTestCase(unittest.TestCase):
             input=stdin,
             capture_output=True,
             env=self.env,
+            cwd=cwd,
             timeout=30,
         )
         return [json.loads(line) for line in process.stdout.splitlines()], process
 
-    def fake_engine(self, directory: Path) -> Path:
+    def fake_engine(self, directory: Path, name: str = mcp_launcher.ENGINE) -> Path:
         """An executable that prints the argv it was started with."""
         directory.mkdir(parents=True, exist_ok=True)
-        engine = directory / "manim-director"
+        engine = directory / name
         engine.write_text(
             f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n"
         )
@@ -116,6 +117,34 @@ class SetupServerTests(LauncherTestCase):
         text = responses[1]["result"]["content"][0]["text"]
         searched = text.split("Searched:\n", 1)[1].split()
         self.assertEqual(searched[:2], ["PATH", str(self.root / "prefix/bin/manim-director")])
+
+    def test_path_lookup_never_uses_the_current_directory(self) -> None:
+        # On Windows shutil.which tries the current directory (and .bat/.cmd) first: an
+        # opened project must not be able to stand in for the engine.
+        project = self.root / "project"
+        project.mkdir()
+        for suffix in ("", ".exe", ".bat", ".cmd"):
+            planted = project / (mcp_launcher.ENGINE + suffix)
+            planted.write_text("planted")
+            planted.chmod(0o755)
+        relative = os.pathsep.join(["", ".", "project", str(self.path_dir)])
+        cwd = os.getcwd()
+        os.chdir(project)
+        try:
+            self.assertIsNone(mcp_launcher.on_path(mcp_launcher.ENGINE, {"PATH": relative}))
+        finally:
+            os.chdir(cwd)
+
+    def test_setup_command_is_quoted_for_the_platform_shell(self) -> None:
+        argv = [r"C:\Program Files\Python\python.exe", r"C:\plugin\install.py", "--with-manim"]
+        with mock.patch.object(mcp_launcher.os, "name", "nt"):
+            windows = mcp_launcher.command_line(argv)
+        self.assertEqual(
+            windows, r'"C:\Program Files\Python\python.exe" C:\plugin\install.py --with-manim'
+        )
+        with mock.patch.object(mcp_launcher.os, "name", "posix"):
+            posix = mcp_launcher.command_line(["/opt/my python/bin/python3", "install.py"])
+        self.assertEqual(posix, "'/opt/my python/bin/python3' install.py")
 
     def test_old_python_is_told_what_the_installer_needs(self) -> None:
         with mock.patch.object(mcp_launcher, "installer_python", return_value=None):
@@ -168,6 +197,24 @@ class EngineExecTests(LauncherTestCase):
             [sys.executable, str(LAUNCHER)],
             capture_output=True,
             env=self.env,
+            timeout=30,
+            check=True,
+        )
+        self.assertEqual(json.loads(process.stdout), ["mcp"])
+
+    def test_engine_in_the_project_directory_is_not_run(self) -> None:
+        project = self.root / "project"
+        self.fake_engine(project).write_text("#!/bin/sh\necho planted\n")
+        self.env["PATH"] = os.pathsep.join(["", ".", str(self.path_dir)])
+        responses, _ = self.launch(SESSION[3:4], cwd=project)
+        self.assertIn("is not installed", responses[0]["result"]["content"][0]["text"])
+
+        self.fake_engine(self.path_dir)
+        process = subprocess.run(
+            [sys.executable, str(LAUNCHER)],
+            capture_output=True,
+            env=self.env,
+            cwd=project,
             timeout=30,
             check=True,
         )

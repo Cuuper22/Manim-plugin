@@ -49,10 +49,14 @@ mid-transition can be legitimately faint.
 
 `validate_math` checks that consecutive steps are equal:
 
-- Steps are Python-syntax expressions (`^` or `**`, explicit `*`, functions `sqrt exp log ln sin cos
-  tan asin acos atan sinh cosh tanh abs floor ceil min max`, constants `pi e tau`), not LaTeX and
-  not equations. For an equation step, check each side's transformation, or move everything to one
-  side.
+- Steps are Python-syntax expressions (`^` or `**`, explicit `*`, functions `sqrt exp log ln log10
+  sin cos tan asin acos atan sinh cosh tanh abs floor ceil min max`, constants `pi e tau`), not
+  LaTeX and not equations. Write each equation as `lhs - rhs`, divided by any factor the step
+  applied to both sides, so that consecutive steps are equal: `ax^2 + bx + c = 0` then
+  `x^2 + (b/a)x = -c/a` is `["(a*x^2 + b*x + c)/a", "x^2 + b/a*x + c/a"]`. Adding the same term to
+  both sides needs nothing. A step that changes the solutions (squaring both sides, a `±` root) has
+  no such form: substitute each solution into the earlier equation's `lhs - rhs` and check it
+  against `"0"`, or report the step as not checkable.
 - SymPy proves equality when it can; otherwise values are compared at `samples` random points
   (seeded) in -10..10 per variable, or in `ranges`. A range with a lower bound ≥ 0 also tells SymPy
   the variable is nonnegative (`sqrt(x^2)` equals `x` only with `ranges: {"x": [0, 5]}`).

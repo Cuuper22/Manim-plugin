@@ -57,7 +57,7 @@ verdict.
 | `MANIM_DIRECTOR_KEEP_JOBS`, `MANIM_DIRECTOR_KEEP_DAYS` | Pruning of finished jobs and their artifacts (500 jobs, 30 days); the latest artifacts of every scene are kept. |
 | `MANIM_DIRECTOR_WORKBENCH` | Same as `--workbench-dir`. |
 | `MANIM_DIRECTOR_PREFIX` | Install prefix for `install.py`, and a place the MCP launcher looks for `bin/manim-director`. |
-| `MANIM_DIRECTOR_RELEASE_BASE` | Where `install.py` downloads release archives from. |
+| `MANIM_DIRECTOR_RELEASE_BASE` | Where `install.py` downloads release archives and `SHA256SUMS` from: an `https://` or `file://` URL. |
 | `RUST_LOG` | Engine log filter (default `warn`). |
 
 ## director.yaml
@@ -112,9 +112,10 @@ narration: {manifest: narration.json, source: narration.md}
 ```
 
 Built-in profiles: `draft` 854×480@15, `preview` 1280×720@30, `production` 1920×1080@60, `ultra`
-3840×2160@60, `custom` from `render`. A profile entry takes `quality` (`low`, `medium`, `high`,
-`production`, `fourk`), `resolution`, `fps`, `renderer`, `format` and `alpha`; width and height must
-be even and 16–8192, fps 1–240, and `alpha` needs `mov` or `webm`. Directories must stay inside the
+3840×2160@60, `custom` from `render`. A profile entry takes `quality` (Manim's names: `low`
+854×480@15, `medium` 1280×720@30, `high` 1920×1080@60, `production` 2560×1440@60, `fourk`
+3840×2160@60), `resolution`, `fps`, `renderer`, `format` and `alpha`; width and height must be even
+and 16–8192, fps 1–240, and `alpha` needs `mov` or `webm`. Directories must stay inside the
 project. An invalid file fails every operation that needs it with `invalid_spec` and the YAML line.
 
 ## MCP tools
@@ -152,9 +153,9 @@ also gets `{"event":"listening","url":…,"address":…}`. The token is random p
   cookie, which a browser gets by opening the printed link (a `303` to the same path that sets an
   HttpOnly, SameSite=Strict cookie). Otherwise `401`.
 - **Host and Origin.** The `Host` header must be `127.0.0.1`, `localhost` or `[::1]` with the bound
-  port (`403 forbidden_host`) unless `--allow-remote`. A POST or PUT with an `Origin` must come from
-  that same host (`403 forbidden_origin`) and carry `Content-Type: application/json` (`415`). No CORS
-  headers are ever sent.
+  port (`403 forbidden_host`) unless `--allow-remote`. Every POST and PUT needs
+  `Content-Type: application/json` (`415`); one that carries an `Origin` must come from that same
+  host (`403 forbidden_origin`). No CORS headers are ever sent.
 - **Errors.** Every error body is `{"error": {"code", "message", "data"}}`; branch on `code`.
 
 | Route | Purpose |
@@ -225,7 +226,9 @@ sometimes `allowed`), `invalid_spec` (400; `line`, `column`), `operation_not_all
 `project_not_empty` (409), `request_too_large` and `budget_exceeded` (413), `queue_full` (429),
 `internal` (500). The source and file routes add `invalid_path`, `unsupported_file_type`, `not_utf8`,
 `file_too_large`, `line_out_of_range`, `source_invalid`, `revision_conflict`, `artifact_changed` and
-`range_not_satisfiable`.
+`range_not_satisfiable`. The HTTP server adds `unauthorized` (401), `forbidden_host` and
+`forbidden_origin` (403), `method_not_allowed` (405; `data.allowed`), `unsupported_media_type` (415)
+and `too_many_streams` (429).
 
 A failed job's `error.code`: `cancelled`, `timeout`, `engine_lost`, `runtime_unavailable`,
 `runtime_protocol`, `runtime_crashed`, `artifact_invalid`, `budget_exceeded`, `dependency_missing`,

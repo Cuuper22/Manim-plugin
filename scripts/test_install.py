@@ -33,6 +33,21 @@ class InstallExecutableTests(unittest.TestCase):
             self.assertEqual(os.listdir(destination.parent), ["manim-director"])
 
 
+class ReleaseBaseTests(unittest.TestCase):
+    def base(self, value: str) -> str:
+        with mock.patch.dict(os.environ, {"MANIM_DIRECTOR_RELEASE_BASE": value}):
+            return install.release_base("2.0.0")
+
+    def test_mirrors_over_https_or_on_disk_are_accepted(self) -> None:
+        self.assertEqual(self.base("https://mirror.example/v2/"), "https://mirror.example/v2")
+        self.assertEqual(self.base("file:///srv/releases"), "file:///srv/releases")
+
+    def test_unauthenticated_transports_are_refused_before_any_download(self) -> None:
+        for value in ("http://mirror.example/v2", "ftp://mirror.example/v2", "mirror/v2"):
+            with self.subTest(value=value), self.assertRaisesRegex(SystemExit, "https://"):
+                self.base(value)
+
+
 class FallbackTests(unittest.TestCase):
     def run_main(self, toolchains: str | None) -> tuple[mock.Mock, Path]:
         tmp = tempfile.TemporaryDirectory()

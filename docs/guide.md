@@ -6,9 +6,9 @@ the [reference](reference.md).
 ## Install
 
 Requirements: Python 3.11+, FFmpeg with `ffprobe`, and a TeX distribution with `dvisvgm` for `Tex`
-and `MathTex`. On Linux, Manim also needs the Cairo and Pango libraries
-([Manim's installation notes](https://docs.manim.community/en/stable/installation.html) list them per
-system).
+and `MathTex`. On Linux and macOS, pip builds Manim's Cairo (and on Linux its Pango) bindings, which
+needs a C compiler, `pkg-config` and the Cairo and Pango development files; the
+[README](../README.md#install) lists the packages.
 
 ```bash
 python3 scripts/install.py --with-manim                 # release binary, Manim and the runtime
@@ -204,7 +204,8 @@ manim-director validate-math "(x + h)^2 - x^2" "2*x*h + h^2" "h*(2*x + h)"
 manim-director validate-math "sqrt(x^2)" "x" --range x=0:5
 ```
 
-Expressions use Python syntax with `^` for powers. Variables are sampled in -10..10 unless
+Expressions use Python syntax with `^` for powers; an equation is checked as `lhs - rhs`, divided by
+any factor the step applied to both sides. Variables are sampled in -10..10 unless
 `--range` says otherwise, and a range starting at or above 0 tells SymPy the variable is
 nonnegative: without `--range x=0:5` the second check fails at a negative `x`. A failed check is a
 successful job whose verdict is "a step is not equivalent"; `--json` gives the counterexample.
