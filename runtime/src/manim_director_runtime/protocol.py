@@ -7,6 +7,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import signal
 import sys
 import threading
 import time
@@ -43,6 +44,7 @@ MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_FRAME_BYTES = 1024 * 1024
 _REQUEST_KEYS = ("protocol", "request_id", "method", "project_root", "params")
 _PROGRESS_INTERVAL_SECONDS = 0.1
+_PARENT_POLL_SECONDS = 0.5
 _MAX_LOG_FRAMES = 1000
 _HEAVY_MODULES = ("manim", "numpy", "PIL.Image")
 
@@ -163,6 +165,7 @@ class Context:
 def run_bridge(proto_fd: int, *, preload: bool, stdin: BinaryIO) -> None:
     """Serve exactly one request, then end the process without interpreter teardown."""
 
+    _watch_parent()
     writer = FrameWriter(proto_fd)
     writer.write(ready_frame(preload))
     line = stdin.readline(MAX_REQUEST_BYTES + 1)
@@ -174,6 +177,30 @@ def run_bridge(proto_fd: int, *, preload: bool, stdin: BinaryIO) -> None:
     sys.stderr.flush()
     # Skipping teardown keeps GL/Cairo destructors from turning a finished request into a crash.
     os._exit(0)
+
+
+def _watch_parent() -> None:
+    """End this worker once its engine is gone, instead of rendering on as an orphan.
+
+    The engine starts each worker as the leader of its own process group, so the group's
+    ffmpeg and LaTeX children go with it. A worker that shares its starter's group (a shell,
+    a test) ends only itself, so it cannot take its starter's other processes down. POSIX only.
+    """
+
+    if os.name != "posix":
+        return
+    parent = os.getppid()
+    leader = os.getpgrp() == os.getpid()
+
+    def watch() -> None:
+        while os.getppid() == parent:
+            time.sleep(_PARENT_POLL_SECONDS)
+        if leader:
+            os.killpg(0, signal.SIGKILL)
+        else:
+            os.kill(os.getpid(), signal.SIGKILL)
+
+    threading.Thread(target=watch, name="parent-watch", daemon=True).start()
 
 
 def handle_request(line: bytes, writer: FrameWriter) -> None:

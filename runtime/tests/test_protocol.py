@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -169,6 +172,59 @@ def test_invalid_params_name_the_dotted_field(project: Path, writer: RecordingWr
     error = writer.frames[0]["error"]
     assert error["code"] == "invalid_params"
     assert error["data"] == {"field": "settings.width", "reason": "must be an integer"}
+
+
+# A stand-in engine: starts a worker (as its own group's leader when argv[4] is "True", as the
+# engine does), waits for ready, starts a stand-in for ffmpeg in the worker's group, then dies.
+# Each process holds the write end of a pipe the test watches, so its exit shows as EOF.
+ORPHANING_ENGINE = """
+import subprocess, sys
+request, worker_alive, child_alive = map(int, sys.argv[1:4])
+own_group = sys.argv[4] == "True"
+bridge = [sys.executable, "-P", "-m", "manim_director_runtime", "bridge"]
+worker = subprocess.Popen(
+    bridge,
+    stdin=request,
+    stdout=subprocess.PIPE,
+    pass_fds=[worker_alive],
+    process_group=0 if own_group else None,
+)
+worker.stdout.readline()
+group = worker.pid if own_group else None
+subprocess.Popen(["sleep", "60"], pass_fds=[child_alive], process_group=group)
+"""
+
+
+def closed_within(fd: int, seconds: float) -> bool:
+    """True once every process holding the write end of the pipe behind `fd` has exited."""
+
+    readable, _, _ = select.select([fd], [], [], seconds)
+    return bool(readable) and os.read(fd, 1) == b""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+@pytest.mark.parametrize("own_group", [True, False], ids=["own-group", "shared-group"])
+def test_a_worker_ends_when_its_engine_dies(project: Path, own_group: bool) -> None:
+    request_read, request_write = os.pipe()  # kept open: the worker waits for a request
+    worker_read, worker_write = os.pipe()
+    child_read, child_write = os.pipe()
+    passed = (request_read, worker_write, child_write)
+    args = [sys.executable, "-c", ORPHANING_ENGINE, *map(str, passed), str(own_group)]
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    # A group of its own: a worker that wrongly ended its shared group cannot reach pytest.
+    engine = subprocess.Popen(args, pass_fds=passed, cwd=project, env=env, process_group=0)
+    for fd in passed:
+        os.close(fd)
+    try:
+        assert engine.wait(timeout=60) == 0
+        assert closed_within(worker_read, 10)
+        # Leading its group, the worker takes its children along; otherwise it ends alone.
+        assert closed_within(child_read, 10 if own_group else 1) is own_group
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(engine.pid, signal.SIGKILL)
+        for fd in (request_write, worker_read, child_read):
+            os.close(fd)
 
 
 def test_unexpected_exceptions_become_internal_errors(
