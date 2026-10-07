@@ -27,7 +27,7 @@ BINARY_NAME = "manim-director.exe" if os.name == "nt" else "manim-director"
 MAX_CHECKSUM_BYTES = 128 * 1024
 MAX_RELEASE_BYTES = 512 * 1024 * 1024
 MAX_NOTICE_BYTES = 1024 * 1024
-NOTICE_MEMBERS = {"LICENSE", "THIRD_PARTY_NOTICES.md"}
+NOTICE_MEMBERS = {"LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt"}
 
 
 def run(*args: str, cwd: Path = ROOT) -> None:

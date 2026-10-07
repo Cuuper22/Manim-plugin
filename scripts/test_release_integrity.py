@@ -148,6 +148,7 @@ class ArchiveExtractionTests(unittest.TestCase):
             (binary_name, contents),
             ("LICENSE", b"MIT license"),
             ("THIRD_PARTY_NOTICES.md", b"Third-party notices"),
+            ("THIRD_PARTY_LICENSES.txt", b"Third-party licenses"),
         ]
 
     @staticmethod
@@ -158,6 +159,7 @@ class ArchiveExtractionTests(unittest.TestCase):
             (tarfile.TarInfo(binary_name), contents),
             (tarfile.TarInfo("LICENSE"), b"MIT license"),
             (tarfile.TarInfo("THIRD_PARTY_NOTICES.md"), b"Third-party notices"),
+            (tarfile.TarInfo("THIRD_PARTY_LICENSES.txt"), b"Third-party licenses"),
         ]
 
     @staticmethod
@@ -194,7 +196,7 @@ class ArchiveExtractionTests(unittest.TestCase):
     def test_zip_rejects_unsafe_paths_symlinks_and_extra_members(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             directory = Path(raw_tmp)
-            notices = [("LICENSE", b"MIT"), ("THIRD_PARTY_NOTICES.md", b"notices")]
+            notices = self._zip_release_members("unused", b"")[1:]
             unsafe_members: list[list[tuple[zipfile.ZipInfo | str, bytes]]] = [
                 [("../manim-director", b"binary"), *notices],
                 [("/manim-director", b"binary"), *notices],
