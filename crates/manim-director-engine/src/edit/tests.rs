@@ -397,9 +397,11 @@ fn merge_patch_updates_the_spec() {
             SourceEdit::MergePatch { patch },
         )
         .unwrap();
-    let spec = DirectorSpec::parse(&project.read(SPEC_FILE)).unwrap();
-    assert_eq!(spec.project.title.as_deref(), Some("Recurrences"));
-    assert_eq!(spec.project.seed, None);
+    // Keys keep their order; new ones go last.
+    assert_eq!(
+        project.read(SPEC_FILE),
+        "version: 1\nproject:\n  name: Demo\n  title: Recurrences\n"
+    );
 }
 
 #[test]

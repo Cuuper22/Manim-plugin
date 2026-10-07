@@ -13,6 +13,7 @@ use manim_director_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use serde_yaml::{Mapping, Value as Yaml};
 use std::{
     fs::{self, File},
     io::{self, Read, Write},
@@ -368,9 +369,10 @@ fn apply(path: &str, current: Option<&str>, edit: &SourceEdit) -> Result<String,
                         location.as_ref().map(|at| at.column() as u32),
                     )
                 })?,
-                None => Value::Object(Map::new()),
+                None => Yaml::Null,
             };
-            merge_patch(&mut document, Value::Object(patch.clone()));
+            let patch = serde_yaml::to_value(patch).map_err(EngineError::internal)?;
+            merge_patch(&mut document, patch);
             serde_yaml::to_string(&document).map_err(EngineError::internal)
         }
     }
@@ -422,21 +424,21 @@ fn bare(line: &str, crlf: bool) -> &str {
     }
 }
 
-/// RFC 7386.
-fn merge_patch(target: &mut Value, patch: Value) {
-    let Value::Object(patch) = patch else {
+/// RFC 7386, applied to the YAML itself so the file keeps its key order.
+fn merge_patch(target: &mut Yaml, patch: Yaml) {
+    let Yaml::Mapping(patch) = patch else {
         *target = patch;
         return;
     };
-    if !target.is_object() {
-        *target = Value::Object(Map::new());
+    if !target.is_mapping() {
+        *target = Yaml::Mapping(Mapping::new());
     }
-    if let Value::Object(object) = target {
+    if let Yaml::Mapping(mapping) = target {
         for (key, value) in patch {
             if value.is_null() {
-                object.remove(&key);
+                mapping.shift_remove(&key);
             } else {
-                merge_patch(object.entry(key).or_insert(Value::Null), value);
+                merge_patch(mapping.entry(key).or_insert(Yaml::Null), value);
             }
         }
     }
