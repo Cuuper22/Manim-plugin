@@ -86,6 +86,10 @@ class BeatRecorder:
             for b in self._beats
         ]
         beats.sort(key=lambda b: b.start_seconds)
+        if beats:
+            # What plays after the last beat (a closing highlight, a final wait) continues its
+            # stage, so frames there still map to a beat and a line.
+            beats[-1].end_seconds = max(beats[-1].end_seconds, duration_seconds)
         return Timeline(TIMELINE_VERSION, scene, duration_seconds, beats)
 
 

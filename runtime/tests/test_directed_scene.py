@@ -410,6 +410,8 @@ def test_beats_record_the_timeline_under_the_bridge(render: Render, tmp_path: Pa
     hook, second = record.beats
     assert (hook.start_seconds, hook.end_seconds) == pytest.approx((0.0, 1.3))
     assert (second.start_seconds, second.end_seconds) == pytest.approx((1.3, 3.5))
+    # A closing wait after the last beat still maps to it.
+    assert recorder.timeline("Timed", 4.0).beats[-1].end_seconds == 4.0
 
 
 @requires_latex
