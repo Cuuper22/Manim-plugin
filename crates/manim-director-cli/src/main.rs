@@ -121,7 +121,7 @@ async fn run(cli: Cli) -> Outcome {
                 force: args.force,
             };
             let result =
-                init_project(&BridgeConfig::default(), &cwd.join(args.path), params).await?;
+                init_project(&BridgeConfig::default(), &project.join(args.path), params).await?;
             output::init(&result, machine);
             Ok(ExitCode::SUCCESS)
         }
