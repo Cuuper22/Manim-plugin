@@ -1,73 +1,120 @@
-use anyhow::{anyhow, bail, Context, Result};
-use manim_director_core::{BridgeMessage, BridgeRequest, Operation, ProtocolError};
-use serde_json::{json, Map, Value};
-use std::{fs, path::Path, process::Stdio};
+//! Runs one bridge v2 request in a fresh runtime process (OPS §2): spawn,
+//! wait for `ready`, write the single request line, stream frames until the
+//! terminal frame, then let the process exit.
+
+use manim_director_core::{
+    BridgeRequest, ErrorBody, LogFrame, ProgressFrame, ReadyFrame, RuntimeFrame, Task,
+    PROTOCOL_VERSION,
+};
+use serde_json::{json, Value};
+use std::{
+    path::{Path, PathBuf},
+    process::{ExitStatus, Stdio},
+    time::Duration,
+};
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Command,
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    process::{Child, Command},
+    time::Instant,
 };
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
-const MAX_BRIDGE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
-const MAX_BRIDGE_STDOUT_LINE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_BRIDGE_STDERR_LINE_BYTES: usize = 64 * 1024;
+pub const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_FRAME_BYTES: usize = 1024 * 1024;
+const MAX_STDERR_LINE_BYTES: usize = 64 * 1024;
+const STDERR_TAIL_BYTES: usize = 64 * 1024;
+const MAX_NOISE_LINES: usize = 64;
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
+const EXIT_GRACE: Duration = Duration::from_secs(5);
+const KILL_GRACE: Duration = Duration::from_secs(2);
+
+const RUNTIME_ENV: [(&str, &str); 5] = [
+    ("PYTHONUNBUFFERED", "1"),
+    ("PYTHONIOENCODING", "utf-8"),
+    ("PYTHONSAFEPATH", "1"),
+    ("NO_COLOR", "1"),
+    ("MPLBACKEND", "Agg"),
+];
 
 #[derive(Debug, Clone)]
 pub struct BridgeConfig {
-    pub python: String,
+    pub python: PathBuf,
     pub module: String,
-    pub memory_mb: u64,
 }
 
 impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
-            python: default_python(),
+            python: python_interpreter(),
             module: std::env::var("MANIM_DIRECTOR_RUNTIME_MODULE")
                 .unwrap_or_else(|_| "manim_director_runtime".into()),
-            memory_mb: std::env::var("MANIM_DIRECTOR_MEMORY_MB")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(8192)
-                .clamp(128, 262_144),
         }
     }
 }
 
-fn default_python() -> String {
-    if let Ok(configured) = std::env::var("MANIM_DIRECTOR_PYTHON") {
-        if !configured.trim().is_empty() {
-            return configured;
+/// The single interpreter lookup: `MANIM_DIRECTOR_PYTHON`, then the venv an
+/// install places beside the binary, then `python3`.
+pub fn python_interpreter() -> PathBuf {
+    if let Some(configured) = std::env::var_os("MANIM_DIRECTOR_PYTHON") {
+        if !configured.is_empty() {
+            return configured.into();
         }
     }
-    // scripts/install.py puts the binary in <prefix>/bin and the isolated
-    // runtime in <prefix>/share/manim-director/venv. Discovering it relative
-    // to the executable keeps Windows and virtual-environment installs pinned
-    // without a shell wrapper.
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(prefix) = executable.parent().and_then(Path::parent) {
-            let candidate = if cfg!(windows) {
-                prefix.join("share/manim-director/venv/Scripts/python.exe")
-            } else {
-                prefix.join("share/manim-director/venv/bin/python")
-            };
-            if candidate.is_file() {
-                return candidate.to_string_lossy().into_owned();
-            }
+    if let Some(prefix) = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    {
+        let venv = if cfg!(windows) {
+            "share/manim-director/venv/Scripts/python.exe"
+        } else {
+            "share/manim-director/venv/bin/python"
+        };
+        let candidate = prefix.join(venv);
+        if candidate.is_file() {
+            return candidate;
         }
     }
-    if cfg!(windows) {
-        "python".into()
-    } else {
-        "python3".into()
-    }
+    PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
+}
+
+/// The request line without its trailing newline.
+pub fn encode_request(
+    request_id: &str,
+    project_root: &Path,
+    task: &Task,
+) -> serde_json::Result<Vec<u8>> {
+    serde_json::to_vec(&BridgeRequest {
+        protocol: PROTOCOL_VERSION,
+        request_id,
+        method: task.operation(),
+        project_root,
+        params: task,
+    })
+}
+
+pub struct Invocation<'a> {
+    pub request_id: &'a str,
+    /// Canonical project root; also the process cwd.
+    pub project_root: &'a Path,
+    pub task: &'a Task,
+    pub preload: bool,
+    pub memory_mb: Option<u64>,
+}
+
+#[derive(Debug)]
+pub enum BridgeEvent<'a> {
+    Ready(&'a ReadyFrame),
+    Progress(ProgressFrame),
+    Log(LogFrame),
+    Stderr(String),
 }
 
 #[derive(Debug)]
 pub enum BridgeOutcome {
-    Result(Value),
-    Error(ProtocolError),
+    Succeeded(Value),
+    Failed(ErrorBody),
     Cancelled,
 }
 
@@ -81,29 +128,78 @@ impl RuntimeBridge {
         Self { config }
     }
 
-    pub async fn execute<F>(
+    pub fn config(&self) -> &BridgeConfig {
+        &self.config
+    }
+
+    pub async fn run(
         &self,
-        request_id: &str,
-        operation: Operation,
-        project_root: &Path,
-        params: Value,
-        cancellation: CancellationToken,
-        mut on_event: F,
-    ) -> Result<BridgeOutcome>
-    where
-        F: FnMut(&str, Value) + Send,
-    {
-        let params = inject_project_root(params, project_root);
-        let request = BridgeRequest {
-            request_id: request_id.to_owned(),
-            method: operation.runtime_method().to_owned(),
-            params,
+        invocation: Invocation<'_>,
+        cancel: CancellationToken,
+        mut on_event: impl FnMut(BridgeEvent<'_>) + Send,
+    ) -> BridgeOutcome {
+        let request = match encode_request(
+            invocation.request_id,
+            invocation.project_root,
+            invocation.task,
+        ) {
+            Ok(mut line) if line.len() <= MAX_REQUEST_BYTES => {
+                line.push(b'\n');
+                line
+            }
+            Ok(line) => {
+                return BridgeOutcome::Failed(ErrorBody::new(
+                    "request_too_large",
+                    "The runtime request exceeds 4 MiB.",
+                    Some(json!({"limit_bytes": MAX_REQUEST_BYTES, "actual_bytes": line.len()})),
+                ))
+            }
+            Err(error) => return BridgeOutcome::Failed(ErrorBody::internal(error.to_string())),
         };
+        let mut child = match self.spawn(&invocation) {
+            Ok(child) => child,
+            Err(error) => {
+                return BridgeOutcome::Failed(runtime_unavailable(
+                    &self.config.python,
+                    &format!("could not start it: {error}"),
+                    "",
+                ))
+            }
+        };
+        let mut session = Session {
+            stdout: LineReader::new(child.stdout.take(), MAX_FRAME_BYTES),
+            stderr: LineReader::new(child.stderr.take(), MAX_STDERR_LINE_BYTES),
+            stdin: child.stdin.take(),
+            tail: StderrTail::default(),
+            request_id: invocation.request_id,
+            python: &self.config.python,
+        };
+        let outcome = session
+            .converse(&mut child, request, &cancel, &mut on_event)
+            .await;
+        match outcome {
+            Ended::Terminal(outcome) => {
+                session.drain_until_exit(&mut child, &mut on_event).await;
+                outcome
+            }
+            Ended::Closed => {
+                let status = session.drain_until_exit(&mut child, &mut on_event).await;
+                BridgeOutcome::Failed(runtime_crashed(status, &session.tail.text))
+            }
+            Ended::Abort(outcome) => {
+                terminate_process_tree(&mut child).await;
+                outcome
+            }
+        }
+    }
+
+    fn spawn(&self, invocation: &Invocation<'_>) -> std::io::Result<Child> {
         let mut command = Command::new(&self.config.python);
         command
-            .args(["-m", &self.config.module, "bridge"])
-            .current_dir(project_root)
-            .env("PYTHONUNBUFFERED", "1")
+            .args(["-P", "-m", &self.config.module, "bridge"])
+            .args(invocation.preload.then_some("--preload"))
+            .current_dir(invocation.project_root)
+            .envs(RUNTIME_ENV)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -111,338 +207,374 @@ impl RuntimeBridge {
         #[cfg(unix)]
         {
             command.process_group(0);
-            let memory_bytes = self.config.memory_mb.saturating_mul(1024 * 1024) as libc::rlim_t;
-            unsafe {
-                command.pre_exec(move || {
-                    let limit = libc::rlimit {
-                        rlim_cur: memory_bytes,
-                        rlim_max: memory_bytes,
-                    };
-                    if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
+            if let Some(megabytes) = invocation.memory_mb.filter(|megabytes| *megabytes > 0) {
+                let bytes = megabytes.saturating_mul(1024 * 1024) as libc::rlim_t;
+                // SAFETY: setrlimit is async-signal-safe and touches only the child.
+                unsafe {
+                    command.pre_exec(move || {
+                        let limit = libc::rlimit {
+                            rlim_cur: bytes,
+                            rlim_max: bytes,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
             }
         }
         #[cfg(windows)]
-        command.creation_flags(0x0000_0200);
-        let mut child = command.spawn().with_context(|| {
-            format!(
-                "starting {} -m {} bridge",
-                self.config.python, self.config.module
-            )
-        })?;
-
-        let mut stdin = child
-            .stdin
-            .take()
-            .context("runtime bridge stdin unavailable")?;
-        let encoded = serde_json::to_vec(&request)?;
-        if encoded.len() > MAX_BRIDGE_REQUEST_BYTES {
-            terminate_process_tree(&mut child).await;
-            bail!(
-                "runtime request is {} bytes; maximum is {} bytes",
-                encoded.len(),
-                MAX_BRIDGE_REQUEST_BYTES
-            );
-        }
-        stdin.write_all(&encoded).await?;
-        stdin.write_all(b"\n").await?;
-        stdin.shutdown().await?;
-        drop(stdin);
-
-        let mut stdout = BufReader::new(
-            child
-                .stdout
-                .take()
-                .context("runtime bridge stdout unavailable")?,
-        );
-        let mut stderr = BufReader::new(
-            child
-                .stderr
-                .take()
-                .context("runtime bridge stderr unavailable")?,
-        );
-        let mut terminal: Option<BridgeOutcome> = None;
-        let mut stdout_open = true;
-        let mut stderr_open = true;
-
-        while terminal.is_none() && (stdout_open || stderr_open) {
-            tokio::select! {
-                _ = cancellation.cancelled() => {
-                    terminate_process_tree(&mut child).await;
-                    terminal = Some(BridgeOutcome::Cancelled);
-                }
-                line = read_bounded_line(&mut stdout, MAX_BRIDGE_STDOUT_LINE_BYTES), if stdout_open => {
-                    let line = match line {
-                        Ok(line) => line,
-                        Err(error) => {
-                            terminate_process_tree(&mut child).await;
-                            return Err(error.context("reading bounded runtime stdout"));
-                        }
-                    };
-                    match line {
-                        Some(line) if !line.trim().is_empty() => {
-                            let message: BridgeMessage = match serde_json::from_str(&line)
-                                .with_context(|| format!("invalid JSONL from runtime: {}", truncate(&line, 240))) {
-                                    Ok(message) => message,
-                                    Err(error) => {
-                                        terminate_process_tree(&mut child).await;
-                                        return Err(error);
-                                    }
-                                };
-                            if message.id() != request_id {
-                                terminate_process_tree(&mut child).await;
-                                return Err(anyhow!("runtime response id {} did not match {request_id}", message.id()));
-                            }
-                            match message {
-                                BridgeMessage::Event { event, data, .. } => on_event(&event, data),
-                                BridgeMessage::Success { result, .. } => terminal = Some(BridgeOutcome::Result(result)),
-                                BridgeMessage::Failure { error, .. } => terminal = Some(BridgeOutcome::Error(error)),
-                            }
-                        }
-                        Some(_) => {}
-                        None => stdout_open = false,
-                    }
-                }
-                line = read_bounded_line(&mut stderr, MAX_BRIDGE_STDERR_LINE_BYTES), if stderr_open => {
-                    let line = match line {
-                        Ok(line) => line,
-                        Err(error) => {
-                            terminate_process_tree(&mut child).await;
-                            return Err(error.context("reading bounded runtime stderr"));
-                        }
-                    };
-                    match line {
-                        Some(line) if !line.trim().is_empty() => on_event("runtime_stderr", json!({"message": truncate(&line, 2000)})),
-                        Some(_) => {}
-                        None => stderr_open = false,
-                    }
-                }
-            }
-        }
-
-        if matches!(terminal, Some(BridgeOutcome::Cancelled)) {
-            let _ = child.wait().await;
-            return Ok(BridgeOutcome::Cancelled);
-        }
-        let status = child.wait().await?;
-        match terminal {
-            Some(BridgeOutcome::Result(value)) if status.success() => {
-                Ok(BridgeOutcome::Result(value))
-            }
-            Some(BridgeOutcome::Result(_)) => Err(anyhow!(
-                "runtime returned a result but exited with {status}"
-            )),
-            Some(BridgeOutcome::Error(error)) => Ok(BridgeOutcome::Error(error)),
-            Some(BridgeOutcome::Cancelled) => Ok(BridgeOutcome::Cancelled),
-            None => Err(anyhow!(
-                "runtime exited with {status} without a terminal JSONL message"
-            )),
-        }
-    }
-}
-
-/// Prepare scaffold parameters without allowing an occupied directory to be
-/// mutated accidentally. Git metadata and the scheduler's own empty state
-/// database are infrastructure rather than project content, so those entries
-/// select the runtime's non-destructive merge mode automatically.
-pub fn scaffold_params(
-    project_root: &Path,
-    name: &str,
-    force: bool,
-    seed: Option<u32>,
-) -> Result<Value> {
-    fs::create_dir_all(project_root)
-        .with_context(|| format!("creating scaffold destination {}", project_root.display()))?;
-    if !project_root.is_dir() {
-        bail!(
-            "scaffold destination is not a directory: {}",
-            project_root.display()
-        );
-    }
-    let mut metadata_only = false;
-    let mut occupied = Vec::new();
-    for entry in fs::read_dir(project_root)
-        .with_context(|| format!("reading scaffold destination {}", project_root.display()))?
-    {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let name = file_name.to_string_lossy();
-        match name.as_ref() {
-            ".git" => metadata_only = true,
-            ".manim-director" if scheduler_state_only(&entry.path())? => metadata_only = true,
-            _ => occupied.push(name.into_owned()),
-        }
-    }
-    if !occupied.is_empty() && !force {
-        occupied.sort();
-        let count = occupied.len();
-        occupied.truncate(20);
-        bail!(
-            "scaffold destination is not empty ({} project entries: {}); pass --force explicitly",
-            count,
-            occupied.join(", ")
-        );
-    }
-    if name.trim().is_empty() {
-        bail!("project name cannot be empty");
-    }
-    if seed.is_some_and(|value| value > 0x7fff_ffff) {
-        bail!("project seed must be between 0 and 2147483647");
-    }
-    let mut params = Map::new();
-    params.insert("name".into(), Value::String(name.to_owned()));
-    params.insert("force".into(), Value::Bool(force));
-    if metadata_only && !force {
-        params.insert("merge".into(), Value::Bool(true));
-    }
-    if let Some(seed) = seed {
-        params.insert("seed".into(), Value::from(seed));
-    }
-    Ok(Value::Object(params))
-}
-
-/// Run the canonical Python scaffold directly. This deliberately avoids
-/// opening the per-project SQLite store before the runtime's empty-directory
-/// preflight has completed.
-pub async fn scaffold_project(project_root: &Path, params: Value) -> Result<Value> {
-    let root = project_root.canonicalize().with_context(|| {
-        format!(
-            "canonicalizing scaffold destination {}",
-            project_root.display()
-        )
-    })?;
-    let request_id = format!("scaffold-{}", Uuid::new_v4());
-    match RuntimeBridge::new(BridgeConfig::default())
-        .execute(
-            &request_id,
-            Operation::Scaffold,
-            &root,
-            params,
-            CancellationToken::new(),
-            |_event, _data| {},
-        )
-        .await?
-    {
-        BridgeOutcome::Result(result) => Ok(result),
-        BridgeOutcome::Error(error) => {
-            let detail = error
-                .data
-                .map(|value| format!(" ({value})"))
-                .unwrap_or_default();
-            bail!("{}: {}{}", error.code, error.message, detail)
-        }
-        BridgeOutcome::Cancelled => bail!("scaffold was cancelled"),
-    }
-}
-
-fn scheduler_state_only(path: &Path) -> Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !matches!(name.as_ref(), "state.db" | "state.db-wal" | "state.db-shm") {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-async fn read_bounded_line<R>(reader: &mut R, max_bytes: usize) -> Result<Option<String>>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut bytes = Vec::with_capacity(max_bytes.min(8 * 1024));
-    loop {
-        let buffer = reader.fill_buf().await?;
-        if buffer.is_empty() {
-            if bytes.is_empty() {
-                return Ok(None);
-            }
-            break;
-        }
-        let (take, complete) = match buffer.iter().position(|byte| *byte == b'\n') {
-            Some(index) => (index + 1, true),
-            None => (buffer.len(), false),
-        };
-        if bytes.len().saturating_add(take) > max_bytes {
-            bail!("JSONL line exceeds {max_bytes} bytes");
-        }
-        bytes.extend_from_slice(&buffer[..take]);
-        reader.consume(take);
-        if complete {
-            break;
-        }
-    }
-    if bytes.last() == Some(&b'\n') {
-        bytes.pop();
-    }
-    if bytes.last() == Some(&b'\r') {
-        bytes.pop();
-    }
-    Ok(Some(
-        String::from_utf8(bytes).context("runtime output was not UTF-8")?,
-    ))
-}
-
-async fn terminate_process_tree(child: &mut tokio::process::Child) {
-    let Some(pid) = child.id() else {
-        return;
-    };
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGTERM);
-        }
-        if tokio::time::timeout(std::time::Duration::from_secs(2), child.wait())
-            .await
-            .is_err()
         {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
         }
-    }
-    #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+        command.spawn()
     }
 }
 
-fn inject_project_root(params: Value, root: &Path) -> Value {
-    let mut object = match params {
-        Value::Object(object) => object,
-        Value::Null => Map::new(),
-        other => {
-            let mut object = Map::new();
-            object.insert("input".into(), other);
-            object
+enum Ended {
+    /// A result or error frame arrived; the process should now exit by itself.
+    Terminal(BridgeOutcome),
+    /// stdout closed without a terminal frame.
+    Closed,
+    /// Cancelled, timed out waiting for `ready`, or broke the protocol.
+    Abort(BridgeOutcome),
+}
+
+struct Session<'a> {
+    stdout: LineReader,
+    stderr: LineReader,
+    stdin: Option<tokio::process::ChildStdin>,
+    tail: StderrTail,
+    request_id: &'a str,
+    python: &'a Path,
+}
+
+impl Session<'_> {
+    async fn converse(
+        &mut self,
+        child: &mut Child,
+        request: Vec<u8>,
+        cancel: &CancellationToken,
+        on_event: &mut (impl FnMut(BridgeEvent<'_>) + Send),
+    ) -> Ended {
+        let ready_deadline = Instant::now() + READY_TIMEOUT;
+        let mut ready = false;
+        let mut noise_lines = 0;
+        let mut request = Some(request);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return Ended::Abort(BridgeOutcome::Cancelled),
+                _ = tokio::time::sleep_until(ready_deadline), if !ready => {
+                    return Ended::Abort(BridgeOutcome::Failed(runtime_unavailable(
+                        self.python,
+                        "no ready frame within 120 s",
+                        &self.tail.text,
+                    )));
+                }
+                line = self.stderr.next(), if self.stderr.open => {
+                    if let Some(line) = line {
+                        let text = String::from_utf8_lossy(line.bytes()).into_owned();
+                        self.tail.push(&text);
+                        on_event(BridgeEvent::Stderr(text));
+                    }
+                }
+                line = self.stdout.next(), if self.stdout.open => {
+                    let line = match line {
+                        None => {
+                            if ready {
+                                return Ended::Closed;
+                            }
+                            let status = child.wait().await.ok();
+                            return Ended::Abort(BridgeOutcome::Failed(runtime_unavailable(
+                                self.python,
+                                &format!("exited before ready ({})", describe_exit(status)),
+                                &self.tail.text,
+                            )));
+                        }
+                        Some(Line::Overflow(_)) => {
+                            return self.protocol_error("a frame exceeds 1 MiB");
+                        }
+                        Some(Line::Complete(bytes)) => bytes,
+                    };
+                    if line.iter().all(u8::is_ascii_whitespace) {
+                        continue;
+                    }
+                    if !ready {
+                        match serde_json::from_slice::<Value>(&line) {
+                            Err(_) => {
+                                if noise_lines < MAX_NOISE_LINES {
+                                    noise_lines += 1;
+                                    on_event(BridgeEvent::Stderr(String::from_utf8_lossy(&line).into_owned()));
+                                }
+                                continue;
+                            }
+                            Ok(value) => match serde_json::from_value::<RuntimeFrame>(value) {
+                                Ok(RuntimeFrame::Ready(frame)) if frame.protocol == PROTOCOL_VERSION => {
+                                    on_event(BridgeEvent::Ready(&frame));
+                                    ready = true;
+                                    if let (Some(stdin), Some(request)) = (self.stdin.take(), request.take()) {
+                                        tokio::spawn(write_request(stdin, request));
+                                    }
+                                }
+                                Ok(RuntimeFrame::Ready(frame)) => {
+                                    return Ended::Abort(BridgeOutcome::Failed(protocol_mismatch(
+                                        frame.protocol,
+                                        &self.tail.text,
+                                    )));
+                                }
+                                _ => return self.protocol_error("the first frame was not a valid ready frame"),
+                            },
+                        }
+                        continue;
+                    }
+                    match self.frame(&line) {
+                        Ok(Some(event)) => on_event(event),
+                        Ok(None) => {}
+                        Err(ended) => return ended,
+                    }
+                }
+            }
         }
-    };
-    object.insert(
-        "project_root".into(),
-        Value::String(root.to_string_lossy().into_owned()),
-    );
-    Value::Object(object)
+    }
+
+    /// Interprets one post-`ready` frame: an event to forward, nothing, or
+    /// the end of the conversation.
+    fn frame(&self, line: &[u8]) -> Result<Option<BridgeEvent<'static>>, Ended> {
+        let frame: RuntimeFrame = serde_json::from_slice(line).map_err(|error| {
+            self.protocol_error(&format!(
+                "malformed frame ({error}): {}",
+                truncate(&String::from_utf8_lossy(line), 240)
+            ))
+        })?;
+        match (&frame, frame.request_id()) {
+            (RuntimeFrame::Ready(_), _) => {
+                return Err(self.protocol_error("a second ready frame arrived"))
+            }
+            (RuntimeFrame::Error(error), None) => {
+                return Err(self.protocol_error(&format!(
+                    "the runtime rejected the request: {}",
+                    error.error.message
+                )))
+            }
+            (_, Some(id)) if id != self.request_id => {
+                return Err(self.protocol_error(&format!(
+                    "request_id {id:?} does not match {:?}",
+                    self.request_id
+                )))
+            }
+            _ => {}
+        }
+        Ok(match frame {
+            RuntimeFrame::Progress(progress) => Some(BridgeEvent::Progress(progress)),
+            RuntimeFrame::Log(log) => Some(BridgeEvent::Log(log)),
+            RuntimeFrame::Result(result) => {
+                return Err(Ended::Terminal(BridgeOutcome::Succeeded(result.result)))
+            }
+            RuntimeFrame::Error(error) => {
+                return Err(Ended::Terminal(BridgeOutcome::Failed(
+                    ErrorBody::from_runtime(error.error),
+                )))
+            }
+            RuntimeFrame::Ready(_) => None,
+        })
+    }
+
+    fn protocol_error(&self, detail: &str) -> Ended {
+        Ended::Abort(BridgeOutcome::Failed(ErrorBody::new(
+            "runtime_protocol",
+            format!("The runtime broke the bridge protocol: {detail}."),
+            Some(json!({"detail": detail, "stderr_tail": self.tail.text})),
+        )))
+    }
+
+    /// Keeps draining both pipes until the process exits, killing its group
+    /// after the grace period. stdout after a terminal frame is only logged.
+    async fn drain_until_exit(
+        &mut self,
+        child: &mut Child,
+        on_event: &mut (impl FnMut(BridgeEvent<'_>) + Send),
+    ) -> Option<ExitStatus> {
+        let deadline = Instant::now() + EXIT_GRACE;
+        loop {
+            if !self.stdout.open && !self.stderr.open {
+                break;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => {
+                    terminate_process_tree(child).await;
+                    return child.wait().await.ok();
+                }
+                line = self.stderr.next(), if self.stderr.open => {
+                    if let Some(line) = line {
+                        let text = String::from_utf8_lossy(line.bytes()).into_owned();
+                        self.tail.push(&text);
+                        on_event(BridgeEvent::Stderr(text));
+                    }
+                }
+                line = self.stdout.next(), if self.stdout.open => {
+                    if let Some(line) = line {
+                        on_event(BridgeEvent::Stderr(String::from_utf8_lossy(line.bytes()).into_owned()));
+                    }
+                }
+            }
+        }
+        match tokio::time::timeout_at(deadline, child.wait()).await {
+            Ok(status) => status.ok(),
+            Err(_) => {
+                terminate_process_tree(child).await;
+                child.wait().await.ok()
+            }
+        }
+    }
+}
+
+async fn write_request(mut stdin: tokio::process::ChildStdin, request: Vec<u8>) {
+    // A failed write means the worker died; the reader then sees stdout close
+    // and reports the crash with the stderr tail.
+    if stdin.write_all(&request).await.is_ok() {
+        let _ = stdin.shutdown().await;
+    }
+}
+
+enum Line {
+    Complete(Vec<u8>),
+    /// `max` bytes without a newline; the rest of the line follows.
+    Overflow(Vec<u8>),
+}
+
+impl Line {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Complete(bytes) | Self::Overflow(bytes) => bytes,
+        }
+    }
+}
+
+/// A cancel-safe bounded line reader: a partially read line survives a
+/// dropped `next()` future because it lives in `partial`.
+struct LineReader {
+    reader: Option<BufReader<Box<dyn AsyncRead + Send + Unpin>>>,
+    partial: Vec<u8>,
+    max: usize,
+    open: bool,
+}
+
+impl LineReader {
+    fn new(pipe: Option<impl AsyncRead + Send + Unpin + 'static>, max: usize) -> Self {
+        let reader =
+            pipe.map(|pipe| BufReader::new(Box::new(pipe) as Box<dyn AsyncRead + Send + Unpin>));
+        Self {
+            open: reader.is_some(),
+            reader,
+            partial: Vec::new(),
+            max,
+        }
+    }
+
+    /// The next line without its terminator, or `None` at end of stream.
+    async fn next(&mut self) -> Option<Line> {
+        let reader = self.reader.as_mut()?;
+        loop {
+            let buffer = match reader.fill_buf().await {
+                Ok(buffer) => buffer,
+                Err(_) => &[],
+            };
+            if buffer.is_empty() {
+                self.open = false;
+                return (!self.partial.is_empty())
+                    .then(|| Line::Complete(std::mem::take(&mut self.partial)));
+            }
+            let room = self.max - self.partial.len();
+            match buffer.iter().position(|byte| *byte == b'\n') {
+                Some(index) if index <= room => {
+                    self.partial.extend_from_slice(&buffer[..index]);
+                    reader.consume(index + 1);
+                    let mut line = std::mem::take(&mut self.partial);
+                    if line.last() == Some(&b'\r') {
+                        line.pop();
+                    }
+                    return Some(Line::Complete(line));
+                }
+                _ if buffer.len() > room => {
+                    self.partial.extend_from_slice(&buffer[..room]);
+                    reader.consume(room);
+                    return Some(Line::Overflow(std::mem::take(&mut self.partial)));
+                }
+                _ => {
+                    let count = buffer.len();
+                    self.partial.extend_from_slice(buffer);
+                    reader.consume(count);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct StderrTail {
+    text: String,
+}
+
+impl StderrTail {
+    fn push(&mut self, line: &str) {
+        self.text.push_str(line);
+        self.text.push('\n');
+        if self.text.len() > STDERR_TAIL_BYTES {
+            let mut cut = self.text.len() - STDERR_TAIL_BYTES;
+            while !self.text.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.text.drain(..cut);
+        }
+    }
+}
+
+fn runtime_unavailable(python: &Path, detail: &str, stderr_tail: &str) -> ErrorBody {
+    ErrorBody::new(
+        "runtime_unavailable",
+        format!(
+            "The Python runtime at {} is unavailable: {detail}.",
+            python.display()
+        ),
+        Some(json!({"python": python, "stderr_tail": stderr_tail})),
+    )
+}
+
+fn protocol_mismatch(got: u32, stderr_tail: &str) -> ErrorBody {
+    ErrorBody::new(
+        "runtime_protocol",
+        format!("The runtime speaks bridge protocol {got}; this engine needs {PROTOCOL_VERSION}."),
+        Some(json!({
+            "detail": "protocol mismatch",
+            "expected": PROTOCOL_VERSION,
+            "got": got,
+            "hint": format!("reinstall the runtime matching engine {}", env!("CARGO_PKG_VERSION")),
+            "stderr_tail": stderr_tail,
+        })),
+    )
+}
+
+fn runtime_crashed(status: Option<ExitStatus>, stderr_tail: &str) -> ErrorBody {
+    let exit_code = status.and_then(|status| status.code());
+    #[cfg(unix)]
+    let signal = status.and_then(|status| std::os::unix::process::ExitStatusExt::signal(&status));
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    ErrorBody::new(
+        "runtime_crashed",
+        format!(
+            "The runtime exited without a result ({}).",
+            describe_exit(status)
+        ),
+        Some(json!({"exit_code": exit_code, "signal": signal, "stderr_tail": stderr_tail})),
+    )
+}
+
+fn describe_exit(status: Option<ExitStatus>) -> String {
+    status.map_or_else(|| "exit status unknown".into(), |status| status.to_string())
 }
 
 fn truncate(value: &str, max: usize) -> String {
@@ -456,31 +588,81 @@ fn truncate(value: &str, max: usize) -> String {
     format!("{}…", &value[..end])
 }
 
+/// SIGTERM to the process group, SIGKILL after the grace period.
+async fn terminate_process_tree(child: &mut Child) {
+    let Some(pid) = child.id() else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        // SAFETY: signalling our own child's process group.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGTERM);
+        }
+        if tokio::time::timeout(KILL_GRACE, child.wait())
+            .await
+            .is_err()
+        {
+            // SAFETY: as above.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            let _ = child.kill().await;
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+        let _ = child.kill().await;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        let _ = child.kill().await;
+    }
+    let _ = child.wait().await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn scaffold_preflight_rejects_project_content_but_allows_engine_metadata() {
-        let occupied = tempdir().unwrap();
-        fs::write(occupied.path().join("notes.txt"), "mine").unwrap();
-        let error = scaffold_params(occupied.path(), "Demo", false, None).unwrap_err();
-        assert!(error.to_string().contains("not empty"));
-
-        let metadata = tempdir().unwrap();
-        fs::create_dir(metadata.path().join(".git")).unwrap();
-        fs::create_dir(metadata.path().join(".manim-director")).unwrap();
-        fs::write(metadata.path().join(".manim-director/state.db"), b"").unwrap();
-        let params = scaffold_params(metadata.path(), "Demo", false, Some(73)).unwrap();
-        assert_eq!(params["merge"], true);
-        assert_eq!(params["seed"], 73);
-    }
 
     #[tokio::test]
-    async fn bounded_line_reader_rejects_oversize_input() {
-        let source = vec![b'x'; 33];
-        let mut reader = BufReader::new(source.as_slice());
-        assert!(read_bounded_line(&mut reader, 32).await.is_err());
+    async fn line_reader_splits_overlong_lines_without_losing_bytes() {
+        let source: &'static [u8] = b"abcdefghij\nxy\nlast";
+        let mut reader = LineReader::new(Some(source), 4);
+        let mut seen = Vec::new();
+        while let Some(line) = reader.next().await {
+            let tag = match line {
+                Line::Complete(_) => "line",
+                Line::Overflow(_) => "chunk",
+            };
+            seen.push((tag, String::from_utf8(line.bytes().to_vec()).unwrap()));
+        }
+        assert_eq!(
+            seen,
+            [
+                ("chunk", "abcd".to_owned()),
+                ("chunk", "efgh".to_owned()),
+                ("line", "ij".to_owned()),
+                ("line", "xy".to_owned()),
+                ("line", "last".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn stderr_tail_keeps_the_last_64_kib() {
+        let mut tail = StderrTail::default();
+        for index in 0..2_000 {
+            tail.push(&format!("{index:05} {}", "x".repeat(60)));
+        }
+        assert!(tail.text.len() <= STDERR_TAIL_BYTES);
+        assert!(tail.text.ends_with(&format!("01999 {}\n", "x".repeat(60))));
     }
 }

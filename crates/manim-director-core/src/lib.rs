@@ -1,7 +1,20 @@
+mod error;
+pub mod files;
+mod job;
+mod names;
+mod operation;
+mod params;
 mod protocol;
+mod result;
 mod spec;
-mod types;
+mod task;
 
+pub use error::*;
+pub use job::*;
+pub use names::UnknownName;
+pub use operation::*;
+pub use params::*;
 pub use protocol::*;
+pub use result::*;
 pub use spec::*;
-pub use types::*;
+pub use task::*;

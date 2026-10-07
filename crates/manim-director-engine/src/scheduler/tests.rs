@@ -1,0 +1,529 @@
+//! End-to-end scheduler tests against the bridge v2 stub runtime in
+//! `tests/fixtures/stub_runtime.py`.
+
+use super::*;
+use manim_director_core::{
+    ArtifactKind, CaptionsParams, DiagnoseParams, DoctorParams, FrameParams, InitParams,
+    RenderParams, ARTIFACTS_DIR,
+};
+use serde_json::Value;
+use std::fs;
+
+const STUB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/stub_runtime.py"
+);
+
+fn stub(module: &str) -> BridgeConfig {
+    BridgeConfig {
+        python: STUB.into(),
+        module: module.into(),
+    }
+}
+
+struct Project {
+    _directory: tempfile::TempDir,
+    root: PathBuf,
+}
+
+impl Project {
+    fn new(spec: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        fs::write(
+            root.join("director.yaml"),
+            format!("version: 1\nproject:\n  name: Demo\n{spec}"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("scenes")).unwrap();
+        fs::write(
+            root.join("scenes/main.py"),
+            "class MainScene(Scene):\n    pass\n",
+        )
+        .unwrap();
+        Self {
+            _directory: directory,
+            root,
+        }
+    }
+
+    fn scheduler(&self, module: &str, workers: usize, queue_capacity: usize) -> Scheduler {
+        let store = Arc::new(Store::open(self.root.join(".manim-director/state.db")).unwrap());
+        Scheduler::start(
+            &self.root,
+            store,
+            SchedulerConfig {
+                workers,
+                queue_capacity,
+                bridge: stub(module),
+            },
+        )
+        .unwrap()
+    }
+}
+
+fn diagnose(text: &str) -> OperationRequest {
+    OperationRequest::Diagnose(DiagnoseParams {
+        job_id: None,
+        text: Some(text.into()),
+    })
+}
+
+async fn run(scheduler: &Scheduler, request: OperationRequest) -> JobRecord {
+    let job = scheduler
+        .submit(JobOrigin::Cli, request)
+        .await
+        .unwrap()
+        .into_job();
+    tokio::time::timeout(Duration::from_secs(30), scheduler.wait(job.id))
+        .await
+        .expect("the job finishes")
+        .unwrap()
+}
+
+fn error_code(job: &JobRecord) -> &str {
+    job.error.as_ref().map_or("", |error| error.code.as_str())
+}
+
+fn error_data(job: &JobRecord) -> &Value {
+    job.error
+        .as_ref()
+        .and_then(|error| error.data.as_ref())
+        .unwrap_or(&Value::Null)
+}
+
+async fn wait_until_running(scheduler: &Scheduler, id: Uuid) {
+    for _ in 0..200 {
+        let job = scheduler.store().get_job(id).unwrap().unwrap();
+        if job.status == JobStatus::Running {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("job {id} never started");
+}
+
+fn ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[tokio::test]
+async fn a_job_streams_progress_and_logs_into_a_typed_result() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 2, 8);
+    let mut events = scheduler.subscribe();
+    let job = run(&scheduler, diagnose("hello")).await;
+    assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
+    let Some(OperationResult::Diagnose(result)) = &job.result else {
+        panic!("expected a diagnose result")
+    };
+    assert_eq!(result.findings[0].message, "hello");
+    assert!(job.progress.is_none());
+
+    let logs = scheduler.store().logs(job.id, None, 100).unwrap().items;
+    let line = |stream: LogStream, text: &str| {
+        logs.iter()
+            .any(|record| record.stream == stream && record.message.contains(text))
+    };
+    assert!(line(LogStream::Engine, "Runtime 2.0.0-stub ready"));
+    assert!(line(LogStream::Runtime, "looked at the text"));
+    assert!(line(LogStream::Stderr, "a print from user code"));
+
+    let mut kinds = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        kinds.push(match event {
+            EngineEvent::JobQueued { .. } => "queued",
+            EngineEvent::JobStarted { .. } => "started",
+            EngineEvent::JobProgress { progress, .. } => match progress.phase {
+                ProgressPhase::Analyze => "analyze",
+                _ => "progress",
+            },
+            EngineEvent::JobFinished { .. } => "finished",
+        });
+    }
+    kinds.dedup();
+    assert_eq!(kinds.first(), Some(&"queued"));
+    assert!(kinds.contains(&"analyze"));
+    assert_eq!(kinds.last(), Some(&"finished"));
+}
+
+#[tokio::test]
+async fn runtime_error_frames_fail_jobs_with_contract_codes() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 2, 8);
+    let failed = run(&scheduler, diagnose("error")).await;
+    assert_eq!(failed.status, JobStatus::Failed);
+    assert_eq!(error_code(&failed), "render_failed");
+    assert_eq!(error_data(&failed)["stage"], "construct");
+
+    let unknown = run(&scheduler, diagnose("unknown-code")).await;
+    assert_eq!(error_code(&unknown), "internal");
+    assert_eq!(error_data(&unknown)["runtime_code"], "exploded");
+}
+
+#[tokio::test]
+async fn bridge_violations_fail_jobs_with_engine_codes() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 4, 8);
+    let crashed = run(&scheduler, diagnose("crash")).await;
+    assert_eq!(error_code(&crashed), "runtime_crashed");
+    assert_eq!(error_data(&crashed)["exit_code"], 3);
+    assert!(error_data(&crashed)["stderr_tail"]
+        .as_str()
+        .unwrap()
+        .contains("stub crashed on purpose"));
+
+    for text in ["wrong-id", "huge"] {
+        let job = run(&scheduler, diagnose(text)).await;
+        assert_eq!(error_code(&job), "runtime_protocol", "{text}");
+    }
+
+    let silent = project.scheduler("stub_without_ready", 1, 8);
+    let job = run(&silent, OperationRequest::Doctor(DoctorParams {})).await;
+    assert_eq!(error_code(&job), "runtime_unavailable");
+    assert!(error_data(&job)["stderr_tail"]
+        .as_str()
+        .unwrap()
+        .contains("unknown option"));
+
+    let outdated = project.scheduler("stub_protocol_1", 1, 8);
+    let job = run(&outdated, OperationRequest::Doctor(DoctorParams {})).await;
+    assert_eq!(error_code(&job), "runtime_protocol");
+    assert_eq!(error_data(&job)["got"], 1);
+
+    let store = Arc::new(Store::open(project.root.join(".manim-director/state.db")).unwrap());
+    let missing = Scheduler::start(
+        &project.root,
+        store,
+        SchedulerConfig {
+            workers: 1,
+            queue_capacity: 1,
+            bridge: BridgeConfig {
+                python: "/nonexistent/python3".into(),
+                module: "stub".into(),
+            },
+        },
+    )
+    .unwrap();
+    let job = run(&missing, OperationRequest::Doctor(DoctorParams {})).await;
+    assert_eq!(error_code(&job), "runtime_unavailable");
+}
+
+#[tokio::test]
+async fn cancelling_a_running_job_kills_it_and_finishes_once() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 8);
+    let mut events = scheduler.subscribe();
+    let job = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job();
+    wait_until_running(&scheduler, job.id).await;
+    let started = Instant::now();
+    scheduler.cancel(job.id).unwrap();
+    let finished = scheduler.wait(job.id).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(finished.status, JobStatus::Cancelled);
+    assert_eq!(error_code(&finished), "cancelled");
+    assert_eq!(error_data(&finished)["by"], "client");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut finishes = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, EngineEvent::JobFinished { job: summary, .. } if summary.id == job.id) {
+            finishes += 1;
+        }
+    }
+    assert_eq!(finishes, 1);
+    assert_eq!(
+        scheduler.cancel(job.id).unwrap().status,
+        JobStatus::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn queued_jobs_cancel_without_running_and_a_full_queue_creates_no_row() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 1);
+    let mut events = scheduler.subscribe();
+    let busy = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job()
+        .id;
+    wait_until_running(&scheduler, busy).await;
+    let mut accepted = vec![busy];
+    let mut rejection = None;
+    for _ in 0..6 {
+        match scheduler.submit(JobOrigin::Cli, diagnose("sleep")).await {
+            Ok(submission) => accepted.push(submission.into_job().id),
+            Err(error) => {
+                rejection = Some(error);
+                break;
+            }
+        }
+    }
+    assert_eq!(rejection, Some(EngineError::QueueFull { capacity: 1 }));
+    let rows = scheduler.store().jobs(None, 50).unwrap().items.len();
+    assert_eq!(rows, accepted.len());
+
+    let last = *accepted.last().unwrap();
+    let cancelled = scheduler.cancel(last).unwrap();
+    assert_eq!(
+        cancelled.status,
+        JobStatus::Cancelled,
+        "while the worker is busy"
+    );
+    assert!(cancelled.started_at.is_none(), "a queued job never spawns");
+    assert_eq!(
+        scheduler
+            .store()
+            .get_job(accepted[0])
+            .unwrap()
+            .unwrap()
+            .status,
+        JobStatus::Running
+    );
+    for id in &accepted {
+        scheduler.cancel(*id).unwrap();
+    }
+    for id in &accepted {
+        let job = scheduler.wait(*id).await.unwrap();
+        assert_eq!(job.status, JobStatus::Cancelled);
+    }
+    let queued = scheduler.store().get_job(last).unwrap().unwrap();
+    assert!(queued.started_at.is_none());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut finishes = HashMap::new();
+    while let Ok(event) = events.try_recv() {
+        if let EngineEvent::JobFinished { job, .. } = event {
+            *finishes.entry(job.id).or_insert(0) += 1;
+        }
+    }
+    for id in &accepted {
+        assert_eq!(finishes.get(id), Some(&1), "{id} finishes exactly once");
+    }
+}
+
+#[tokio::test]
+async fn a_job_over_its_timeout_fails_with_timeout() {
+    let project = Project::new("budgets:\n  render_seconds: 10\n");
+    let scheduler = project.scheduler("stub", 1, 8);
+    let job = run(&scheduler, diagnose("sleep")).await;
+    assert_eq!(job.status, JobStatus::Failed);
+    assert_eq!(error_code(&job), "timeout");
+    assert_eq!(error_data(&job)["timeout_seconds"], 10);
+}
+
+#[tokio::test]
+async fn captions_jobs_publish_their_validated_output() {
+    let project = Project::new("");
+    fs::create_dir_all(project.root.join("captions")).unwrap();
+    fs::write(
+        project.root.join("captions/en.vtt"),
+        "WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n",
+    )
+    .unwrap();
+    let scheduler = project.scheduler("stub", 1, 8);
+    let job = run(
+        &scheduler,
+        OperationRequest::Captions(CaptionsParams {
+            path: "captions/en.vtt".into(),
+            shift_seconds: 0.0,
+            scale: 1.0,
+            output: Some("captions/out/en.srt".into()),
+        }),
+    )
+    .await;
+    assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
+    let artifact = &job.result.as_ref().unwrap().artifacts()[0];
+    assert_eq!(artifact.path, "captions/out/en.srt");
+    assert!(artifact.bytes > 0);
+}
+
+#[tokio::test]
+async fn identical_renders_coalesce_while_one_is_in_flight() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 8);
+    let render = || {
+        OperationRequest::Render(RenderParams {
+            scene: Some("SlowScene".into()),
+            profile: Some("draft".into()),
+            ..Default::default()
+        })
+    };
+    let first = scheduler.submit(JobOrigin::Cli, render()).await.unwrap();
+    let Submission::Queued(first) = first else {
+        panic!("expected a new job")
+    };
+    let second = scheduler.submit(JobOrigin::Http, render()).await.unwrap();
+    let Submission::Coalesced(second) = second else {
+        panic!("expected coalescing")
+    };
+    assert_eq!(second.id, first.id);
+    let fresh = scheduler
+        .submit(
+            JobOrigin::Cli,
+            OperationRequest::Render(RenderParams {
+                scene: Some("SlowScene".into()),
+                profile: Some("draft".into()),
+                fresh: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(fresh, Submission::Queued(_)));
+    for id in [first.id, fresh.job().id] {
+        scheduler.cancel(id).unwrap();
+        scheduler.wait(id).await.unwrap();
+    }
+    let out_dir = project.root.join(ARTIFACTS_DIR).join(first.id.to_string());
+    assert!(!out_dir.exists(), "a cancelled job leaves no artifacts");
+}
+
+#[tokio::test]
+async fn renders_are_validated_cached_and_feed_default_sources() {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg is not installed");
+        return;
+    }
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 2, 8);
+    let render = || {
+        OperationRequest::Render(RenderParams {
+            scene: Some("MainScene".into()),
+            profile: Some("draft".into()),
+            ..Default::default()
+        })
+    };
+    let first = run(&scheduler, render()).await;
+    assert_eq!(first.status, JobStatus::Succeeded, "{:?}", first.error);
+    assert_eq!(first.scene_id.as_deref(), Some("scenes/main.py#MainScene"));
+    assert!(first.scene_revision.is_some());
+    let result = first.result.as_ref().unwrap();
+    let video = result.artifact(ArtifactKind::Video).unwrap();
+    let media = video.media.as_ref().unwrap();
+    assert_eq!(
+        (media.width, media.height, media.container.as_str()),
+        (854, 480, "mp4")
+    );
+    assert!(result.artifact(ArtifactKind::Timeline).unwrap().bytes > 0);
+
+    let cached = scheduler.submit(JobOrigin::Cli, render()).await.unwrap();
+    let Submission::Cached(cached) = cached else {
+        panic!("expected a cache hit")
+    };
+    assert!(cached.cached);
+    assert_eq!(cached.cached_from, Some(first.id));
+    assert_eq!(cached.scene_id, first.scene_id);
+
+    let frame = run(
+        &scheduler,
+        OperationRequest::Frame(FrameParams {
+            at_seconds: 0.5,
+            source: None,
+            scene: Some("MainScene".into()),
+            profile: None,
+        }),
+    )
+    .await;
+    assert_eq!(frame.status, JobStatus::Succeeded, "{:?}", frame.error);
+    assert_eq!(frame.source_job_id, Some(cached.id));
+    assert_eq!(frame.scene_id, first.scene_id);
+    let Some(OperationResult::Frame(grabbed)) = &frame.result else {
+        panic!("expected a frame result")
+    };
+    let image = grabbed.artifacts[0].media.as_ref().unwrap();
+    assert_eq!((image.width, image.height), (854, 480));
+    assert_eq!(
+        grabbed.source.as_ref().unwrap().scene.as_deref(),
+        Some("MainScene")
+    );
+
+    fs::remove_file(project.root.join(&video.path)).unwrap();
+    let rerun = scheduler.submit(JobOrigin::Cli, render()).await.unwrap();
+    assert!(
+        matches!(rerun, Submission::Queued(_)),
+        "a stale cache entry is evicted"
+    );
+    scheduler.wait(rerun.job().id).await.unwrap();
+}
+
+#[tokio::test]
+async fn discover_is_cached_and_reports_engine_findings() {
+    let project = Project::new("");
+    fs::write(
+        project.root.join("scenes/huge.py"),
+        vec![b'#'; 2 * 1024 * 1024 + 1],
+    )
+    .unwrap();
+    let scheduler = project.scheduler("stub", 1, 8);
+    let index = scheduler.discover().await.unwrap();
+    assert_eq!(index.files, 1);
+    assert_eq!(index.scenes[0].name, "MainScene");
+    assert_eq!(index.findings[0].code, "file_too_large");
+
+    let again = scheduler.discover().await.unwrap();
+    assert_eq!(again.scenes, index.scenes);
+    assert_eq!(
+        again.findings.len(),
+        1,
+        "engine findings are not cached twice"
+    );
+    let calls = fs::read_to_string(project.root.join("discover-calls.txt")).unwrap();
+    assert_eq!(calls.lines().count(), 1, "the second scan is a cache hit");
+
+    fs::write(
+        project.root.join("scenes/extra.py"),
+        "class Extra(Scene):\n    pass\n",
+    )
+    .unwrap();
+    let changed = scheduler.discover().await.unwrap();
+    assert_eq!(changed.scenes.len(), 2);
+}
+
+#[tokio::test]
+async fn direct_operations_are_not_jobs() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 8);
+    let error = scheduler
+        .submit(
+            JobOrigin::Http,
+            OperationRequest::Init(InitParams::default()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        EngineError::OperationNotAllowed {
+            operation: Operation::Init,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn init_creates_a_project_through_the_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("film");
+    let result = init_project(
+        &stub("stub"),
+        &target,
+        InitParams {
+            name: Some("Film".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.scene.file, "scenes/main.py");
+    assert!(result.artifacts.iter().all(|artifact| artifact.bytes > 0));
+    assert!(target.join("director.yaml").is_file());
+}

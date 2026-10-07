@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use blake3::Hasher;
 use chrono::Utc;
-use manim_director_core::{DirectorSpec, SPEC_FILE};
+use manim_director_core::{files, DirectorSpec, SPEC_FILE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -184,23 +184,7 @@ fn safe_source_path(root: &Path, relative: &str, must_exist: bool) -> Result<Pat
     if relative_path.starts_with(".manim-director") {
         bail!("working-state files cannot be edited through the source API");
     }
-    let allowed = relative == SPEC_FILE
-        || matches!(
-            relative_path.extension().and_then(|v| v.to_str()),
-            Some(
-                "py" | "json"
-                    | "yaml"
-                    | "yml"
-                    | "toml"
-                    | "md"
-                    | "tex"
-                    | "typ"
-                    | "vtt"
-                    | "srt"
-                    | "txt"
-            )
-        );
-    if !allowed {
+    if !files::has_extension(relative_path, files::EDITABLE) {
         bail!("unsupported source extension");
     }
     let candidate = root.join(relative_path);
@@ -227,9 +211,7 @@ fn safe_source_path(root: &Path, relative: &str, must_exist: bool) -> Result<Pat
 async fn validate_source(path: &Path, source: &str) -> Result<()> {
     match path.extension().and_then(|value| value.to_str()) {
         Some("py") => {
-            let python =
-                std::env::var("MANIM_DIRECTOR_PYTHON").unwrap_or_else(|_| "python3".into());
-            let mut child = Command::new(python)
+            let mut child = Command::new(crate::python_interpreter())
                 .args([
                     "-c",
                     "import ast,sys; ast.parse(sys.stdin.read(), filename=sys.argv[1])",
@@ -258,8 +240,7 @@ async fn validate_source(path: &Path, source: &str) -> Result<()> {
         Some("yaml" | "yml")
             if path.file_name().and_then(|value| value.to_str()) == Some(SPEC_FILE) =>
         {
-            let spec: DirectorSpec = serde_yaml::from_str(source)?;
-            spec.validate().map_err(|error| anyhow!(error))?;
+            DirectorSpec::parse(source).map_err(|error| anyhow!(error))?;
         }
         Some("json") => {
             serde_json::from_str::<Value>(source).context("invalid JSON")?;
