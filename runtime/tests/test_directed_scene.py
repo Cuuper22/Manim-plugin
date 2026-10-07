@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from conftest import requires_latex, requires_manim
@@ -18,6 +19,7 @@ manim = pytest.importorskip("manim")
 from manim import (  # noqa: E402
     BLACK,
     DEGREES,
+    DL,
     RED,
     RIGHT,
     YELLOW,
@@ -27,6 +29,7 @@ from manim import (  # noqa: E402
     Group,
     Indicate,
     Line,
+    MathTex,
     Rectangle,
     Square,
     SurroundingRectangle,
@@ -404,6 +407,31 @@ def test_math_colors_symbols_and_splits_into_matchable_atoms(render: Render) -> 
     assert seen["colors"].count(MIDNIGHT.primary) == 2  # never the x inside \max
     assert set(seen["colors"]) == {MIDNIGHT.primary, MIDNIGHT.foreground}
     assert seen["parts"] == [",", "1", ")"]
+
+
+@requires_latex
+def test_colored_operators_keep_their_typesetting_and_alignment(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Operators(DirectedScene):
+        symbols = {"=": "muted", r"\sum": "accent", r"\times": "primary"}
+
+        def construct(self):
+            source = r"\sum_{k=1}^{n} k \times 2 = n(n+1)"
+            colored = self.math(source)
+            plain = MathTex(source, font_size=colored.font_size)
+            seen["layout"] = [
+                [g.get_center() - m.get_corner(DL) for g in m.family_members_with_points()]
+                for m in (colored, plain)
+            ]
+            proof = self.derive(r"a = b + b", r"= 2b")
+            seen["aligned"] = relation_x(proof.lines[0]) - relation_x(proof.lines[1])
+            seen["term"] = len(self.term(proof.lines[0], "b + b"))
+
+    render(Operators)
+    colored, plain = seen["layout"]
+    assert np.allclose(colored, plain, atol=1e-3)  # limits above and below, relation spacing
+    assert seen["aligned"] == pytest.approx(0, abs=1e-6) and seen["term"] == 3
 
 
 @requires_latex

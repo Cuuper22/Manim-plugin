@@ -54,8 +54,32 @@ _DELIMITED = frozenset(
         r"\Bigl", r"\Bigr", r"\biggl", r"\biggr", r"\Biggl", r"\Biggr",
     )
 )
+# Operators whose class must survive a wrapper (only needed when scripts follow them).
+_BINARY = frozenset(
+    (
+        "+", "-", "*", r"\times", r"\cdot", r"\pm", r"\mp", r"\div", r"\cup", r"\cap",
+        r"\wedge", r"\vee", r"\oplus", r"\otimes", r"\circ", r"\ast", r"\star", r"\setminus",
+    )
+)
+_LIMITS = frozenset(
+    (
+        r"\sum", r"\prod", r"\coprod", r"\bigcup", r"\bigcap", r"\bigoplus", r"\bigotimes",
+        r"\bigodot", r"\biguplus", r"\bigsqcup", r"\bigvee", r"\bigwedge", r"\lim", r"\liminf",
+        r"\limsup", r"\max", r"\min", r"\sup", r"\inf", r"\det", r"\gcd", r"\Pr",
+    )
+)
+_NO_LIMITS = frozenset(
+    (
+        r"\int", r"\iint", r"\iiint", r"\oint", r"\sin", r"\cos", r"\tan", r"\cot", r"\sec",
+        r"\csc", r"\arcsin", r"\arccos", r"\arctan", r"\sinh", r"\cosh", r"\tanh", r"\coth",
+        r"\log", r"\ln", r"\lg", r"\exp", r"\arg", r"\deg", r"\dim", r"\hom", r"\ker",
+    )
+)
 # fmt: on
 _SCRIPT_MODIFIERS = frozenset({"'", r"\limits", r"\nolimits"})
+_PUSH = re.compile(r"\\special\{color push [^}]*\}")
+_POP = r"\special{color pop}"
+_PAINT = re.compile(r"\\special\{color (?:push [^}]*|pop)\}")
 # Top-level constructs that cannot be split into separately wrapped pieces.
 _UNSPLITTABLE = frozenset({"&", "\\\\", r"\over", r"\atop", r"\choose", r"\above", r"\cr", "%"})
 _MANIM_GROUP = re.compile(r"(?:^|\s)\{\{")
@@ -120,27 +144,44 @@ def occurrences(tex: str, term: str, *, math_only: bool = False) -> list[tuple[i
 
 
 def paint(tex: str, spans: Sequence[tuple[tuple[int, int], str]]) -> str:
-    """Wrap each `(start, end)` span in TeX color specials of its `#RRGGBB` color.
+    """Wrap each `(start, end)` span (on token boundaries) in TeX color specials of its
+    `#RRGGBB` color.
 
-    Specials need no LaTeX package, and Manim keeps the glyph colors they produce.
+    Specials need no LaTeX package, and Manim keeps the glyph colors they produce. They are
+    invisible to TeX's spacing, so a bare span keeps its atom class: a colored `=` is still a
+    relation and a colored `\\sum` still takes limits. A span gets a wrapper only where TeX
+    needs one atom: as an unbraced argument (`e^x`, `\\hat x`), or before scripts, where the
+    wrapper keeps the operator's class (`\\mathop{..\\sum..}_{k=1}^n`). A delimiter after
+    `\\left` and friends cannot be wrapped, so it stays uncolored.
     """
 
+    tokens = tokenize(tex)
+    first_at = {token.start: i for i, token in enumerate(tokens)}
+    last_at = {token.end: i for i, token in enumerate(tokens)}
+    arguments = _argument_starts(tokens)
     out, cursor = [], 0
     for (start, end), color in sorted(spans):
         if start < cursor:
             raise CompositionError("Colored TeX spans overlap.", tex=tex)
+        first, last = first_at[start], last_at[end]
+        if first > 0 and tokens[first - 1].text in _DELIMITED:
+            continue
         red, green, blue = (int(color[i : i + 2], 16) / 255 for i in (1, 3, 5))
-        body = (
-            rf"\special{{color push rgb {red:.4f} {green:.4f} {blue:.4f}}}"
-            rf"{tex[start:end]}\special{{color pop}}"
-        )
-        # Braces keep the span a single argument (`e^x`, `\hat x`); right after an opening
-        # brace it already is one, and `{{` would trigger Manim's double-brace splitting.
-        opened = tex[:start].rstrip().endswith("{") and not tex[:start].rstrip().endswith("\\{")
-        out += [tex[cursor:start], body if opened else "{" + body + "}"]
+        body = rf"\special{{color push rgb {red:.4f} {green:.4f} {blue:.4f}}}{tex[start:end]}{_POP}"
+        if first in arguments:
+            body = "{" + body + "}"
+        elif last + 1 < len(tokens) and tokens[last + 1].text in ("^", "_", *_SCRIPT_MODIFIERS):
+            body = _nucleus(body, tokens[first].text if first == last else None)
+        out += [tex[cursor:start], body]
         cursor = end
     out.append(tex[cursor:])
     return "".join(out)
+
+
+def unpaint(tex: str) -> str:
+    """`tex` without the color specials that `paint` added."""
+
+    return _PAINT.sub("", tex)
 
 
 def colorize(tex: str, colors: Mapping[str, str], *, math_only: bool = False) -> str:
@@ -172,7 +213,8 @@ def atoms(tex: str) -> list[str]:
         while i < len(tokens):
             if tokens[i].text in _UNSPLITTABLE:
                 return [tex]
-            end = _attach_scripts(tokens, _unit_end(tokens, i))
+            painted = _painted_end(tex, tokens, i)
+            end = _attach_scripts(tokens, painted or _unit_end(tokens, i))
             pieces.append(tex[tokens[i].start : tokens[end - 1].end])
             i = end
     except _Unsplittable:
@@ -181,7 +223,40 @@ def atoms(tex: str) -> list[str]:
 
 
 def is_relation(atom: str) -> bool:
-    return atom.strip() in RELATIONS
+    return unpaint(atom).strip() in RELATIONS
+
+
+def _nucleus(body: str, token: str | None) -> str:
+    """One atom of the span's own class for scripts to attach to (not `{..}`: a group is
+    an ordinary atom, and `{{` could start Manim's double-brace notation)."""
+
+    if token in _LIMITS:
+        return rf"\mathop{{{body}}}"
+    if token in _NO_LIMITS:
+        return rf"\mathop{{{body}}}\nolimits"
+    if token in RELATIONS:
+        return rf"\mathrel{{{body}}}"
+    if token in _BINARY:
+        return rf"\mathbin{{{body}}}"
+    return rf"\mathord{{{body}}}"
+
+
+def _argument_starts(tokens: list[Token]) -> set[int]:
+    """Indices of tokens that are an unbraced argument of a script or a macro (`\\frac12`)."""
+
+    starts = set()
+    for i, token in enumerate(tokens):
+        try:
+            if token.text in ("^", "_"):
+                starts.add(i + 1)
+            elif token.text in _ARITY:
+                j = _arguments_end(tokens, i, 0)  # past an optional [..] argument
+                for _ in range(_ARITY[token.text]):
+                    starts.add(j)
+                    j = _argument_end(tokens, j)
+        except _Unsplittable:
+            continue
+    return starts
 
 
 def _splits_number(tokens: list[Token], start: int, end: int) -> bool:
@@ -212,6 +287,21 @@ def _searchable(tokens: list[Token], math_only: bool) -> list[bool]:
             continue
         i += 1
     return mask
+
+
+def _painted_end(tex: str, tokens: list[Token], i: int) -> int | None:
+    """A span painted without a wrapper is one unit: from its push to the matching pop."""
+
+    if tokens[i].text != r"\special" or not _PUSH.match(tex, tokens[i].start):
+        return None
+    depth = 0
+    for special in _PAINT.finditer(tex, tokens[i].start):
+        depth += -1 if special.group() == _POP else 1
+        if depth == 0:
+            return next(
+                (k for k in range(i, len(tokens)) if tokens[k].start >= special.end()), len(tokens)
+            )
+    raise _Unsplittable
 
 
 def _unit_end(tokens: list[Token], i: int) -> int:

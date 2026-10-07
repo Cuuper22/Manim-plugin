@@ -52,6 +52,31 @@ def test_paint_wraps_arguments_in_braces_but_never_doubles_them() -> None:
         paint("xy", [((0, 2), RED), ((1, 2), GREEN)])
 
 
+def test_paint_keeps_the_atom_class_of_operators() -> None:
+    def red(tex: str, term: str) -> str:
+        return paint(tex, [(span, RED) for span in occurrences(tex, term)])
+
+    def body(token: str) -> str:
+        return PUSH_RED + token + POP
+
+    # Specials are invisible to TeX's spacing: a bare `=` is still a relation.
+    assert red("a = b", "=") == f"a {body('=')} b"
+    assert red("a + b", "+") == f"a {body('+')} b"
+    # Before scripts the span needs one atom, of its own class.
+    total, integral = body(r"\sum"), body(r"\int")
+    assert red(r"\sum_{k=1}^n k", r"\sum") == r"\mathop{" + total + "}_{k=1}^n k"
+    assert red(r"\int_0^1 f", r"\int") == r"\mathop{" + integral + r"}\nolimits_0^1 f"
+    assert red(r"x^2", "x") == r"\mathord{" + body("x") + "}^2"
+    # A delimiter after \left cannot be wrapped at all.
+    assert red(r"\left( x \right)", "(") == r"\left( x \right)"
+
+
+def test_painted_relations_stay_relations_and_atoms() -> None:
+    pieces = atoms(colorize(r"a = b", {"=": RED}))
+    assert pieces == ["a", PUSH_RED + "=" + POP, "b"]
+    assert is_relation(pieces[1]) and not is_relation(PUSH_RED + "x" + POP)
+
+
 def test_colorize_prefers_longer_symbols() -> None:
     colored = colorize(r"a_n = a_{n-1} + a", {"a": GREEN, "a_n": RED})
     assert colored.count("1.0000 0.0000 0.0000") == 1  # a_n
@@ -88,7 +113,7 @@ def test_atoms_leave_unsplittable_tex_whole(tex: str) -> None:
 
 def test_colored_symbols_stay_inside_their_atoms() -> None:
     pieces = atoms(colorize(r"x^2 + 2x", {"x": RED}))
-    assert len(pieces) == 4 and pieces[0].endswith("}^2") and PUSH_RED in pieces[0]
+    assert pieces == [r"\mathord{" + PUSH_RED + "x" + POP + "}^2", "+", "2", PUSH_RED + "x" + POP]
 
 
 def test_relations() -> None:
