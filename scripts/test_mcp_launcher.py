@@ -135,6 +135,17 @@ class SetupServerTests(LauncherTestCase):
         finally:
             os.chdir(cwd)
 
+    def test_setup_command_is_quoted_for_the_platform_shell(self) -> None:
+        argv = [r"C:\Program Files\Python\python.exe", r"C:\plugin\install.py", "--with-manim"]
+        with mock.patch.object(mcp_launcher.os, "name", "nt"):
+            windows = mcp_launcher.command_line(argv)
+        self.assertEqual(
+            windows, r'"C:\Program Files\Python\python.exe" C:\plugin\install.py --with-manim'
+        )
+        with mock.patch.object(mcp_launcher.os, "name", "posix"):
+            posix = mcp_launcher.command_line(["/opt/my python/bin/python3", "install.py"])
+        self.assertEqual(posix, "'/opt/my python/bin/python3' install.py")
+
     def test_old_python_is_told_what_the_installer_needs(self) -> None:
         with mock.patch.object(mcp_launcher, "installer_python", return_value=None):
             text = mcp_launcher.setup_text(["PATH"])

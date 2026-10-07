@@ -87,6 +87,11 @@ cd Manim-plugin
 python3 scripts/install.py --with-manim
 ```
 
+On Windows, pip uses prebuilt Cairo and Pango bindings, so FFmpeg and MiKTeX are enough; run
+`py -3 scripts\install.py --with-manim`. Claude Code starts the plugin's launcher with `python3`,
+which the Python install manager and the Microsoft Store Python provide but the older python.org
+installer does not.
+
 The installer puts `manim-director` in `~/.local/bin` and Manim plus the runtime in their own virtual
 environment under `~/.local/share/manim-director/venv`. Then add the plugin to your agent.
 

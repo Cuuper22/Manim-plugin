@@ -102,6 +102,11 @@ def installer_python() -> str | None:
     return None
 
 
+def command_line(argv: list[str]) -> str:
+    """`argv` quoted for the user's shell: cmd.exe rules on Windows, POSIX elsewhere."""
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+
+
 def setup_text(searched: list[str], problem: str | None = None) -> str:
     python = installer_python()
     lines = [problem or "Manim Director's engine (manim-director) is not installed.", ""]
@@ -110,12 +115,12 @@ def setup_text(searched: list[str], problem: str | None = None) -> str:
         lines += [
             f"The installer needs Python 3.11 or newer; {sys.executable} is {found}.",
             "Install a newer Python, then run its interpreter on:",
-            f"    {shlex.quote(str(INSTALLER))} --with-manim",
+            f"    {command_line([str(INSTALLER), '--with-manim'])}",
         ]
     else:
         lines += [
             "Install the engine and its Manim runtime (into ~/.local by default):",
-            f"    {shlex.join([python, str(INSTALLER), '--with-manim'])}",
+            f"    {command_line([python, str(INSTALLER), '--with-manim'])}",
         ]
     lines += [
         "",
