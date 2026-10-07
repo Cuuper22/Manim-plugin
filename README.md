@@ -143,9 +143,9 @@ QA and exports. Jobs started from the CLI or by your agent appear live.
 
 The plugin adds the `manim-director` skill and an MCP server with ten tools: `init`, `inspect`,
 `doctor`, `render`, `still`, `contact_sheet`, `qa`, `validate_math`, `submit` (the other operations:
-`frame`, `diagnose`, `captions`, `ingest`, `export`) and `job_status`. A tool waits up to 20 seconds
-for its job, then answers with a bounded summary and the absolute paths of the images and videos it
-made. Logs and media stay on disk; the agent opens the PNGs it needs.
+`frame`, `diagnose`, `captions`, `ingest`, `export`) and `job_status`. A job tool waits for its job
+(20 seconds by default, up to 50), then answers with a bounded summary and the absolute paths of the
+images and videos it made. Logs and media stay on disk; the agent opens the PNGs it needs.
 
 Ask for what you want to see:
 
