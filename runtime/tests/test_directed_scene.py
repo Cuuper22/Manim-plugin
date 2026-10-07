@@ -16,15 +16,20 @@ pytestmark = requires_manim
 
 manim = pytest.importorskip("manim")
 from manim import (  # noqa: E402
+    BLACK,
     DEGREES,
+    RED,
     RIGHT,
+    YELLOW,
     Circle,
     Dot,
     FadeIn,
     Group,
+    Indicate,
     Line,
     Rectangle,
     Square,
+    SurroundingRectangle,
     Text,
     ThreeDAxes,
     Triangle,
@@ -109,15 +114,33 @@ def test_theme_applies_to_the_camera_and_plain_manim_objects(
 
         def construct(self):
             seen["text"] = Text("x")[0].get_color().to_hex()
-            seen["line"] = Line().get_color().to_hex()
             seen["primary"] = self.theme.primary
+            # Classes that hard-code white or yellow, which vanish on a light theme.
+            for name, mobject in [("line", Line()), ("dot", Dot()), ("square", Square())]:
+                seen[name] = mobject.get_color().to_hex()
+            seen["box"] = SurroundingRectangle(Dot()).get_color().to_hex()
+            seen["indicate"] = str(Indicate(Dot()).color).upper()
+            backing = Square().add_background_rectangle().background_rectangle
+            seen["backing"] = backing.get_fill_color().to_hex()
             self.add(Dot())
 
     scene = render(Plain)
     assert scene.camera.background_color == PAPER.background
-    assert seen == {"text": PAPER.foreground, "line": PAPER.foreground, "primary": PAPER.primary}
+    ink = PAPER.foreground
+    assert seen == {
+        "text": ink,
+        "primary": PAPER.primary,
+        "line": ink,
+        "dot": ink,
+        "square": ink,
+        "box": PAPER.accent,
+        "indicate": PAPER.accent,
+        "backing": PAPER.background,
+    }
     with tempconfig({"media_dir": str(tmp_path / "media")}):  # Text caches its SVG there
         assert Text("x")[0].get_color().to_hex() == "#FFFFFF"  # defaults restored after render
+        assert Dot().get_color().to_hex() == "#FFFFFF"
+        assert Square().add_background_rectangle().background_rectangle.get_fill_color() == BLACK
 
 
 def test_project_settings_come_from_the_nearest_director_yaml(render: Render, tmp_path: Path):
@@ -430,11 +453,12 @@ def test_terms_and_highlights_find_sub_expressions(render: Render) -> None:
     seen: dict[str, Any] = {}
 
     class Terms(DirectedScene):
-        symbols = {"x": "secondary"}
+        symbols = {"x": "secondary", "1": RED}  # a Manim color constant works too
 
         def construct(self):
             eq = self.math(r"x^2 + 2x + 1 = (x + 1)^2")
             self.place(eq)
+            seen["manim color"] = set(colors(self.highlight(eq, "=", color=YELLOW)))
             seen["counts"] = [
                 len(self.term(eq, "x")),
                 len(self.term(eq, "2x")),
@@ -453,6 +477,7 @@ def test_terms_and_highlights_find_sub_expressions(render: Render) -> None:
 
     render(Terms)
     assert seen["counts"] == [3, 2, 1, 6]
+    assert seen["manim color"] == {YELLOW.to_hex()}
     assert seen["highlighted"] == {MIDNIGHT.accent}
     assert seen["box"] == 2
 

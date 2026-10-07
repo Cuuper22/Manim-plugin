@@ -24,10 +24,12 @@ class Roots(DirectedScene):
   `muted`, `success`. During `construct`, `self.theme.primary` etc. are `#RRGGBB` strings. A variant:
   `theme = themes.theme("paper").with_colors(accent="#D1495B")` after
   `from manim_director_runtime import themes`.
-- `symbols` maps a TeX token to a color token or `#RRGGBB`, merged over `direction.symbols` in
-  `director.yaml`. Every occurrence of the token is colored, including inside `\frac{..}{..}`;
-  control words are single tokens (`"r"` does not touch `\rho`).
-- Plain `VMobject`s default to the theme's foreground and `Text` to its font for the render.
+- `symbols` maps a TeX token to a color token, `#RRGGBB` or a Manim color (`YELLOW`), merged
+  over `direction.symbols` in `director.yaml`. Every occurrence of the token is colored, including
+  inside `\frac{..}{..}`; control words are single tokens (`"r"` does not touch `\rho`).
+- Plain `VMobject`s (dots and rectangles too) default to the theme's foreground, highlight shapes
+  and animations (`SurroundingRectangle`, `Indicate`, `Flash`) to its accent, and `Text` to its
+  font for the render.
 
 ## Text and math helpers
 

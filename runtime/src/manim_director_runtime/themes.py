@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
 from importlib import resources
+from typing import Any
 
 from .errors import CompositionError
 
@@ -43,9 +44,15 @@ class Theme:
 
         return ", ".join(self.fonts)
 
-    def color(self, value: str) -> str:
-        """Resolve a token name (`"accent"`) or a `#RRGGBB` color to `#RRGGBB`."""
+    def color(self, value: Any) -> str:
+        """Resolve a token name (`"accent"`), a `#RRGGBB` color or a Manim color (`YELLOW`)
+        to `#RRGGBB`."""
 
+        if not isinstance(value, str):
+            # ManimColor, duck-typed so themes never import Manim; it cannot be compared
+            # with a str, so it must not reach the token lookup.
+            to_hex = getattr(value, "to_hex", None)
+            value = to_hex() if callable(to_hex) else repr(value)
         if value in COLOR_TOKENS:
             return str(getattr(self, value))
         if _HEX.fullmatch(value.upper()):
@@ -59,7 +66,7 @@ class Theme:
     def tokens(self) -> list[tuple[str, str]]:
         return [(token, getattr(self, token)) for token in COLOR_TOKENS]
 
-    def with_colors(self, **colors: str) -> Theme:
+    def with_colors(self, **colors: Any) -> Theme:
         """A variant with some tokens replaced, e.g. `with_colors(accent="#D1495B")`."""
 
         unknown = sorted(set(colors) - set(COLOR_TOKENS))
@@ -69,7 +76,7 @@ class Theme:
                 f"themes have {', '.join(COLOR_TOKENS)}.",
                 unknown=unknown,
             )
-        return dataclasses.replace(self, **{k: v.upper() for k, v in colors.items()})
+        return dataclasses.replace(self, **{k: self.color(v) for k, v in colors.items()})
 
 
 @cache

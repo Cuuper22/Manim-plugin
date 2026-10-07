@@ -65,6 +65,23 @@ def test_tokens_are_attributes_and_resolve_by_name() -> None:
         midnight.color("teal")
 
 
+def test_manim_colors_are_accepted_and_other_objects_are_composition_errors() -> None:
+    class Yellow:  # duck-typed like ManimColor, which themes never import
+        def to_hex(self) -> str:
+            return "#ffff00"
+
+        def __eq__(self, other: object) -> bool:
+            raise TypeError("Cannot compare ManimColor with str")
+
+        __hash__ = object.__hash__
+
+    midnight = theme("midnight")
+    assert midnight.color(Yellow()) == "#FFFF00"
+    assert midnight.with_colors(accent=Yellow()).accent == "#FFFF00"
+    with pytest.raises(CompositionError, match="neither a theme token"):
+        midnight.color((1, 0, 0))
+
+
 def test_unknown_theme_names_the_choices() -> None:
     with pytest.raises(CompositionError, match="choose one of midnight, paper") as raised:
         theme("sepia")

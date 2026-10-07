@@ -18,19 +18,33 @@ from manim import (
     DOWN,
     LEFT,
     Animation,
+    AnnotationDot,
+    AnnularSector,
+    Annulus,
+    Arrow3D,
+    Circumscribe,
+    Dot,
+    Dot3D,
     FadeIn,
     FadeOut,
     FadeToColor,
+    Flash,
+    FunctionGraph,
+    Indicate,
+    ManimColor,
     MarkupText,
     MathTex,
     Mobject,
     MovingCameraScene,
+    Rectangle,
     RoundedRectangle,
     Scene,
     SingleStringMathTex,
+    SurroundingRectangle,
     Tex,
     Text,
     ThreeDScene,
+    TracedPath,
     TransformMatchingTex,
     VGroup,
     VMobject,
@@ -71,8 +85,9 @@ class Directed:
     """A theme name or Theme. None: the nearest director.yaml's theme, else the default.
     During a render this attribute holds the resolved Theme (`self.theme.primary`)."""
 
-    symbols: Mapping[str, str] = {}
-    """TeX symbol -> color token or #RRGGBB, merged over director.yaml `direction.symbols`."""
+    symbols: Mapping[str, str | ManimColor] = {}
+    """TeX symbol -> color token, #RRGGBB or Manim color, merged over director.yaml
+    `direction.symbols`."""
 
     # Lifecycle ------------------------------------------------------------------------------
 
@@ -389,7 +404,7 @@ class Directed:
         self,
         mobject: Mobject,
         *terms: str,
-        color: str = "accent",
+        color: str | ManimColor = "accent",
         box: bool = False,
         run_time: float | None = None,
     ) -> VGroup:
@@ -746,15 +761,29 @@ def _resolve_theme(declared: str | Theme | None, from_project: str | None) -> Th
 
 
 def _apply_theme_defaults(active: Theme) -> Callable[[], None]:
-    """Make plain Manim objects match the theme for the length of one render."""
+    """Make plain Manim objects match the theme for the length of one render: the classes
+    below hard-code white or yellow, which vanish on a light theme."""
 
-    saved = {cls: vars(cls)["__init__"] for cls in (VMobject, Text, MarkupText)}
-    VMobject.set_default(color=active.foreground)
-    for cls in (Text, MarkupText):
-        cls.set_default(font=active.font, warn_missing_font=False)
+    text = {"font": active.font, "warn_missing_font": False}
+    ink, highlight = {"color": active.foreground}, {"color": active.accent}
+    defaults: list[tuple[type, dict[str, Any]]] = [
+        (VMobject, ink),
+        (Text, text),
+        (MarkupText, text),
+        *((cls, ink) for cls in (Dot, Dot3D, Rectangle, Annulus, AnnularSector, Arrow3D)),
+        *((cls, {"stroke_color": active.foreground}) for cls in (AnnotationDot, TracedPath)),
+        *((cls, highlight) for cls in (SurroundingRectangle, Indicate, Flash, Circumscribe)),
+        (FunctionGraph, {"color": active.primary}),
+    ]
+    saved = {cls: vars(cls)["__init__"] for cls, _ in defaults}
+    for cls, values in defaults:
+        cls.set_default(**values)
+    # BackgroundRectangle (and add_background_rectangle()) fill with the config's color.
+    background, config.background_color = config.background_color, active.background
 
     def restore() -> None:
         for cls, init in saved.items():
             cls.__init__ = init
+        config.background_color = background
 
     return restore

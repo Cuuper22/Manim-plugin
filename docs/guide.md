@@ -92,7 +92,7 @@ default to the theme's foreground color and font.
 
 Symbol colors apply to whole TeX tokens: `"r"` colors every `r` in `r^n`, `rS` and
 `\frac{1}{1 - r}`, but not the letter inside a command such as `\rho`. Values are theme token
-names or `#RRGGBB`.
+names, `#RRGGBB` or Manim colors such as `YELLOW`.
 
 ### Placing things
 
