@@ -673,9 +673,8 @@ def test_tags_follow_their_equation_into_its_region(render: Render) -> None:
             seen["edge"] = mark.get_right()[0] - self.region("left").right
             seen["row"] = mark.get_y() - eq.get_y()
             with self.beat("three"):
-                note = (
-                    "a note so long that the derivation spans the whole width of the content region"
-                )
+                # Long enough to reach the region's right edge in any fallback font.
+                note = "a note so long that the derivation spans the whole width " * 3
                 steps = self.derive("x = 1", ("y = 2", note), notes="right")
                 with pytest.raises(CompositionError, match="notes='below'"):
                     self.tag(steps.lines[1])
