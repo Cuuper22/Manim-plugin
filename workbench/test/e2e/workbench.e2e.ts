@@ -100,6 +100,20 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     assert.ok(stepped > seeked && stepped - seeked < 0.15, `one frame from ${seeked} is ${stepped}`);
   });
 
+  await t.test("a mid-width window keeps the stage's tabs, meta and track apart", async () => {
+    for (const width of [1024, 960]) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await page.evaluate(() => {
+        const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+        const [tab, meta] = [box(".stage-header [role=tab]:last-child"), box(".stage-meta")];
+        const overlaps = meta.left < tab.right && tab.left < meta.right && meta.top < tab.bottom && tab.top < meta.bottom;
+        return { overlaps, wideTrack: box(".track").width >= 200, overflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.deepEqual(layout, { overlaps: false, wideTrack: true, overflow: 0 }, `at ${width} px`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
   await t.test("frame at playhead and a contact sheet", async () => {
     await action("Frame at playhead").click();
     await until(page, async () => /Frame at \d:\d\d\.\d\d/.test(await stageMeta(page)), "a frame on the stage", STEP_MS);

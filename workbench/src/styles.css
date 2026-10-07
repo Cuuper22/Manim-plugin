@@ -594,10 +594,25 @@ kbd {
 
 .region-stage {
   background: var(--stage);
+  container: stage / inline-size;
+}
+
+/* The meta moves below the tabs when both do not fit on one row. */
+.stage-header {
+  flex-wrap: wrap;
+  & > [role="tablist"] {
+    flex: 1 0 auto;
+  }
 }
 
 .stage-meta {
+  min-width: 0;
+  padding-block: var(--space-1);
   white-space: nowrap;
+  & > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 .stage {
@@ -805,6 +820,18 @@ kbd {
 @container (width < 560px) {
   .tick:nth-child(4n + 2) > span {
     display: none;
+  }
+}
+
+/* On a narrow stage the timecode moves below, so the track keeps most of the width. */
+@container stage (width < 560px) {
+  .timeline {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .timecode {
+    grid-row: 2;
+    grid-column: 1 / -1;
   }
 }
 
@@ -1101,6 +1128,19 @@ kbd {
   border-top: 1px solid var(--border);
 }
 
+/* ── mid-width screens: the actions take a row of their own ────────────── */
+
+@media (max-width: 1380px) {
+  .utilities {
+    order: 1;
+  }
+
+  .actions {
+    order: 2;
+    flex-basis: 100%;
+  }
+}
+
 /* ── narrow screens: one region at a time ─────────────────────────────── */
 
 @media (max-width: 900px) {
@@ -1157,15 +1197,6 @@ kbd {
     display: none;
   }
 
-  .stage-header {
-    flex-wrap: wrap;
-  }
-
-  .stage-meta {
-    flex-basis: 100%;
-    padding-bottom: var(--space-2);
-  }
-
   /* Popovers become bottom sheets over a scrim: their anchors may sit in a scrolled row. */
   .popover {
     position: fixed;
@@ -1177,14 +1208,5 @@ kbd {
   .screen {
     margin-top: var(--space-6);
     padding: var(--space-6) var(--space-4);
-  }
-
-  .timeline {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .timecode {
-    grid-row: 2;
-    grid-column: 1 / -1;
   }
 }
