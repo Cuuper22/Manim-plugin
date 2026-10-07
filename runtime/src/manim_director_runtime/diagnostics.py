@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .model import Finding, RuntimeArtifact, Severity, SourceLocation
-from .paths import is_user_source, public_path
+from .paths import is_user_source, is_within, public_path
 from .tasks import DiagnoseTask
 
 if TYPE_CHECKING:
@@ -23,15 +23,17 @@ _SYNTAX_ERROR = re.compile(r"(?m)^\s*(?:SyntaxError|IndentationError|TabError): 
 _TRACE_FILE = re.compile(r'(?m)^\s*File "(?P<file>[^"]+)", line (?P<line>\d+)')
 # TeX prints the input up to the failure point on the line after the "! message" line.
 _TEX_CONTEXT = re.compile(r"(?m)^! .*\n(?:l\.\d+ |<[^>]*> )?(?P<context>.*\S)")
-_TEX_TOKEN = re.compile(r"\\[A-Za-z@]+\*?|\S+")
+# Braces end a token, so Manim's `\special{dvisvgm:raw <g id='unique0'>}\phii` wrapper splits off.
+_TEX_TOKEN = re.compile(r"\\[A-Za-z@]+\*?|[^\s\\{}]+")
 _TEX_LOG = re.compile(r"the log file: (?P<log>\S+\.log)")
+_EXCEPTION_LINE = re.compile(r"^[\w.]+(?:Error|Exception|Exit|Interrupt)\b.*$", re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
 class _Rule:
     code: str
     pattern: re.Pattern[str]
-    hint: str
+    hint: str | None
     message: Callable[[re.Match[str]], str]
 
 
@@ -47,7 +49,7 @@ _RULES = (
     _Rule(
         "composition",
         re.compile(r"CompositionError: (?P<message>.+)"),
-        "A DirectedScene call at this line cannot be honored as written; the message says why.",
+        None,  # the message says what to change
         _group("message"),
     ),
     _Rule(
@@ -161,7 +163,10 @@ class DiagnoseResult:
 
 
 def diagnose(task: DiagnoseTask, ctx: Context) -> DiagnoseResult:
-    found = classify(task.text, location_from_text(task.text, ctx.project_root))
+    # A failed render's text names the TeX .log; reading it repeats the render's precise
+    # finding. Only logs inside the project: the text may come from anyone.
+    text = task.text + _tex_log_excerpt(task.text, inside=ctx.project_root)
+    found = classify(text, location_from_text(task.text, ctx.project_root))
     return DiagnoseResult(
         recognized=any(f.code != "unclassified" for f in found), findings=found, artifacts=[]
     )
@@ -174,31 +179,43 @@ def classify(text: str, location: SourceLocation | None) -> list[Finding]:
         match = rule.pattern.search(text)
         if match is None or rule.code in seen:
             continue
+        if rule.code == "latex_error" and "latex_package" in seen:
+            continue  # TeX's "Emergency stop." after a missing package adds nothing
         seen.add(rule.code)
         findings.append(_finding(rule.code, rule.message(match), _hint(rule, text), location))
     if not findings and text.strip():
-        last_line = next(line.strip() for line in reversed(text.splitlines()) if line.strip())
+        # The exception line, not whatever log line happened to come last.
+        exceptions = _EXCEPTION_LINE.findall(text)
+        lines = exceptions or [line for line in text.splitlines() if line.strip()]
         hint = "Read the full log around this line."
-        findings.append(_finding("unclassified", last_line, hint, location))
+        findings.append(_finding("unclassified", lines[-1].strip(), hint, location))
     return findings[:MAX_FINDINGS]
 
 
-def exception_findings(exc: BaseException, root: Path) -> tuple[list[Finding], str]:
-    """Findings and the formatted traceback for an exception raised by user code."""
+def exception_findings(
+    exc: BaseException, root: Path, fallback: SourceLocation | None = None
+) -> tuple[list[Finding], str]:
+    """Findings and the formatted traceback for an exception raised by user code; `fallback`
+    (the scene class) locates them when no frame is the project's."""
 
     trace = "".join(traceback.format_exception(exc))
     text = trace + _tex_log_excerpt(str(exc))
-    return classify(text, location_from_exception(exc, root)), trace
+    return classify(text, location_from_exception(exc, root, fallback)), trace
 
 
-def location_from_exception(exc: BaseException, root: Path) -> SourceLocation | None:
+def location_from_exception(
+    exc: BaseException, root: Path, fallback: SourceLocation | None = None
+) -> SourceLocation | None:
     if isinstance(exc, SyntaxError) and exc.filename and not exc.filename.startswith("<"):
         return SourceLocation(public_path(exc.filename, root), exc.lineno or 1, exc.offset)
     if isinstance(exc, configparser.Error) and getattr(exc, "source", None):
         # A malformed manim.cfg: point at the file, not at the configparser frame.
         return SourceLocation(public_path(exc.source, root), getattr(exc, "lineno", None) or 1)
     frames = [(f.filename, f.lineno or 1) for f in traceback.extract_tb(exc.__traceback__)]
-    return _innermost(frames, root)
+    location = _innermost(frames, root)
+    if fallback and (location is None or not is_user_source(root / location.file, root)):
+        return fallback
+    return location
 
 
 def location_from_text(text: str, root: Path) -> SourceLocation | None:
@@ -216,7 +233,12 @@ def location_from_text(text: str, root: Path) -> SourceLocation | None:
 
 
 def _innermost(frames: list[tuple[str, int]], root: Path) -> SourceLocation | None:
-    resolved = [(root / file, line) for file, line in frames if not file.startswith("<")]
+    # Compiled extensions report relative names ("av/error.py") that are not project files.
+    resolved = [
+        (root / file, line)
+        for file, line in frames
+        if not file.startswith("<") and (Path(file).is_absolute() or (root / file).is_file())
+    ]
     if not resolved:
         return None
     file, line = next(
@@ -225,26 +247,34 @@ def _innermost(frames: list[tuple[str, int]], root: Path) -> SourceLocation | No
     return SourceLocation(public_path(file, root), line)
 
 
-def _hint(rule: _Rule, text: str) -> str:
+def _hint(rule: _Rule, text: str) -> str | None:
     if rule.code == "latex_error" and (context := _TEX_CONTEXT.search(text)):
-        return f"Check the TeX near {_TEX_TOKEN.findall(context.group('context'))[-1]}."
+        # Words only, and not TeX's terminal prompt (`<*>`, `<read *>`).
+        words = _TEX_TOKEN.findall(context.group("context"))
+        tokens = [t for t in words if re.search(r"\w", t) and not t.startswith("<")]
+        if tokens:
+            return f"Check the TeX near {tokens[-1]}."
     return rule.hint
 
 
-def _finding(code: str, message: str, hint: str, location: SourceLocation | None) -> Finding:
+def _finding(code: str, message: str, hint: str | None, location: SourceLocation | None) -> Finding:
     return Finding(
         code=code, severity=Severity.ERROR, message=message, hint=hint, location=location
     )
 
 
-def _tex_log_excerpt(message: str) -> str:
-    """Error lines of the .log that Manim names when a TeX compile fails."""
+def _tex_log_excerpt(message: str, inside: Path | None = None) -> str:
+    """Error lines of the .log that Manim names when a TeX compile fails (only a log under
+    `inside`, when given)."""
 
     match = _TEX_LOG.search(message)
     if match is None:
         return ""
+    log = Path(match.group("log"))
+    if inside is not None and not is_within(log.resolve(), inside.resolve()):
+        return ""
     try:
-        lines = Path(match.group("log")).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return ""
     excerpt: list[str] = []

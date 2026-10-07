@@ -89,3 +89,58 @@ def test_unrecognized_text_is_reported_honestly(ctx) -> None:
     assert [(f["code"], f["message"]) for f in result["findings"]] == [
         ("unclassified", "final line")
     ]
+
+
+def test_compiled_extension_frames_are_not_project_files(project: Path) -> None:
+    text = (
+        f'  File "{project}/scenes/main.py", line 9, in construct\n'
+        '  File "av/error.py", line 354, in av.error.err_check\n'
+        "av.error.FileNotFoundError: [Errno 2] No such file or directory\n"
+    )
+    location = location_from_text(text, project)
+    assert (location.file, location.line) == ("scenes/main.py", 9)
+    assert location_from_text(text.split("\n", 1)[1], project) is None
+
+
+def test_latex_hints_skip_manims_wrapper_and_the_terminal_prompt() -> None:
+    text = "! Undefined control sequence.\nl.8 \\special{dvisvgm:raw <g id='unique000'>}\\phii\n"
+    (finding,) = classify(text, None)
+    assert finding.hint == "Check the TeX near \\phii."
+    missing = "! LaTeX Error: File `nopkg.sty' not found.\n! Emergency stop.\n<*> ...\n"
+    assert [f.code for f in classify(missing, None)] == ["latex_package"]
+    (prompt,) = classify("! Emergency stop.\n<read *>\n", None)
+    assert prompt.hint == "Correct the TeX in the expression."
+
+
+def test_diagnose_reads_the_named_tex_log_inside_the_project(project: Path, ctx) -> None:
+    log = project / ".manim-director/media/Tex/b771.log"
+    log.parent.mkdir(parents=True)
+    log.write_text("! Undefined control sequence.\nl.8 \\phii\n", encoding="utf-8")
+    outside = project.parent / "elsewhere.log"
+    outside.write_text("! Secret line.\n", encoding="utf-8")
+
+    def text(path: Path) -> str:
+        return (
+            "render_failed: Phii.construct raised ValueError.\n"
+            f'  File "{project}/scenes/main.py", line 7, in construct\n'
+            "ValueError: latex error converting to dvi. See log output above or the log file: "
+            f"{path}\nERROR LaTeX compilation error:\n"
+        )
+
+    (finding,) = run(ctx, text(log))["findings"]
+    assert (finding["message"], finding["hint"]) == (
+        "Undefined control sequence.",
+        "Check the TeX near \\phii.",
+    )
+    assert finding["location"]["line"] == 7
+    (generic,) = run(ctx, text(outside))["findings"]
+    assert generic["message"] == "LaTeX could not compile the expression."
+
+
+def test_unrecognized_failures_report_the_exception_not_the_last_log_line(ctx) -> None:
+    text = (
+        "render_failed: Writing X raised OSError.\nTraceback (most recent call last):\n"
+        "OSError: [Errno 28] No space left on device\nWARNING be slower than other formats\n"
+    )
+    (finding,) = run(ctx, text)["findings"]
+    assert finding["message"] == "OSError: [Errno 28] No space left on device"

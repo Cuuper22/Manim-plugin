@@ -23,7 +23,7 @@ from .diagnostics import exception_findings
 from .errors import DirectorError, dependency_missing, io_error
 from .inspection import ParsedFile, scene_class_names
 from .jsonio import write_json
-from .model import ArtifactKind, RuntimeArtifact, SceneRef
+from .model import ArtifactKind, RuntimeArtifact, SceneRef, SourceLocation
 from .paths import ensure_dir, slug
 from .tasks import RenderSettings, RenderTask, StillTask
 
@@ -52,6 +52,7 @@ class StillResult:
 class SceneTarget:
     name: str
     path: Path
+    line: int | None = None  # of the class statement
 
 
 @dataclass(slots=True)
@@ -136,18 +137,20 @@ def resolve_scene(scene: str | None, files: list[Path], ctx: Context) -> SceneTa
         parsed.append(ParsedFile(path, [n for n in tree.body if isinstance(n, ast.ClassDef)]))
     scene_names = scene_class_names(parsed)
     scenes = [
-        (node.name, item.path)
+        SceneTarget(node.name, item.path, node.lineno)
         for item in parsed
         for node in item.classes
         if node.name in scene_names
     ]
-    available = sorted({name for name, _ in scenes})
+    available = sorted({target.name for target in scenes})
     if scene is not None:
-        defining = [
-            item.path for item in parsed if any(node.name == scene for node in item.classes)
-        ]
+        # The last definition in a file wins, as in Python.
+        defining = {
+            item.path: node.lineno for item in parsed for node in item.classes if node.name == scene
+        }
         if len(defining) == 1:
-            return SceneTarget(scene, defining[0])
+            ((path, line),) = defining.items()
+            return SceneTarget(scene, path, line)
         if len(defining) > 1:
             paths = [ctx.relative(path) for path in defining]
             raise DirectorError(
@@ -156,8 +159,7 @@ def resolve_scene(scene: str | None, files: list[Path], ctx: Context) -> SceneTa
                 {"scene": scene, "files": paths},
             )
     elif len(scenes) == 1 and not broken:
-        name, path = scenes[0]
-        return SceneTarget(name, path)
+        return scenes[0]
     if broken:
         # The wanted class may be in a file that does not parse: report the syntax error.
         path, error = broken[0]
@@ -230,7 +232,24 @@ def _import_manim(target: SceneTarget, ctx: Context) -> Any:
     except Exception as exc:  # importing Manim reads manim.cfg from the project root
         raise _render_failed("setup", target, ctx, exc) from None
     guard_shared_caches()  # other workers render this project's scenes at the same time
+    _plain_logs()
     return manim
+
+
+def _plain_logs() -> None:
+    """One plain stderr line per Manim log record. Rich wraps records at 80 columns into
+    fragments (paths and TeX split mid-token), and each fragment becomes a job log line."""
+
+    import logging
+
+    from rich.logging import RichHandler
+
+    plain = logging.StreamHandler(sys.stderr)
+    plain.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    for logger in (logging.getLogger("manim"), logging.getLogger()):
+        for handler in [h for h in logger.handlers if isinstance(h, RichHandler)]:
+            logger.removeHandler(handler)
+            logger.addHandler(plain)
 
 
 def _digest_config_files(project_root: Path, scene_dir: Path, settings: RenderSettings) -> None:
@@ -352,7 +371,9 @@ def _render_failed(
     *,
     message: str | None = None,
 ) -> DirectorError:
-    findings, trace = exception_findings(exc, ctx.project_root) if exc else ([], "")
+    # Without a project frame (a bad theme, an encoder failure) the scene class is the place.
+    scene_line = SourceLocation(ctx.relative(target.path), target.line) if target.line else None
+    findings, trace = exception_findings(exc, ctx.project_root, scene_line) if exc else ([], "")
     if message is None:
         assert exc is not None
         subject = {

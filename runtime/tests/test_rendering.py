@@ -71,6 +71,9 @@ def test_render_moves_video_sections_and_beat_timeline_into_out_dir(project: Pat
     )
     assert completed.returncode == 0, completed.stderr.decode()[-2000:]
     assert b"must not reach" in completed.stderr
+    # Manim's records are whole lines (Rich wrapped them at 80 columns into fragments).
+    written = [line for line in completed.stderr.decode().splitlines() if "file written" in line]
+    assert written and all(line.startswith("INFO ") and "media" in line for line in written)
     assert {frame["type"] for frame in frames} <= {"ready", "progress", "log", "result"}
     assert {frame["phase"] for frame in frames if frame["type"] == "progress"} >= {"import"}
     result = frames[-1]["result"]
@@ -158,7 +161,20 @@ def test_latex_errors_point_at_the_tex_call(project: Path) -> None:
     assert error["code"] == "render_failed"
     finding = error["data"]["findings"][0]
     assert (finding["code"], finding["message"]) == ("latex_error", "Undefined control sequence.")
-    assert "\\phii" in finding["hint"]
+    assert "\\phii" in finding["hint"] and "unique" not in finding["hint"]
+    assert finding["location"] == {"file": "scenes/main.py", "line": 5, "column": None}
+
+
+@requires_manim
+def test_failures_without_a_project_frame_point_at_the_scene_class(project: Path) -> None:
+    source = (
+        "from manim import *\nfrom manim_director_runtime import DirectedScene\n\n\n"
+        "class Neon(DirectedScene):\n    theme = 'neon'\n\n    def construct(self):\n"
+        "        self.wait()\n"
+    )
+    frames, _ = run_bridge(project, render_request(project, "Neon", [write_scene(project, source)]))
+    (finding,) = frames[-1]["error"]["data"]["findings"]
+    assert finding["code"] == "composition" and finding["hint"] is None
     assert finding["location"] == {"file": "scenes/main.py", "line": 5, "column": None}
 
 
