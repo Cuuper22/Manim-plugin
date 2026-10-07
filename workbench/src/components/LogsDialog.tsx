@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JobId, JobSummary, LogEntry } from "../api/types.ts";
+import { clockTime } from "../model/format.ts";
 import { isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
 import { Progress } from "./Progress.tsx";
@@ -126,7 +127,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
       >
         {entries.map((entry) => (
           <li key={entry.cursor} data-level={entry.level}>
-            <time className="muted" dateTime={entry.timestamp}>{entry.timestamp.slice(11, 19)}</time>
+            <time className="muted" dateTime={entry.timestamp}>{clockTime(entry.timestamp, true)}</time>
             <span className="muted">{entry.stream}</span>
             <span className={LEVEL_CLASS[entry.level]}>{entry.message}</span>
           </li>

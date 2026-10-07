@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JobId, JobStatus, JobSummary } from "../api/types.ts";
 import { useDismiss } from "../hooks/useShortcuts.ts";
+import { clockTime } from "../model/format.ts";
 import { deliverable, isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
 import { downloadUrl } from "../model/media.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
@@ -120,7 +121,7 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
         <span className="dot" data-state={DOT_STATES[job.status]} aria-hidden="true" />
         <span className="job-title">{title}</span>
         <time className="meta" dateTime={job.created_at}>
-          {new Date(job.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          {clockTime(job.created_at)}
         </time>
       </div>
       {job.status === "running" ? <Progress fraction={progressFraction(job.progress)} label={`${title} progress`} /> : null}

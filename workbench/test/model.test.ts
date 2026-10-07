@@ -3,7 +3,7 @@ import test from "node:test";
 import type { Artifact, Finding, Scene, SceneLatest, TimelineMark } from "../src/api/types.ts";
 import { planAction, planExport } from "../src/model/actions.ts";
 import { bySeverity, cleanQa, codeTarget, fromDiagnosis, fromWorkspace } from "../src/model/findings.ts";
-import { formatTime } from "../src/model/format.ts";
+import { clockTime, formatTime } from "../src/model/format.ts";
 import { activityText, deliverable, jobTitle, retryRequest, stageActivity, statusText } from "../src/model/jobs.ts";
 import { downloadUrl, playback } from "../src/model/media.ts";
 import { commandFor, type FocusZone, type KeyInput } from "../src/model/shortcuts.ts";
@@ -259,4 +259,15 @@ test("times read as m:ss.cc", () => {
   assert.equal(formatTime(63.456), "1:03.46");
   assert.equal(formatTime(59.999), "1:00.00");
   assert.equal(formatTime(Number.NaN), "0:00.00");
+});
+
+test("clock times are local, like the rest of the page", (t) => {
+  const zone = process.env.TZ;
+  t.after(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+  process.env.TZ = "America/Los_Angeles";
+  assert.match(clockTime("2026-10-07T17:19:05.282Z", true), /^10:19:05\b/);
+  assert.match(clockTime("2026-10-07T17:19:05.282Z"), /^10:19\b(?!:)/);
 });
