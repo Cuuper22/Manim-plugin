@@ -1,15 +1,21 @@
 mod bridge;
 mod cache;
+mod confine;
 mod db;
 mod edit;
+mod inspect;
 mod mcp;
+mod process;
 mod scheduler;
 mod server;
+mod workspace;
 
 pub use bridge::*;
 pub use cache::*;
+pub use confine::{confine, Confinement};
 pub use db::*;
 pub use edit::*;
+pub use inspect::*;
 pub use mcp::*;
 pub use scheduler::*;
 pub use server::*;
