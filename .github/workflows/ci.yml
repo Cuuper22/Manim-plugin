@@ -51,3 +51,8 @@ jobs:
           make check-runtime PYTHON=python | tee pytest.log
           # Every tool the runtime tests need is installed here, so none may skip.
           ! grep -q '^SKIPPED' pytest.log
+      - name: Workbench end-to-end against the real engine
+        shell: bash
+        run: |
+          npx --prefix workbench playwright-core install --with-deps chromium
+          MANIM_DIRECTOR_PYTHON="$(command -v python)" make check-e2e

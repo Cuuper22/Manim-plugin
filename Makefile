@@ -1,5 +1,5 @@
 .PHONY: build build-engine build-runtime build-workbench dev install \
-	check check-scripts check-engine check-runtime check-workbench clean
+	check check-scripts check-engine check-runtime check-workbench check-e2e clean
 
 # The checks need an interpreter with the runtime's `full` and `test` extras.
 PYTHON ?= python3
@@ -43,6 +43,11 @@ check-runtime:
 check-workbench:
 	npm --prefix workbench test
 	npm --prefix workbench run build
+
+# Drives the built workbench in Chromium against a real engine and runtime.
+check-e2e:
+	cargo build --locked -p manim-director-cli
+	MANIM_DIRECTOR_E2E=required npm --prefix workbench run test:e2e
 
 clean:
 	cargo clean
