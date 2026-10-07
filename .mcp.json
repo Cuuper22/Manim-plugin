@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "manim-director": {
-      "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp_launcher.py"]
-    }
-  }
-}

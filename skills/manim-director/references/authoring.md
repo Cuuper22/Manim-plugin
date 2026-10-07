@@ -7,7 +7,7 @@ underneath: helpers return ordinary mobjects, and any Manim code mixes in.
 
 ```python
 from manim import *
-from manim_director_runtime import DirectedScene, Region
+from manim_director_runtime import DirectedScene
 
 
 class Roots(DirectedScene):

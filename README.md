@@ -7,41 +7,6 @@ engine renders scenes, makes stills and contact sheets, checks rendered frames, 
 explains failures with `file:line` findings. Your agent drives it through MCP; you can watch and edit
 in a local workbench.
 
-## Install
-
-You need Python 3.11+, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`) and, for `MathTex`, a TeX
-distribution that includes `dvisvgm` (TeX Live, MacTeX or MiKTeX).
-
-```bash
-git clone https://github.com/Cuuper22/Manim-plugin.git
-cd Manim-plugin
-python3 scripts/install.py --with-manim
-```
-
-The installer puts `manim-director` in `~/.local/bin` and Manim plus the runtime in their own virtual
-environment under `~/.local/share/manim-director/venv`. Then add the plugin to your agent.
-
-Claude Code:
-
-```text
-/plugin marketplace add Cuuper22/Manim-plugin
-/plugin install manim-plugin@manim-director
-```
-
-Codex:
-
-```bash
-codex plugin marketplace add Cuuper22/Manim-plugin
-codex plugin add manim-plugin@manim-director
-```
-
-Start a project and check the machine:
-
-```bash
-manim-director init my-film && cd my-film
-manim-director doctor
-```
-
 ## Write the mathematics
 
 ```python
@@ -78,13 +43,7 @@ class GeometricSum(DirectedScene):
         self.wait()
 ```
 
-Save it as `scenes/sum.py` in your project, render it and look at it:
-
-```bash
-manim-director render --scene GeometricSum --profile preview
-manim-director contact-sheet --scene GeometricSum
-manim-director qa --scene GeometricSum
-```
+The contact sheet the engine makes of it:
 
 ![Contact sheet of GeometricSum: six frames labelled with their time and beat](docs/images/geometric-sum-contact-sheet.png)
 
@@ -103,12 +62,55 @@ What the scene gets from `DirectedScene`:
   or placed again leave, replaced ones morph, new ones enter; the title and caption stay until a
   `chapter`. Each beat is also a Manim section and an entry in the render timeline, so contact sheets
   and QA findings name the beat and its line.
-- **It is still Manim.** Helpers return ordinary mobjects and plain `self.play(...)` mixes in freely.
-  `~/.local/share/manim-director/venv/bin/manim -ql scenes/sum.py GeometricSum` renders the same
-  scene without the engine.
+- **It is still Manim.** Helpers return ordinary mobjects, plain `self.play(...)` mixes in freely,
+  and the `manim` command renders the scene without the engine.
 
 Four themes ship, each checked for contrast and color-vision deficiencies: `midnight` (default),
 `paper`, `chalkboard` and `contrast`. Pick one in `director.yaml` or per scene with `theme = "paper"`.
+
+## Install
+
+You need Python 3.11+, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`) and, for `MathTex`, a TeX
+distribution that includes `dvisvgm` (TeX Live, MacTeX or MiKTeX).
+
+```bash
+git clone https://github.com/Cuuper22/Manim-plugin.git
+cd Manim-plugin
+python3 scripts/install.py --with-manim
+```
+
+The installer puts `manim-director` in `~/.local/bin` and Manim plus the runtime in their own virtual
+environment under `~/.local/share/manim-director/venv`. Then add the plugin to your agent.
+
+Claude Code:
+
+```text
+/plugin marketplace add Cuuper22/Manim-plugin
+/plugin install manim-plugin@manim-director
+```
+
+Codex:
+
+```bash
+codex plugin marketplace add Cuuper22/Manim-plugin
+codex plugin add manim-plugin@manim-director
+```
+
+Start a project and check the machine:
+
+```bash
+manim-director init my-film && cd my-film
+manim-director doctor
+```
+
+Save the scene above as `scenes/sum.py`, render it and look at it:
+
+```bash
+manim-director render --scene GeometricSum --profile preview
+manim-director contact-sheet --scene GeometricSum
+manim-director qa --scene GeometricSum
+~/.local/share/manim-director/venv/bin/manim -ql scenes/sum.py GeometricSum   # plain Manim
+```
 
 ## Look before you ship
 

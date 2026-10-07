@@ -124,6 +124,27 @@ class SetupServerTests(LauncherTestCase):
         self.assertIn(f"{mcp_launcher.INSTALLER} --with-manim", text)
 
 
+class ManifestTests(unittest.TestCase):
+    ROOT = LAUNCHER.parents[1]
+
+    def server(self, manifest: str) -> dict:
+        servers = json.loads((self.ROOT / manifest).read_text(encoding="utf-8"))["mcpServers"]
+        self.assertEqual(list(servers), ["manim-director"])
+        return servers["manim-director"]
+
+    def test_claude_code_starts_this_launcher(self) -> None:
+        server = self.server(".claude-plugin/plugin.json")
+        self.assertEqual(server["command"], "python3")
+        self.assertEqual(server["args"], [f"${{CLAUDE_PLUGIN_ROOT}}/scripts/{LAUNCHER.name}"])
+
+    def test_codex_runs_the_engine_directly(self) -> None:
+        server = self.server(".codex-plugin/plugin.json")
+        self.assertEqual([server["command"], *server["args"]], [mcp_launcher.ENGINE, "mcp"])
+
+    def test_no_root_mcp_json_doubles_as_a_project_server(self) -> None:
+        self.assertFalse((self.ROOT / ".mcp.json").exists())
+
+
 @unittest.skipIf(os.name == "nt", "exec and shebang engines are POSIX behavior")
 class EngineExecTests(LauncherTestCase):
     def test_execs_engine_from_installer_prefix_with_claude_project(self) -> None:

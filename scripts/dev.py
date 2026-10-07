@@ -24,6 +24,15 @@ ENGINE_PORT = 4177
 WORKBENCH_PORT = 4173
 
 
+def workbench_link(engine_url: str) -> str:
+    """The engine's sign-in link, pointed at Vite instead.
+
+    Vite listens on `localhost`, which can resolve to `::1` only (macOS), so the
+    link names `localhost` rather than the engine's `127.0.0.1`.
+    """
+    return urlunsplit(urlsplit(engine_url)._replace(netloc=f"localhost:{WORKBENCH_PORT}"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project", type=Path, help="a directory with director.yaml (or inside one)")
@@ -43,9 +52,7 @@ def main() -> None:
     threading.Thread(target=shutil.copyfileobj, args=(api.stdout, sys.stdout), daemon=True).start()
     ui = subprocess.Popen(["npm", "run", "dev"], cwd=ROOT / "workbench", env=env)
 
-    url = urlsplit(json.loads(listening)["url"])
-    workbench = url._replace(netloc=f"{url.hostname}:{WORKBENCH_PORT}")
-    print(f"Workbench (dev): {urlunsplit(workbench)}", flush=True)
+    print(f"Workbench (dev): {workbench_link(json.loads(listening)['url'])}", flush=True)
 
     def stop(*_: object) -> None:
         for child in (ui, api):

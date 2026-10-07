@@ -44,7 +44,7 @@ question only when two readings of the request would produce different mathemati
 
 ```python
 from manim import *
-from manim_director_runtime import DirectedScene, Region
+from manim_director_runtime import DirectedScene
 
 
 class CompletingTheSquare(DirectedScene):

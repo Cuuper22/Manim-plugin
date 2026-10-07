@@ -10,5 +10,11 @@
   "homepage": "https://github.com/Cuuper22/Manim-plugin",
   "repository": "https://github.com/Cuuper22/Manim-plugin",
   "license": "MIT",
-  "keywords": ["manim", "animation", "mathematics", "latex", "visualization", "video"]
+  "keywords": ["manim", "animation", "mathematics", "latex", "visualization", "video"],
+  "mcpServers": {
+    "manim-director": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp_launcher.py"]
+    }
+  }
 }

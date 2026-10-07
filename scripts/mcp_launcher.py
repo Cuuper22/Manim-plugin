@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Start Manim Director's MCP server, or explain how to install the engine.
 
-The plugin's `.mcp.json` runs this script with the host's `python3`, so a missing
-engine becomes a `setup` tool instead of a server that fails to start. When the
-engine is installed the script execs `manim-director mcp`; otherwise it answers
+`.claude-plugin/plugin.json` runs this script with the host's `python3`, so a
+missing engine becomes a `setup` tool instead of a server that fails to start.
+(The manifest declares the server inline because a root `.mcp.json` would also be
+loaded as a project server, without `${CLAUDE_PLUGIN_ROOT}`, by anyone working on
+this repository.) When the engine is installed the script execs
+`manim-director mcp`; otherwise it answers
 MCP over stdio with that single tool. It uses only the standard library and
 stays compatible with Python 3.8 (the system python3 on some macOS versions).
 """
