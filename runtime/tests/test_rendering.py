@@ -55,6 +55,12 @@ def render_request(project: Path, scene: str | None, files: list[Path], **overri
     return request("render", project, {**params, **overrides}, request_id="job")
 
 
+def media_seconds(path: Path) -> float:
+    args = "-v error -show_entries format=duration -of csv=p=0"
+    output = subprocess.run(["ffprobe", *args.split(), str(path)], capture_output=True, check=True)
+    return float(output.stdout)
+
+
 def probe(path: Path) -> dict:
     args = "-v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate -of json"
     output = subprocess.run(
@@ -308,3 +314,24 @@ def test_beat_ids_with_path_separators_render_sections(project: Path) -> None:
         "0001-proof-step-1.mp4",
         "0002-proof-step-2.mp4",
     ]
+
+
+@requires_manim
+def test_durations_and_beats_count_only_the_video_written(project: Path) -> None:
+    source = DIRECTED.replace(
+        '        with self.beat("square", run_time=0.3, hold=0.2):',
+        '        self.next_section("skipped", skip_animations=True)\n'
+        "        self.play(FadeOut(Circle()), run_time=1)\n"
+        '        with self.beat("square", run_time=0.3, hold=0.2):',
+    )
+    scene = write_scene(project, source)
+    timelines = []
+    for _ in range(2):  # the second render is served from Manim's partial-movie cache
+        frames, _ = run_bridge(project, render_request(project, "Shapes", [scene]))
+        result = frames[-1]["result"]
+        (video,) = [a["path"] for a in result["artifacts"] if a["kind"] == "video"]
+        assert result["duration_seconds"] == pytest.approx(media_seconds(project / video))
+        timeline = project / ".manim-director/artifacts/job/Shapes.timeline.json"
+        timelines.append(json.loads(timeline.read_text()))
+    assert timelines[0] == timelines[1]
+    assert [b["end_seconds"] for b in timelines[0]["beats"]] == pytest.approx([0.5, 1.0])

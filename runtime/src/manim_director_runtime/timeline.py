@@ -55,6 +55,9 @@ class _OpenBeat:
 class BeatRecorder:
     project_root: Path
     attached: bool = False
+    # Seconds of video written so far, kept by the render handler: Manim's own clock also
+    # counts skipped sections and runs off the frame grid on cached plays.
+    now: float | None = None
     _beats: list[_OpenBeat] = field(default_factory=list)
 
     def attach(self) -> None:
@@ -64,13 +67,12 @@ class BeatRecorder:
 
     def enter(self, beat_id: str | None, file: str, line: int, at_seconds: float) -> int:
         resolved = beat_id or f"beat-{len(self._beats) + 1}"
-        self._beats.append(
-            _OpenBeat(resolved, at_seconds, public_path(file, self.project_root), line)
-        )
+        start = at_seconds if self.now is None else self.now
+        self._beats.append(_OpenBeat(resolved, start, public_path(file, self.project_root), line))
         return len(self._beats) - 1
 
     def exit(self, handle: int, at_seconds: float) -> None:
-        self._beats[handle].end_seconds = at_seconds
+        self._beats[handle].end_seconds = at_seconds if self.now is None else self.now
 
     def timeline(self, scene: str, duration_seconds: float) -> Timeline:
         beats = [

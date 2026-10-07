@@ -64,6 +64,7 @@ class _Run:
     recorder: timeline.BeatRecorder
     stage: Stage = "setup"
     plays: int = 0
+    frames: int = 0  # written to the movie
     scene_seconds: float = 0.0
 
 
@@ -318,25 +319,50 @@ def _instrument(run: _Run, ctx: Context) -> None:
     scene = run.scene
     renderer = scene.renderer
     construct, play, finished = scene.construct, renderer.play, renderer.scene_finished
+    run.recorder.now = 0.0
 
     def construct_hook() -> None:
         run.stage = "construct"
         construct()
 
     def play_hook(*args: Any, **kwargs: Any) -> None:
+        before = renderer.time
         play(*args, **kwargs)
-        run.plays, run.scene_seconds = renderer.num_plays, float(renderer.time)
+        run.frames += _video_frames(scene, renderer.time - before)
+        run.scene_seconds = run.recorder.now = run.frames / renderer.camera.frame_rate
+        run.plays = renderer.num_plays
         ctx.progress("animate", run.plays, scene_seconds=run.scene_seconds)
 
     def finished_hook(*args: Any, **kwargs: Any) -> None:
         run.stage = "write"
-        run.plays, run.scene_seconds = renderer.num_plays, float(renderer.time)
+        run.plays = renderer.num_plays
         ctx.progress("encode", 0)
         finished(*args, **kwargs)
 
     scene.construct = construct_hook
     renderer.play = play_hook
     renderer.scene_finished = finished_hook
+
+
+def _video_frames(scene: Any, elapsed: float) -> int:
+    """How many frames the play that just ran added to the movie. Rendered frames advance
+    Manim's clock by one frame each; a skipped play advances it by its unquantized run time
+    whether it adds nothing (a section skipped with skip_animations) or a cached partial
+    movie's frames."""
+
+    renderer = scene.renderer
+    fps = renderer.camera.frame_rate
+    if not renderer.skip_animations:
+        return round(elapsed * fps)
+    sections = renderer.file_writer.sections
+    if sections and sections[-1].skip_animations:
+        return 0
+    import numpy as np
+
+    # Served from the partial-movie cache: the frames rendering it would have written.
+    if scene.is_current_animation_frozen_frame():
+        return int(scene.duration / (1 / fps))
+    return len(np.arange(0, scene.duration, 1 / fps))
 
 
 def _collect_sections(writer: Any, out_dir: Path, ctx: Context) -> list[RuntimeArtifact]:
