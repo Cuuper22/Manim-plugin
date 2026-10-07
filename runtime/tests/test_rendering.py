@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -256,3 +257,26 @@ def test_a_missing_asset_is_named_at_the_scene_line(project: Path) -> None:
     assert finding["code"] == "asset_missing"
     assert "missing-badge.svg" in finding["message"]
     assert finding["location"] == {"file": "scenes/main.py", "line": 5, "column": None}
+
+
+@requires_manim
+@requires_latex
+def test_concurrent_renders_share_a_cold_tex_cache(project: Path) -> None:
+    # Unguarded, workers typesetting the same formulas read each other's half-written
+    # .dvi/.svg files and Manim's cleanup deletes the others' in-flight files.
+    formulas = "".join(
+        f"        self.add(MathTex(r'x^{{{i}}} + \\frac{{{i}}}{{y_{i}}}'))\n" for i in range(12)
+    )
+    scenes = [f"class Race{n}(Scene):\n    def construct(self):\n{formulas}" for n in "ABC"]
+    path = write_scene(project, "from manim import *\n\n\n" + "\n\n".join(scenes))
+
+    def still(scene: str) -> dict:
+        params = render_request(project, scene, [path])["params"]
+        del params["sections"]
+        params["out_dir"] += scene
+        params["settings"] = {**SETTINGS, "format": "png"}
+        return run_bridge(project, request("still", project, params))[0][-1]
+
+    with ThreadPoolExecutor(3) as pool:
+        results = list(pool.map(still, ["RaceA", "RaceB", "RaceC"]))
+    assert [frame["type"] for frame in results] == ["result"] * 3, results

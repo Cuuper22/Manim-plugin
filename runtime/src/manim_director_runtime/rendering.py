@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from . import timeline
+from .cachelock import guard_shared_caches
 from .diagnostics import exception_findings
 from .errors import DirectorError, dependency_missing, io_error
 from .inspection import ParsedFile, scene_class_names
@@ -228,6 +229,7 @@ def _import_manim(target: SceneTarget, ctx: Context) -> Any:
         raise dependency_missing("manim", hint) from None
     except Exception as exc:  # importing Manim reads manim.cfg from the project root
         raise _render_failed("setup", target, ctx, exc) from None
+    guard_shared_caches()  # other workers render this project's scenes at the same time
     return manim
 
 
