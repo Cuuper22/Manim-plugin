@@ -2,13 +2,12 @@ mod args;
 mod output;
 mod serve;
 
-use anyhow::Context;
 use args::{Cli, Command, EditArgs, SourceArgs, TargetArgs};
 use clap::Parser;
 use manim_director_core::{
     find_project, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams, EngineError,
-    EngineEvent, ExportParams, FrameParams, IngestParams, IngestSource, InitParams, JobOrigin,
-    JobRecord, JobStatus, OperationRequest, Progress, QaParams, RenderParams, SourceRef,
+    EngineEvent, ErrorBody, ExportParams, FrameParams, IngestParams, IngestSource, InitParams,
+    JobOrigin, JobRecord, JobStatus, OperationRequest, Progress, QaParams, RenderParams, SourceRef,
     StillParams, ValidateMathParams,
 };
 use manim_director_engine::{
@@ -90,7 +89,12 @@ impl Failure {
                 ExitCode::from(code)
             }
             Self::Other(error) => {
-                eprintln!("error: {error:#}");
+                match machine {
+                    true => output::json(&serde_json::json!({
+                        "error": ErrorBody::internal(format!("{error:#}"))
+                    })),
+                    false => eprintln!("error: {error:#}"),
+                }
                 ExitCode::from(EXIT_ENGINE)
             }
         }
@@ -119,7 +123,8 @@ async fn run(cli: Cli) -> Outcome {
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp => {
-            fs::create_dir_all(&project)?;
+            fs::create_dir_all(&project)
+                .map_err(|error| EngineError::invalid("project", error.to_string()))?;
             let root = match find_project(&project) {
                 Ok(root) => root,
                 Err(_) => project.canonicalize()?,
@@ -212,10 +217,7 @@ async fn run(cli: Cli) -> Outcome {
                 }
                 Command::Diagnose(args) => {
                     let text = match args.text_file {
-                        Some(path) => Some(
-                            fs::read_to_string(cwd.join(&path))
-                                .with_context(|| format!("reading {}", path.display()))?,
-                        ),
+                        Some(path) => Some(read_arg("text_file", &cwd.join(path))?),
                         None => args.text,
                     };
                     OperationRequest::Diagnose(DiagnoseParams {
@@ -343,6 +345,13 @@ impl CliPaths<'_> {
     }
 }
 
+/// The text of a file an argument names; an unreadable one is bad input.
+fn read_arg(flag: &str, path: &Path) -> Result<String, EngineError> {
+    fs::read_to_string(path).map_err(|error| {
+        EngineError::invalid(flag, format!("cannot read {}: {error}", path.display()))
+    })
+}
+
 fn parse_ranges(values: &[String]) -> Result<BTreeMap<String, [f64; 2]>, EngineError> {
     values
         .iter()
@@ -463,15 +472,14 @@ fn progress_line(progress: &Progress) -> String {
 }
 
 async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
-    let read = |path: Option<PathBuf>| -> anyhow::Result<Option<String>> {
-        path.map(|path| {
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
-        })
-        .transpose()
-    };
-    let content = args.content.or(read(args.content_file)?);
-    let replacement = args.replacement.or(read(args.replacement_file)?);
-    let merge_patch = args.merge_patch.or(read(args.merge_patch_file)?);
+    let read = |flag, path: Option<PathBuf>| path.map(|path| read_arg(flag, &path)).transpose();
+    let content = args.content.or(read("content_file", args.content_file)?);
+    let replacement = args
+        .replacement
+        .or(read("replacement_file", args.replacement_file)?);
+    let merge_patch = args
+        .merge_patch
+        .or(read("merge_patch_file", args.merge_patch_file)?);
     let edit = match (content, args.line, merge_patch) {
         (Some(content), _, _) => SourceEdit::ReplaceAll { content },
         (None, Some(range), _) => {
