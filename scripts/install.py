@@ -23,6 +23,7 @@ from typing import BinaryIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BINARY_NAME = "manim-director.exe" if os.name == "nt" else "manim-director"
 MAX_CHECKSUM_BYTES = 128 * 1024
 MAX_RELEASE_BYTES = 512 * 1024 * 1024
 MAX_NOTICE_BYTES = 1024 * 1024
@@ -218,19 +219,46 @@ def download_binary(destination: Path) -> None:
             raise RuntimeError(f"SHA-256 mismatch for {asset}")
         print(f"+ verified SHA-256 {asset}", flush=True)
 
-        binary_name = "manim-director.exe" if os.name == "nt" else "manim-director"
-        extracted = tmp / binary_name
-        extract_binary(archive, archive_kind, binary_name, extracted)
+        extracted = tmp / BINARY_NAME
+        extract_binary(archive, archive_kind, BINARY_NAME, extracted)
+        install_executable(extracted, destination)
 
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, raw_install = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
-        os.close(descriptor)
-        install_tmp = Path(raw_install)
-        try:
-            shutil.copy2(extracted, install_tmp)
-            install_tmp.replace(destination)
-        finally:
-            install_tmp.unlink(missing_ok=True)
+
+def build_binary(destination: Path) -> None:
+    require("cargo", "Install Rust from https://rustup.rs.")
+    require("npm", "Install Node.js 22 or newer.")
+    run("npm", "ci", cwd=ROOT / "workbench")
+    run("npm", "run", "build", cwd=ROOT / "workbench")
+    run("cargo", "build", "--release", "--locked", "-p", "manim-director-cli", "--bin", "manim-director")
+    binary = ROOT / "target" / "release" / BINARY_NAME
+    if not binary.is_file():
+        raise SystemExit(f"Build completed without expected binary: {binary}")
+    install_executable(binary, destination)
+
+
+def install_executable(source: Path, destination: Path) -> None:
+    """Replace `destination` by rename: copying over a running engine fails ("text file busy")."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_install = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    os.close(descriptor)
+    install_tmp = Path(raw_install)
+    try:
+        shutil.copy2(source, install_tmp)
+        install_tmp.chmod(install_tmp.stat().st_mode | 0o111)
+        install_tmp.replace(destination)
+    finally:
+        install_tmp.unlink(missing_ok=True)
+
+
+def install_runtime(venv: Path, with_manim: bool) -> None:
+    if not venv_python(venv).exists():
+        run(sys.executable, "-m", "venv", str(venv))
+    command = [str(venv_python(venv)), "-m", "pip", "install"]
+    if with_manim:
+        command += ["--constraint", str(ROOT / "runtime" / "constraints-full.txt"), f"{ROOT / 'runtime'}[full]"]
+    else:
+        command.append(str(ROOT / "runtime"))
+    run(*command)
 
 
 def main() -> None:
@@ -256,47 +284,27 @@ def main() -> None:
     if sys.version_info < (3, 11):
         raise SystemExit("Manim Director requires Python 3.11 or newer.")
 
-    binary_name = "manim-director.exe" if os.name == "nt" else "manim-director"
     prefix = args.prefix.expanduser().resolve()
     bin_dir = prefix / "bin"
+    installed = bin_dir / BINARY_NAME
     runtime_venv = prefix / "share" / "manim-director" / "venv"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    installed = bin_dir / binary_name
 
     if args.from_source:
-        require("cargo", "Install Rust from https://rustup.rs.")
-        require("npm", "Install Node.js 20 or newer.")
-        run("npm", "ci", cwd=ROOT / "workbench")
-        run("npm", "run", "build", cwd=ROOT / "workbench")
-
-        run("cargo", "build", "--release", "--workspace")
-        binary = ROOT / "target" / "release" / binary_name
-        if not binary.exists():
-            raise SystemExit(f"Build completed without expected binary: {binary}")
-        shutil.copy2(binary, installed)
+        build_binary(installed)
     else:
         try:
             download_binary(installed)
         except (OSError, RuntimeError, urllib.error.URLError) as error:
-            if shutil.which("cargo") and shutil.which("npm"):
-                print(f"Release download failed ({error}); building locally instead.", flush=True)
-                run(sys.executable, str(Path(__file__).resolve()), "--from-source", *( ["--with-manim"] if args.with_manim else [] ), "--prefix", str(args.prefix))
-                return
-            raise SystemExit(f"Could not install a release binary: {error}. Re-run with --from-source.") from error
+            if not (shutil.which("cargo") and shutil.which("npm")):
+                raise SystemExit(f"Could not install a release binary: {error}. Re-run with --from-source.") from error
+            print(f"Release download failed ({error}); building locally instead.", flush=True)
+            build_binary(installed)
+    install_runtime(runtime_venv, args.with_manim)
 
-    if not venv_python(runtime_venv).exists():
-        run(sys.executable, "-m", "venv", str(runtime_venv))
-    runtime_target = f"{ROOT / 'runtime'}[full]" if args.with_manim else str(ROOT / "runtime")
-    install_args = [str(venv_python(runtime_venv)), "-m", "pip", "install"]
-    if args.with_manim:
-        install_args.extend(["--constraint", str(ROOT / "runtime" / "constraints-full.txt")])
-    run(*install_args, runtime_target)
-
-    installed.chmod(installed.stat().st_mode | 0o111)
-
-    print(f"\nInstalled {installed}")
+    print(f"\nInstalled {installed} with its runtime in {runtime_venv}")
     if str(bin_dir) not in os.environ.get("PATH", "").split(os.pathsep):
-        print(f"Add {bin_dir} to PATH, then run: manim-director doctor")
+        print(f"Add {bin_dir} to PATH.")
+    print("Start a project: manim-director init my-film && cd my-film && manim-director doctor")
 
 
 if __name__ == "__main__":

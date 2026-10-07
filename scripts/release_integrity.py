@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import tomllib
+
+from install import sha256_file
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,14 +108,6 @@ def marketplace_ref(root: Path, marketplace: str) -> str:
         return str(entries[0]["source"]["ref"])
     except (KeyError, TypeError) as exc:
         raise ValueError(f"{marketplace} entry for {PLUGIN_NAME} is missing its source ref") from exc
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def write_checksums(directory: Path, output: Path) -> list[Path]:
