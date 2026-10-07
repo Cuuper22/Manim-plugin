@@ -18,7 +18,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use manim_director_core::{files, EngineError, JobOrigin, JobRecord, LogRecord, SPEC_FILE};
+use manim_director_core::{
+    files, EngineError, JobOrigin, JobRecord, LogRecord, NoParams, SPEC_FILE,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -159,10 +161,6 @@ pub async fn get_job(
         .ok_or_else(|| EngineError::job_not_found(id))?;
     Ok(Json(detail))
 }
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NoParams {}
 
 /// 200 with the unchanged job when it already ended; 202 while the owner
 /// acts on the request.

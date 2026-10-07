@@ -259,6 +259,15 @@ impl EngineError {
         }
     }
 
+    /// A problem with the request as a whole rather than one field.
+    pub fn invalid_request(reason: impl Into<String>) -> Self {
+        Self::InvalidParams {
+            field: None,
+            reason: reason.into(),
+            allowed: Vec::new(),
+        }
+    }
+
     pub fn invalid_choice(
         field: impl Into<String>,
         reason: impl Into<String>,

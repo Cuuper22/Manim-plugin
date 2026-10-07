@@ -4,8 +4,8 @@
 use super::bound::{bound, size};
 use crate::{init_project, inspect, parse_params, parse_request, Frontend, Scheduler};
 use manim_director_core::{
-    summary as verdicts, Artifact, CursorPage, EngineError, JobOrigin, JobRecord, JobStatus,
-    JobSummary, LogRecord, Operation, OperationRequest, OperationResult,
+    parse_value, summary as verdicts, Artifact, CursorPage, EngineError, JobOrigin, JobRecord,
+    JobStatus, JobSummary, LogRecord, NoParams, Operation, OperationRequest, OperationResult,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Map, Value};
@@ -71,10 +71,7 @@ async fn init(scheduler: &Scheduler, arguments: Value) -> Result<Value, EngineEr
 }
 
 async fn inspect_tool(scheduler: &Scheduler, arguments: Value) -> Result<Value, EngineError> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct NoArguments {}
-    strict::<NoArguments>(arguments)?;
+    strict::<NoParams>(arguments)?;
     let summary = inspect(scheduler).await?;
     let mut text = format!(
         "{}: {} scenes, {} profiles (default {}).",
@@ -325,16 +322,8 @@ fn wait_duration(seconds: Option<u64>) -> Result<Duration, EngineError> {
 }
 
 fn strict<T: DeserializeOwned>(arguments: Value) -> Result<T, EngineError> {
-    let arguments = match arguments {
-        Value::Null => Value::Object(Map::new()),
-        arguments => arguments,
-    };
-    serde_path_to_error::deserialize(arguments).map_err(|error| {
-        let path = error.path().to_string();
-        EngineError::InvalidParams {
-            field: (path != ".").then_some(path),
-            reason: error.into_inner().to_string(),
-            allowed: Vec::new(),
-        }
-    })
+    match arguments {
+        Value::Null => parse_value(Value::Object(Map::new())),
+        arguments => parse_value(arguments),
+    }
 }
