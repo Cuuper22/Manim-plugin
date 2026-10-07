@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +13,7 @@ import pytest
 
 from conftest import SRC, RecordingWriter, request, run_bridge
 from manim_director_runtime import protocol
+from manim_director_runtime.errors import DirectorError
 from manim_director_runtime.protocol import MAX_REQUEST_BYTES, METHODS, handle_request
 
 CANONICAL = [
@@ -169,6 +173,60 @@ def test_invalid_params_name_the_dotted_field(project: Path, writer: RecordingWr
     error = writer.frames[0]["error"]
     assert error["code"] == "invalid_params"
     assert error["data"] == {"field": "settings.width", "reason": "must be an integer"}
+    assert error["message"] == "Invalid settings.width: must be an integer."
+
+
+# A stand-in engine: starts a worker (as its own group's leader when argv[4] is "True", as the
+# engine does), waits for ready, starts a stand-in for ffmpeg in the worker's group, then dies.
+# Each process holds the write end of a pipe the test watches, so its exit shows as EOF.
+ORPHANING_ENGINE = """
+import subprocess, sys
+request, worker_alive, child_alive = map(int, sys.argv[1:4])
+own_group = sys.argv[4] == "True"
+bridge = [sys.executable, "-P", "-m", "manim_director_runtime", "bridge"]
+worker = subprocess.Popen(
+    bridge,
+    stdin=request,
+    stdout=subprocess.PIPE,
+    pass_fds=[worker_alive],
+    process_group=0 if own_group else None,
+)
+worker.stdout.readline()
+group = worker.pid if own_group else None
+subprocess.Popen(["sleep", "60"], pass_fds=[child_alive], process_group=group)
+"""
+
+
+def closed_within(fd: int, seconds: float) -> bool:
+    """True once every process holding the write end of the pipe behind `fd` has exited."""
+
+    readable, _, _ = select.select([fd], [], [], seconds)
+    return bool(readable) and os.read(fd, 1) == b""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+@pytest.mark.parametrize("own_group", [True, False], ids=["own-group", "shared-group"])
+def test_a_worker_ends_when_its_engine_dies(project: Path, own_group: bool) -> None:
+    request_read, request_write = os.pipe()  # kept open: the worker waits for a request
+    worker_read, worker_write = os.pipe()
+    child_read, child_write = os.pipe()
+    passed = (request_read, worker_write, child_write)
+    args = [sys.executable, "-c", ORPHANING_ENGINE, *map(str, passed), str(own_group)]
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    # A group of its own: a worker that wrongly ended its shared group cannot reach pytest.
+    engine = subprocess.Popen(args, pass_fds=passed, cwd=project, env=env, process_group=0)
+    for fd in passed:
+        os.close(fd)
+    try:
+        assert engine.wait(timeout=60) == 0
+        assert closed_within(worker_read, 10)
+        # Leading its group, the worker takes its children along; otherwise it ends alone.
+        assert closed_within(child_read, 10 if own_group else 1) is own_group
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(engine.pid, signal.SIGKILL)
+        for fd in (request_write, worker_read, child_read):
+            os.close(fd)
 
 
 def test_unexpected_exceptions_become_internal_errors(
@@ -184,6 +242,22 @@ def test_unexpected_exceptions_become_internal_errors(
     assert error["message"] == "RuntimeError: boom"
     assert "RuntimeError: boom" in error["data"]["stderr_tail"]
     assert "Traceback" in capsys.readouterr().err
+
+
+def test_require_inside_follows_symlinks_to_where_they_lead(project: Path, ctx) -> None:
+    outside = project.parent / "outside"
+    outside.mkdir()
+    (project / "real").mkdir()
+    (project / "inner").symlink_to(project / "real")
+    (project / "escape").symlink_to(outside)
+    (project / "dangling").symlink_to(outside / "missing.txt")
+    for path in ("new/file.txt", "inner/new/file.txt", "real/../inner"):
+        assert ctx.require_inside(project / path, "output") == project / path
+    for path in ("escape", "escape/new/file.txt", "dangling", "real/../../outside"):
+        with pytest.raises(DirectorError) as raised:
+            ctx.require_inside(project / path, "output")
+        assert raised.value.data == {"field": "output", "reason": "outside_project"}
+    assert raised.value.message == f"Invalid output: {project / path} is outside the project."
 
 
 def test_progress_is_coalesced_and_the_last_state_is_flushed(ctx, writer: RecordingWriter) -> None:

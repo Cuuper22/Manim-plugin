@@ -80,7 +80,8 @@ in a scene) is redirected to stderr. Methods: `init discover doctor render still
 contact_sheet qa diagnose validate_math captions ingest export`. Each method's `params` is a typed
 task parsed strictly at the boundary (`tasks.py`); unknown or missing fields fail with
 `invalid_params` naming the field. Rendering runs Manim in-process; the engine owns timeouts and
-cancels by killing the worker's process group.
+cancels by killing the worker's process group. On POSIX a worker also ends its own group when
+its parent engine exits, within about half a second.
 
 ## Development
 

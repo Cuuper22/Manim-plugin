@@ -107,11 +107,26 @@ def test_create_refuses_to_overwrite_and_overwrite_merges_gitignore(project: Pat
         init(create(), ctx)
     assert raised.value.code == "project_not_empty"
     assert raised.value.data == {"paths": ["README.md"]}
+    assert raised.value.message == (
+        "This directory already has files the template writes; "
+        "force (--force) would replace README.md, and keeps no copy."
+    )
     assert not (project / "director.yaml").exists()
     init(create(mode="overwrite", theme="paper", seed=42), ctx)
     assert (project / ".gitignore").read_text() == "build/\n__pycache__/\n.manim-director/\n"
     assert "# Sequence Lab" in (project / "README.md").read_text()
     assert "theme: paper" in (project / "director.yaml").read_text()
+
+
+def test_create_in_a_project_points_at_adding_a_scene(project: Path, ctx) -> None:
+    init(create(), ctx)
+    with pytest.raises(DirectorError) as raised:
+        init(create(), ctx)
+    assert raised.value.message == (
+        "This directory is already a project; add a scene with scene_template "
+        "(--scene-template). force (--force) would replace README.md, director.yaml, "
+        "manim.cfg and scenes/main.py, and keeps no copy."
+    )
 
 
 def test_unknown_template_or_theme_lists_the_choices(project: Path, ctx) -> None:
@@ -145,6 +160,38 @@ def test_add_scene_writes_one_file_exclusively(project: Path, ctx) -> None:
     with pytest.raises(DirectorError) as raised:
         init(task, ctx)
     assert raised.value.data == {"paths": ["scenes/derivation.py"]}
+    assert raised.value.message == (
+        "scenes/derivation.py already exists; force (--force) would replace it with the "
+        "template's scene, and keeps no copy."
+    )
     (project / "scenes/derivation.py").write_text("edited\n")
     init(replace(task, force=True), ctx)
     assert scene_class((project / "scenes/derivation.py").read_text()) == "QuadraticFormula"
+
+
+def test_add_scene_never_writes_through_a_symlink(project: Path, ctx) -> None:
+    outside = project.parent / "profile"
+    outside.write_text("mine\n")
+    target = project / "scenes/derivation.py"
+    target.parent.mkdir()
+    for link in (outside, project.parent / "missing.py"):
+        target.symlink_to(link)
+        with pytest.raises(DirectorError) as raised:
+            init(add_scene(project, "derivation"), ctx)
+        assert raised.value.code == "project_not_empty"
+        target.unlink()
+    assert not (project.parent / "missing.py").exists()
+    target.symlink_to(outside)
+    init(replace(add_scene(project, "derivation"), force=True), ctx)
+    assert not target.is_symlink() and target.read_text() == scene_source("derivation")
+    assert outside.read_text() == "mine\n"
+
+
+def test_add_scene_refuses_a_source_dir_linked_outside(project: Path, ctx) -> None:
+    outside = project.parent / "elsewhere"
+    outside.mkdir()
+    (project / "scenes").symlink_to(outside)
+    with pytest.raises(DirectorError) as raised:
+        init(add_scene(project, "graph"), ctx)
+    assert raised.value.data == {"field": "source_dir", "reason": "outside_project"}
+    assert not any(outside.iterdir())
