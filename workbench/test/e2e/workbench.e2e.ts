@@ -1,8 +1,9 @@
 // The core flow against a real engine and runtime, in Chromium: npm run test:e2e.
 // Skipped without an engine binary (cargo build, or MANIM_DIRECTOR_BIN) or a
 // Playwright Chromium (PLAYWRIGHT_BROWSERS_PATH), and when the engine's doctor
-// says this machine cannot render. The engine finds Python and the runtime as
-// it always does (e.g. MANIM_DIRECTOR_PYTHON).
+// says this machine cannot render; with MANIM_DIRECTOR_E2E=required (CI) each
+// of those fails instead. The engine finds Python and the runtime as it always
+// does (e.g. MANIM_DIRECTOR_PYTHON).
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,19 +16,25 @@ const RENDER_MS = 240_000;
 const STEP_MS = 60_000;
 
 const binary = engineBinary();
-const skip = binary === null
+const missing = binary === null
   ? "no engine binary: run cargo build, or point MANIM_DIRECTOR_BIN at one"
   : existsSync(chromium.executablePath())
-    ? false
+    ? null
     : "no Playwright Chromium: set PLAYWRIGHT_BROWSERS_PATH";
+/** Where a skip would pass without testing anything. */
+const required = process.env.MANIM_DIRECTOR_E2E === "required";
+const skip = required ? false : missing ?? false;
 
 test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout: 15 * 60_000 }, async (t) => {
+  assert.equal(missing, null, "MANIM_DIRECTOR_E2E=required");
   const engine = await Engine.start(binary!);
   t.after(() => engine.stop());
 
   const doctor = await engine.doctor(STEP_MS);
   if (!doctor?.report.capabilities.render || !doctor.report.capabilities.video_tools) {
-    t.skip(`this machine cannot render: ${JSON.stringify(doctor?.report.capabilities ?? "no doctor report")}`);
+    const why = `this machine cannot render: ${JSON.stringify(doctor?.report.capabilities ?? "no doctor report")}`;
+    assert.ok(!required, why);
+    t.skip(why);
     return;
   }
   // Playwright's Chromium cannot decode H.264, so playback is checked on a WebM profile.
