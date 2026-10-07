@@ -22,7 +22,7 @@ function ToastItem({ toast }: { toast: Toast }) {
     return () => clearTimeout(timer);
   }, [store, toast.id]);
   return (
-    <li className="toast" role="alert">
+    <li className="card toast" data-tone="danger" role="alert">
       <p>{toast.message}</p>
       <button type="button" aria-label="Dismiss" onClick={() => store.dismissToast(toast.id)}>
         ×

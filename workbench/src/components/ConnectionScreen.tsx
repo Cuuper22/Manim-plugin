@@ -18,7 +18,7 @@ export function ConnectionScreen({ connection, root }: ConnectionScreenProps) {
     );
   }
 
-  const command = <code className="command">{engineCommand(root, BEHIND_DEV_SERVER)}</code>;
+  const command = <code className="command mono">{engineCommand(root, BEHIND_DEV_SERVER)}</code>;
   // Behind the dev server the engine's link must be opened on this server's address instead.
   const openLink = BEHIND_DEV_SERVER
     ? `Open its Workbench link with this page's address (${window.location.origin}/?token=…).`
