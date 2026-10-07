@@ -2,7 +2,9 @@
 //! worker that preloads nothing, with no job row and their own timeouts.
 
 use super::{accept_result, Inner};
-use crate::{cache, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge};
+use crate::{
+    cache, confine::write_target, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge,
+};
 use manim_director_core::{
     python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
     ErrorBody, Finding, InitMode, InitParams, InitResult, InitTask, Operation, OperationRequest,
@@ -202,6 +204,9 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
     let task = match &params.scene_template {
         Some(scene_template) => {
             let spec = DirectorSpec::load(&root).map_err(EngineError::from)?;
+            let source_dir = &spec.project.source_dir;
+            // The runtime opens the scene file itself and would follow a link there.
+            write_target(&root, &format!("{source_dir}/{scene_template}.py"))?;
             InitTask {
                 mode: InitMode::AddScene,
                 name: None,
@@ -209,7 +214,7 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
                 scene_template: Some(scene_template.clone()),
                 theme: None,
                 seed: None,
-                source_dir: Some(root.join(&spec.project.source_dir)),
+                source_dir: Some(write_target(&root, source_dir)?),
                 force: params.force,
             }
         }
@@ -317,6 +322,20 @@ mod tests {
         let (root, added) = preflight(root, &forced(Some("graph"))).unwrap();
         assert_eq!((added.mode, added.force), (InitMode::AddScene, true));
         assert_eq!(added.source_dir, Some(root.join("scenes")));
+        #[cfg(unix)]
+        {
+            let outside = tempfile::NamedTempFile::new().unwrap();
+            fs::create_dir(root.join("scenes")).unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join("scenes/graph.py")).unwrap();
+            let error = preflight(&root, &forced(Some("graph"))).unwrap_err();
+            assert_eq!(
+                error,
+                EngineError::InvalidPath {
+                    path: "scenes/graph.py".into(),
+                    reason: "outside_project"
+                }
+            );
+        }
     }
 
     #[tokio::test]

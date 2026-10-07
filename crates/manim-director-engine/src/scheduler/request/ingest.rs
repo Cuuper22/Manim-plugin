@@ -1,5 +1,6 @@
 //! `ingest` resolution: host files checked, classified and given a destination.
 
+use crate::confine::write_target;
 use manim_director_core::{
     files, Budget, DirectorSpec, EngineError, IngestParams, IngestTask, IngestTaskSource, Task,
 };
@@ -43,7 +44,7 @@ pub(super) fn task(
         sources.push(IngestTaskSource {
             path,
             kind: kind.to_owned(),
-            destination_dir: root.join(destination),
+            destination_dir: write_target(root, destination)?,
             id: source.id.clone(),
             license: source.license.clone(),
             attribution: source.attribution.clone(),
@@ -60,7 +61,7 @@ pub(super) fn task(
         sources,
         normalize: params.normalize,
         force: params.force,
-        manifest: root.join("sources/manifest.json"),
+        manifest: write_target(root, "sources/manifest.json")?,
     }))
 }
 
@@ -88,12 +89,13 @@ mod tests {
     fn sources_are_classified_and_credentials_refused() {
         let host = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
         fs::write(
-            project.path().join("director.yaml"),
+            root.join("director.yaml"),
             "version: 1\nproject:\n  name: Demo\n",
         )
         .unwrap();
-        let spec = DirectorSpec::load(project.path()).unwrap();
+        let spec = DirectorSpec::load(&root).unwrap();
         for name in ["notes.md", "logo.svg", "id_rsa"] {
             fs::write(host.path().join(name), "x").unwrap();
         }
@@ -109,27 +111,31 @@ mod tests {
             normalize: false,
             force: false,
         };
-        let Task::Ingest(notes) = task(project.path(), &spec, &params("notes.md")).unwrap() else {
+        let Task::Ingest(notes) = task(&root, &spec, &params("notes.md")).unwrap() else {
             panic!("expected an ingest task")
         };
         assert_eq!(notes.sources[0].kind, "markdown");
-        assert_eq!(
-            notes.sources[0].destination_dir,
-            project.path().join("sources")
-        );
-        let Task::Ingest(logo) = task(project.path(), &spec, &params("logo.svg")).unwrap() else {
+        assert_eq!(notes.sources[0].destination_dir, root.join("sources"));
+        let Task::Ingest(logo) = task(&root, &spec, &params("logo.svg")).unwrap() else {
             panic!("expected an ingest task")
         };
-        assert_eq!(
-            logo.sources[0].destination_dir,
-            project.path().join("assets")
-        );
+        assert_eq!(logo.sources[0].destination_dir, root.join("assets"));
         for denied in ["id_rsa", ".ssh/config.txt"] {
-            match task(project.path(), &spec, &params(denied)).unwrap_err() {
+            match task(&root, &spec, &params(denied)).unwrap_err() {
                 EngineError::InvalidParams { reason, .. } => assert_eq!(reason, "denied"),
                 other => panic!("unexpected {other:?}"),
             }
         }
-        assert!(task(project.path(), &spec, &params("missing.md")).is_err());
+        assert!(task(&root, &spec, &params("missing.md")).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(host.path(), root.join("assets")).unwrap();
+            match task(&root, &spec, &params("logo.svg")).unwrap_err() {
+                EngineError::InvalidPath { path, reason } => {
+                    assert_eq!((path.as_str(), reason), ("assets", "outside_project"))
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
     }
 }
