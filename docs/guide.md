@@ -158,7 +158,7 @@ and the rest between steps. The result is a `Derivation` (a `VGroup`) with `.lin
   or `Tex`.
 - `self.highlight(eq, r"b^2 - 4ac", color="accent", box=False)` recolors sub-terms (or the whole
   expression) and, with `box=True`, backs each occurrence with a soft box that moves and leaves
-  with `eq` (the result's `.boxes`).
+  with `eq` (the result's `.boxes`); `color=None` keeps symbol colors and only boxes.
 - `self.tag(eq, label=None)` puts an equation number at the right edge of the region `eq` is placed
   in, level with `eq`, and moves it along with `eq`; labels count `(1)`, `(2)`, ... unless given.
 - `self.focus(*mobjects)` dims everything else on stage (title and caption stay lit);

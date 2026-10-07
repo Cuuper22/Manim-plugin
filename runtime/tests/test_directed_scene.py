@@ -463,6 +463,19 @@ def test_highlight_boxes_each_occurrence_and_moves_and_leaves_with_its_equation(
     render(Boxes)
     assert seen == {"count": 2, "clear": True, "on glyphs": True, "kept": True, "gone": True}
 
+    class BoxOnly(DirectedScene):
+        symbols = {"b": "secondary"}
+
+        def construct(self):
+            formula = self.math(r"b^2 - 4ac")
+            self.place(formula)
+            seen["colors"] = set(colors(self.highlight(formula, "b^2", color=None, box=True)))
+            with pytest.raises(CompositionError, match="only boxes"):
+                self.highlight(formula, "b^2", color=None)
+
+    render(BoxOnly)
+    assert seen["colors"] == {MIDNIGHT.secondary, MIDNIGHT.foreground}  # b and its 2 keep theirs
+
 
 @requires_latex
 def test_colored_operators_keep_their_typesetting_and_alignment(render: Render) -> None:

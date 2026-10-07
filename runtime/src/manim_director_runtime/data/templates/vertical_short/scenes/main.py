@@ -46,7 +46,10 @@ class TriangularNumbers(DirectedScene):
         rectangle = VGroup(stairs, flipped)
         width = Brace(rectangle, DOWN, color=self.theme.muted)
         height = Brace(rectangle, LEFT, color=self.theme.muted)
-        labels = VGroup(width.get_tex("n"), height.get_tex("n + 1"))
+        # Through self.math, so n has its symbol color here too.
+        labels = VGroup(
+            self.math("n").next_to(width, DOWN), self.math("n + 1").next_to(height, LEFT)
+        )
         with self.beat("count", keep=[rectangle, terms]):
             self.place(VGroup(rectangle, width, height, labels), region=Region.TOP)
             self.caption("Each staircase is half the rectangle.")

@@ -42,5 +42,5 @@ class QuadraticFormula(DirectedScene):
             self.caption("The discriminant b² − 4ac decides: two, one or no real roots.")
             self.place(formula, replaces=steps.lines[-1])
             self.tag(formula)
-        self.highlight(formula, r"b^2 - 4ac", box=True)
+        self.highlight(formula, r"b^2 - 4ac", color=None, box=True)  # a, b, c keep their colors
         self.wait()

@@ -448,13 +448,17 @@ class Directed:
         self,
         mobject: Mobject,
         *terms: str,
-        color: str | ManimColor = "accent",
+        color: str | ManimColor | None = "accent",
         box: bool = False,
         run_time: float | None = None,
     ) -> VGroup:
         """Recolor sub-terms (or the whole mobject) and optionally back each occurrence with a
-        soft box, like a highlighter pen. Returns the highlighted glyphs; their `.boxes` (or
-        None) travel and leave with `mobject`."""
+        soft box, like a highlighter pen; `color=None` keeps the glyphs' own (symbol) colors
+        and draws accent boxes. Returns the highlighted glyphs; their `.boxes` (or None) travel
+        and leave with `mobject`."""
+
+        if color is None and not box:
+            raise CompositionError("highlight(color=None) only boxes; pass box=True.")
 
         groups = (
             [group for tex in terms for group in self._terms(mobject, tex)]
@@ -462,8 +466,9 @@ class Directed:
             else [VGroup(*mobject.family_members_with_points())]
         )
         glyphs = Highlight(*dict.fromkeys(glyph for group in groups for glyph in group))
-        hue = self.theme.color(color)
-        animations: list[Animation] = [FadeToColor(glyph, hue) for glyph in glyphs]
+        hue = self.theme.accent if color is None else self.theme.color(color)
+        recolor = [] if color is None else [FadeToColor(glyph, hue) for glyph in glyphs]
+        animations: list[Animation] = recolor
         if box:
             unique = {tuple(map(id, group)): group for group in groups}.values()
             glyphs.boxes = VGroup(*(_backdrop(group, hue) for group in unique))
