@@ -99,8 +99,8 @@ def setup_text(searched: list[str], problem: str | None = None) -> str:
         ]
     lines += [
         "",
-        "Then reconnect this MCP server (or start a new session) and run",
-        "`manim-director doctor` in the project to check LaTeX and FFmpeg.",
+        "Then reconnect this MCP server (or start a new session) and call its",
+        "doctor tool to check Manim, LaTeX and FFmpeg.",
         "",
         "Searched:",
         *(f"    {location}" for location in searched),
