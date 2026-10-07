@@ -105,7 +105,7 @@ named_enum! {
 /// code and one HTTP status.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
-    #[error("{}", invalid_params_message(field.as_deref(), reason))]
+    #[error("{}", invalid_params_message(field.as_deref(), reason, allowed))]
     InvalidParams {
         field: Option<String>,
         reason: String,
@@ -148,7 +148,7 @@ pub enum EngineError {
     },
     #[error("The job queue is full ({capacity} jobs); retry when a job finishes.")]
     QueueFull { capacity: usize },
-    #[error("{path} is not an editable project path ({reason}).")]
+    #[error("{path} {}.", reason_text(reason))]
     InvalidPath { path: String, reason: &'static str },
     #[error("{path}: .{extension} files are not accepted here.")]
     UnsupportedFileType { path: String, extension: String },
@@ -187,10 +187,29 @@ pub enum EngineError {
     Internal(String),
 }
 
-fn invalid_params_message(field: Option<&str>, reason: &str) -> String {
-    match field {
-        Some(field) => format!("Invalid {field}: {reason}."),
-        None => format!("Invalid request: {reason}."),
+fn invalid_params_message(field: Option<&str>, reason: &str, allowed: &[String]) -> String {
+    let choices = match allowed.is_empty() {
+        true => String::new(),
+        false => format!("; expected one of {}", allowed.join(", ")),
+    };
+    format!(
+        "Invalid {}: {}{choices}.",
+        field.unwrap_or("request"),
+        reason_text(reason)
+    )
+}
+
+/// The path rule's reason codes (kept as `data.reason`) as words.
+fn reason_text(reason: &str) -> &str {
+    match reason {
+        "absolute" => "must be a project-relative path",
+        "traversal" => "must not have empty, . or .. segments",
+        "hidden" => "must not have a hidden (dot) segment",
+        "outside_project" => "is outside the project",
+        "denied" => "is not allowed here",
+        "missing" => "does not exist",
+        "extension" => "has an extension not accepted here",
+        reason => reason,
     }
 }
 
@@ -399,6 +418,27 @@ impl EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_spell_out_reason_codes_and_choices() {
+        let traversal = EngineError::invalid("file", "traversal");
+        assert_eq!(
+            traversal.to_string(),
+            "Invalid file: must not have empty, . or .. segments."
+        );
+        assert_eq!(traversal.data().unwrap()["reason"], "traversal");
+        let profile =
+            EngineError::invalid_choice("profile", "unknown profile", ["draft", "preview"]);
+        assert_eq!(
+            profile.to_string(),
+            "Invalid profile: unknown profile; expected one of draft, preview."
+        );
+        let outside = EngineError::InvalidPath {
+            path: "assets".into(),
+            reason: "outside_project",
+        };
+        assert_eq!(outside.to_string(), "assets is outside the project.");
+    }
 
     #[test]
     fn every_kind_has_its_contract_code_and_status() {

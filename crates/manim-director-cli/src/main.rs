@@ -5,10 +5,10 @@ mod serve;
 use args::{Cli, Command, EditArgs, SourceArgs, TargetArgs};
 use clap::Parser;
 use manim_director_core::{
-    find_project, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams, EngineError,
-    EngineEvent, ErrorBody, ExportParams, FrameParams, IngestParams, IngestSource, InitParams,
-    JobOrigin, JobRecord, JobStatus, OperationRequest, Progress, QaParams, RenderParams, SourceRef,
-    StillParams, ValidateMathParams,
+    find_project, summary, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams,
+    EngineError, EngineEvent, ErrorBody, ExportParams, FrameParams, IngestParams, IngestSource,
+    InitParams, JobOrigin, JobRecord, JobStatus, OperationRequest, Progress, QaParams,
+    RenderParams, SourceRef, StillParams, ValidateMathParams,
 };
 use manim_director_engine::{
     cli_project_path, current_revision, init_project, inspect, run_mcp, shutdown_signal,
@@ -76,9 +76,10 @@ impl Failure {
                 if machine {
                     output::json(&serde_json::json!({ "error": body }));
                 } else {
-                    eprintln!("error: {}", error);
-                    if let EngineError::Operation(body) = &error {
-                        output::failure(body);
+                    eprintln!("error: {error}");
+                    let findings = summary::error_findings(&body);
+                    for line in findings.iter().flat_map(summary::finding_lines) {
+                        eprintln!("  {line}");
                     }
                 }
                 let code = match body.code.as_str() {

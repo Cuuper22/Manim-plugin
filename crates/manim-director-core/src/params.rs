@@ -489,7 +489,10 @@ impl IngestParams {
         for (index, source) in self.sources.iter().enumerate() {
             let field = |name: &str| format!("sources[{index}].{name}");
             if !std::path::Path::new(&source.path).is_absolute() {
-                return Err(EngineError::invalid(field("path"), "absolute"));
+                return Err(EngineError::invalid(
+                    field("path"),
+                    "must be an absolute host path",
+                ));
             }
             if let Some(id) = &source.id {
                 check_text(&field("id"), id, 64)?;
