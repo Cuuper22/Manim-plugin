@@ -78,3 +78,34 @@ def test_malformed_files_name_the_line(project: Path, ctx) -> None:
     with pytest.raises(DirectorError) as raised:
         run(ctx, vtt)
     assert raised.value.data == {"line": 1}
+
+
+def test_vtt_keeps_cue_settings_and_style_blocks(project: Path, ctx) -> None:
+    source = project / "styled.vtt"
+    source.write_text(
+        "WEBVTT\n\nSTYLE\n::cue { color: yellow }\n\nNOTE dropped\n\n"
+        "00:00.000 --> 00:02.000 line:0 align:start\nTop left\n"
+    )
+    output = project / "out.vtt"
+    run(ctx, source, shift=1.0, output=output)
+    assert output.read_text() == (
+        "WEBVTT\n\nSTYLE\n::cue { color: yellow }\n\n"
+        "00:00:01.000 --> 00:00:03.000 line:0 align:start\nTop left\n"
+    )
+
+
+def test_timing_messages_say_what_is_wrong(project: Path, ctx) -> None:
+    path = project / "en.srt"
+    path.write_text(
+        "1\n00:00:01,500 --> 00:00:01,500\nNo time\n\n"
+        "2\n00:00:02,000 --> 00:00:03,000\nIntro\n\n"
+        "3\n00:00:06,000 --> 00:00:08,000\nKept\n"
+    )
+    result = run(ctx, path, shift=-5.0)  # trims the intro: cues 1 and 2 fall before 0:00
+    assert result["cue_count"] == 1 and result["valid"] is True
+    assert [(f["code"], f["location"]["line"]) for f in result["findings"]] == [
+        ("cue_dropped", 2),
+        ("cue_dropped", 6),
+    ]
+    (empty,) = run(ctx, path)["findings"][:1]
+    assert empty["message"] == "The cue has no duration (its end is not after its start)."
