@@ -75,11 +75,14 @@ pub fn inspect(summary: &Inspect, machine: bool) {
         let latest = summary
             .latest
             .iter()
-            .find(|latest| latest.scene_id == scene.scene_id)
-            .and_then(|latest| latest.video.as_deref())
-            .unwrap_or("not rendered");
+            .find(|latest| latest.scene_id == scene.scene_id);
+        let video = match latest.and_then(|latest| Some((latest.video.as_deref()?, latest))) {
+            Some((path, latest)) if latest.video_outdated => format!("{path} (outdated)"),
+            Some((path, _)) => path.to_owned(),
+            None => "not rendered".to_owned(),
+        };
         println!(
-            "  {} {}:{} ({} beats) — {latest}",
+            "  {} {}:{} ({} beats) — {video}",
             scene.name, scene.file, scene.line, scene.beats
         );
     }

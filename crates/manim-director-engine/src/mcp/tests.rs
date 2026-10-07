@@ -137,7 +137,7 @@ async fn inspect_agrees_with_the_workbench_on_order_and_findings() {
     let scheduler = scheduler(directory.path()).await;
     fs::write(
         scheduler.root().join("director.yaml"),
-        "version: 1\nproject:\n  name: Demo\ntheme: nonexistent\nscenes:\n  - {id: Proof, file: scenes/main.py}\n",
+        "version: 1\nproject:\n  name: Demo\ntheme: nonexistent\nscenes:\n  - {id: proof, class: Proof, file: scenes/main.py}\n",
     )
     .unwrap();
     let result = call(&scheduler, "inspect", json!({})).await;
@@ -149,6 +149,8 @@ async fn inspect_agrees_with_the_workbench_on_order_and_findings() {
         .map(|scene| scene["name"].as_str().unwrap())
         .collect();
     assert_eq!(scenes, ["Proof", "Intro"], "declared scenes first");
+    assert_eq!(structured["scenes"][0]["declared_id"], "proof");
+    assert_eq!(structured["latest"][0]["video_outdated"], false);
     let codes: Vec<_> = structured["findings"]
         .as_array()
         .unwrap()

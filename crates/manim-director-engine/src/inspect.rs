@@ -29,6 +29,8 @@ pub struct Inspect {
 #[derive(Debug, Clone, Serialize)]
 pub struct InspectScene {
     pub scene_id: String,
+    /// The scene's id in `director.yaml`, which tools also accept.
+    pub declared_id: Option<String>,
     pub name: String,
     pub file: String,
     pub line: u32,
@@ -43,6 +45,9 @@ pub struct InspectLatest {
     pub still: Option<String>,
     pub contact_sheet: Option<String>,
     pub video_job_id: Option<Uuid>,
+    pub video_profile: Option<String>,
+    /// The scene file changed since the video was rendered.
+    pub video_outdated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,9 +118,12 @@ pub async fn inspect(scheduler: &Scheduler) -> Result<Inspect, EngineError> {
             .iter()
             .map(|scene| {
                 let found = latest.remove(&scene.id).unwrap_or_default();
+                let video = found.video.as_ref();
                 InspectLatest {
                     scene_id: scene.id.clone(),
-                    video_job_id: found.video.as_ref().map(|video| video.base.job_id),
+                    video_job_id: video.map(|video| video.base.job_id),
+                    video_profile: video.and_then(|video| video.profile.clone()),
+                    video_outdated: video.is_some_and(|video| video.base.outdated),
                     video: found.video.map(|video| video.base.artifact.path),
                     still: found.still.map(|still| still.base.artifact.path),
                     contact_sheet: found.contact_sheet.map(|sheet| sheet.base.artifact.path),
@@ -126,6 +134,7 @@ pub async fn inspect(scheduler: &Scheduler) -> Result<Inspect, EngineError> {
             .into_iter()
             .map(|scene| InspectScene {
                 scene_id: scene.id,
+                declared_id: scene.declared.map(|declared| declared.id),
                 name: scene.class_name,
                 file: scene.file,
                 line: scene.span.start,
