@@ -5,6 +5,7 @@ import { Icon } from "./Icon.tsx";
 
 const BEHIND_DEV_SERVER = import.meta.env.DEV;
 const COPIED_MS = 2000;
+const CONNECTING_GRACE_MS = 400;
 
 interface ConnectionScreenProps {
   connection: Exclude<Connection, { status: "online" } | { status: "reconnecting" }>;
@@ -13,13 +14,7 @@ interface ConnectionScreenProps {
 
 /** What to do while the engine cannot be used; never shows stale data as live. */
 export function ConnectionScreen({ connection, root }: ConnectionScreenProps) {
-  if (connection.status === "connecting") {
-    return (
-      <Screen title="Connecting to the engine…" busy>
-        <p>Loading the project.</p>
-      </Screen>
-    );
-  }
+  if (connection.status === "connecting") return <Connecting />;
 
   const command = <Command text={engineCommand(root, BEHIND_DEV_SERVER)} />;
   // Behind the dev server the engine's link must be opened on this server's address instead.
@@ -52,6 +47,21 @@ export function ConnectionScreen({ connection, root }: ConnectionScreenProps) {
         <span className="dot" data-state="running" aria-hidden="true" />
         This page keeps trying to reconnect.
       </p>
+    </Screen>
+  );
+}
+
+/** Shown only once loading takes noticeably long, so a quick load does not flash a card. */
+function Connecting() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(true), CONNECTING_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  if (!shown) return null;
+  return (
+    <Screen title="Connecting to the engine…" busy>
+      <p>Loading the project.</p>
     </Screen>
   );
 }
