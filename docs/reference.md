@@ -152,9 +152,9 @@ also gets `{"event":"listening","url":…,"address":…}`. The token is random p
   cookie, which a browser gets by opening the printed link (a `303` to the same path that sets an
   HttpOnly, SameSite=Strict cookie). Otherwise `401`.
 - **Host and Origin.** The `Host` header must be `127.0.0.1`, `localhost` or `[::1]` with the bound
-  port (`403 forbidden_host`) unless `--allow-remote`. A POST or PUT with an `Origin` must come from
-  that same host (`403 forbidden_origin`) and carry `Content-Type: application/json` (`415`). No CORS
-  headers are ever sent.
+  port (`403 forbidden_host`) unless `--allow-remote`. Every POST and PUT needs
+  `Content-Type: application/json` (`415`); one that carries an `Origin` must come from that same
+  host (`403 forbidden_origin`). No CORS headers are ever sent.
 - **Errors.** Every error body is `{"error": {"code", "message", "data"}}`; branch on `code`.
 
 | Route | Purpose |
@@ -225,7 +225,9 @@ sometimes `allowed`), `invalid_spec` (400; `line`, `column`), `operation_not_all
 `project_not_empty` (409), `request_too_large` and `budget_exceeded` (413), `queue_full` (429),
 `internal` (500). The source and file routes add `invalid_path`, `unsupported_file_type`, `not_utf8`,
 `file_too_large`, `line_out_of_range`, `source_invalid`, `revision_conflict`, `artifact_changed` and
-`range_not_satisfiable`.
+`range_not_satisfiable`. The HTTP server adds `unauthorized` (401), `forbidden_host` and
+`forbidden_origin` (403), `method_not_allowed` (405; `data.allowed`), `unsupported_media_type` (415)
+and `too_many_streams` (429).
 
 A failed job's `error.code`: `cancelled`, `timeout`, `engine_lost`, `runtime_unavailable`,
 `runtime_protocol`, `runtime_crashed`, `artifact_invalid`, `budget_exceeded`, `dependency_missing`,
