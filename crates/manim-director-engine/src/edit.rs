@@ -133,6 +133,13 @@ pub struct SourceWriteResult {
     pub affected_scenes: Vec<String>,
 }
 
+impl SourceWriteResult {
+    /// False when the edit left the file as it was, so nothing was written.
+    pub fn changed(&self) -> bool {
+        self.previous_revision.as_ref() != Some(&self.revision)
+    }
+}
+
 /// Lines split on `"\n"` only; a `"\r"` stays part of its line so CRLF files
 /// round-trip byte for byte.
 struct Lines<'a> {
@@ -215,7 +222,9 @@ pub fn current_revision(root: &Path, path: &str) -> Result<Option<String>, Engin
 /// Applies a revision-checked edit. The edit is computed and validated
 /// against the revision the caller saw; the write then happens under a
 /// per-file lock only if the file still has exactly that content, so two
-/// concurrent writers can never both succeed from the same revision.
+/// concurrent writers can never both succeed from the same revision. An edit
+/// that leaves the content byte-identical writes nothing: no check, no undo
+/// snapshot, and the current revision back.
 pub fn write_source(
     root: &Path,
     python: &Path,
@@ -232,26 +241,28 @@ pub fn write_source(
         return Err(conflict(write, previous_revision));
     }
     let next = apply(path, current.as_deref(), &write.edit)?;
-    if next.len() as u64 > MAX_SOURCE_BYTES {
-        return Err(EngineError::FileTooLarge {
-            path: path.to_owned(),
-            bytes: next.len() as u64,
-            limit_bytes: MAX_SOURCE_BYTES,
-        });
-    }
-    validate(python, path, &next)?;
+    if current.as_deref() != Some(next.as_str()) {
+        if next.len() as u64 > MAX_SOURCE_BYTES {
+            return Err(EngineError::FileTooLarge {
+                path: path.to_owned(),
+                bytes: next.len() as u64,
+                limit_bytes: MAX_SOURCE_BYTES,
+            });
+        }
+        validate(python, path, &next)?;
 
-    // Keyed by the resolved file, so a symlink and its target share one lock.
-    let _lock = lock(root, &relative_posix(root, &target))?;
-    let on_disk = disk_revision(&target)?;
-    if on_disk != previous_revision {
-        return Err(conflict(write, on_disk));
+        // Keyed by the resolved file, so a symlink and its target share one lock.
+        let _lock = lock(root, &relative_posix(root, &target))?;
+        let on_disk = disk_revision(&target)?;
+        if on_disk != previous_revision {
+            return Err(conflict(write, on_disk));
+        }
+        create_parent(root, &target, path)?;
+        if let Some(previous) = &current {
+            snapshot(root, path, previous)?;
+        }
+        atomic_write(&target, next.as_bytes())?;
     }
-    create_parent(root, &target, path)?;
-    if let Some(previous) = &current {
-        snapshot(root, path, previous)?;
-    }
-    atomic_write(&target, next.as_bytes())?;
     Ok(SourceWriteResult {
         path: path.to_owned(),
         previous_revision,
