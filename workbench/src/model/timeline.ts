@@ -9,7 +9,7 @@ export interface Lane {
 
 /** A previous-mark step from less than this far past a mark's start goes one mark further back. */
 const STEP_BACK_SLACK_SECONDS = 0.25;
-export const MAX_SHUTTLE_RATE = 4;
+const MAX_SHUTTLE_RATE = 4;
 
 /** One lane per kind present, beats above sections. */
 export function lanes(marks: readonly TimelineMark[]): Lane[] {
@@ -37,7 +37,7 @@ export function markStep(marks: readonly TimelineMark[], seconds: number, direct
 }
 
 /** The frame showing at `seconds`. */
-export function frameIndex(seconds: number, fps: number): number {
+function frameIndex(seconds: number, fps: number): number {
   return Math.floor(seconds * fps + 1e-6);
 }
 

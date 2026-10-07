@@ -10,7 +10,7 @@ const CONTROLS = "button, a[href], summary";
  * the pointer last pressed: like in video editors, a clicked button leaves
  * Space to the transport, while one reached by keyboard keeps it.
  */
-export function focusZone(target: EventTarget | null, clicked: Element | null = null): FocusZone {
+function focusZone(target: EventTarget | null, clicked: Element | null = null): FocusZone {
   if (!(target instanceof Element)) return "page";
   if (target.closest(".cm-editor")) return "editor";
   // A modal dialog keeps the stage's playback keys away from what is behind it.

@@ -14,10 +14,6 @@ const OPERATION_LABELS: Record<JobOperation, string> = {
   export: "Export",
 };
 
-export function operationLabel(operation: JobOperation): string {
-  return OPERATION_LABELS[operation];
-}
-
 /** `Recurrence` from `scenes/main.py#Recurrence`. */
 export function sceneName(sceneId: SceneId): string {
   return sceneId.slice(sceneId.lastIndexOf("#") + 1);
@@ -27,7 +23,7 @@ export function sceneName(sceneId: SceneId): string {
 export function jobTitle(job: JobSummary): string {
   const subject = job.scene_id ? ` ${sceneName(job.scene_id)}` : "";
   const detail = job.request.operation === "export" ? job.request.format ?? "zip" : job.profile;
-  return `${operationLabel(job.operation)}${subject}${detail ? ` · ${detail}` : ""}`;
+  return `${OPERATION_LABELS[job.operation]}${subject}${detail ? ` · ${detail}` : ""}`;
 }
 
 export function isActive(job: JobSummary): boolean {
