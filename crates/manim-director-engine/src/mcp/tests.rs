@@ -208,6 +208,11 @@ async fn job_tools_wait_for_the_result_and_failures_are_error_results() {
             assert!(error["data"]["field"].as_str().unwrap().contains(field));
         }
     }
+    let late = call(&scheduler, "doctor", json!({"wait_seconds": 51})).await;
+    assert_eq!(
+        late["structuredContent"]["error"]["message"],
+        "Invalid wait_seconds: must be an integer between 0 and 50."
+    );
 }
 
 #[tokio::test]

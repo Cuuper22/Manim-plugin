@@ -123,7 +123,7 @@ async fn job_status(scheduler: &Scheduler, arguments: Value) -> Result<Value, En
     let wait = wait_duration(arguments.wait_seconds)?;
     let limit = arguments.limit.unwrap_or(20);
     if !(1..=100).contains(&limit) {
-        return Err(EngineError::invalid("limit", "must be 1..=100"));
+        return Err(EngineError::invalid("limit", "must be between 1 and 100"));
     }
     let cursor = arguments
         .cursor
@@ -301,25 +301,26 @@ fn take_wait(arguments: Value) -> Result<(Duration, Value), EngineError> {
     let Value::Object(mut fields) = arguments else {
         return Err(EngineError::invalid("arguments", "must be an object"));
     };
-    let wait =
-        match fields.remove("wait_seconds") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(value.as_u64().ok_or_else(|| {
-                EngineError::invalid("wait_seconds", "must be an integer 0..=50")
-            })?),
-        };
+    let wait = match fields.remove("wait_seconds") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_u64().ok_or_else(invalid_wait)?),
+    };
     Ok((wait_duration(wait)?, Value::Object(fields)))
 }
 
 fn wait_duration(seconds: Option<u64>) -> Result<Duration, EngineError> {
     let seconds = seconds.unwrap_or(DEFAULT_WAIT_SECONDS);
     if seconds > MAX_WAIT_SECONDS {
-        return Err(EngineError::invalid(
-            "wait_seconds",
-            "must be an integer 0..=50",
-        ));
+        return Err(invalid_wait());
     }
     Ok(Duration::from_secs(seconds))
+}
+
+fn invalid_wait() -> EngineError {
+    EngineError::invalid(
+        "wait_seconds",
+        format!("must be an integer between 0 and {MAX_WAIT_SECONDS}"),
+    )
 }
 
 fn strict<T: DeserializeOwned>(arguments: Value) -> Result<T, EngineError> {

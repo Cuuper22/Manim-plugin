@@ -160,7 +160,7 @@ pub enum EngineError {
         bytes: u64,
         limit_bytes: u64,
     },
-    #[error("Lines {start_line}..={end_line} are outside the file ({total_lines} lines).")]
+    #[error("{}", line_out_of_range_message(*start_line, *end_line, *total_lines))]
     LineOutOfRange {
         start_line: u64,
         end_line: u64,
@@ -228,6 +228,15 @@ fn project_not_empty_message(project: bool) -> &'static str {
         true => "This directory is already a project; add a scene with scene_template (--scene-template). force (--force) would replace director.yaml and scenes/main.py, and keeps no copy.",
         false => "The target directory is not empty; force (--force) writes the template into it, replacing any of its files with the same names.",
     }
+}
+
+/// `end < start` asks to insert before `start`, so it names one line too.
+fn line_out_of_range_message(start: u64, end: u64, total: u64) -> String {
+    let lines = match end <= start {
+        true => format!("Line {start} is"),
+        false => format!("Lines {start} to {end} are"),
+    };
+    format!("{lines} outside the file ({total} lines).")
 }
 
 fn source_invalid_message(
@@ -447,6 +456,20 @@ mod tests {
             reason: "outside_project",
         };
         assert_eq!(outside.to_string(), "assets is outside the project.");
+        let lines = |start_line, end_line| {
+            EngineError::LineOutOfRange {
+                start_line,
+                end_line,
+                total_lines: 31,
+            }
+            .to_string()
+        };
+        assert_eq!(lines(41, 41), "Line 41 is outside the file (31 lines).");
+        assert_eq!(lines(33, 32), "Line 33 is outside the file (31 lines).");
+        assert_eq!(
+            lines(30, 45),
+            "Lines 30 to 45 are outside the file (31 lines)."
+        );
     }
 
     #[test]
