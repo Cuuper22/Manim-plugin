@@ -8,11 +8,11 @@ const TOAST_MS = 8000;
 export function Toasts() {
   const toasts = useWorkbench((state) => state.toasts);
   return (
-    <ul className="toasts">
+    <div className="toasts">
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} />
       ))}
-    </ul>
+    </div>
   );
 }
 
@@ -23,11 +23,11 @@ function ToastItem({ toast }: { toast: Toast }) {
     return () => clearTimeout(timer);
   }, [store, toast.id]);
   return (
-    <li className="card toast" data-tone="danger" role="alert">
+    <div className="card toast" data-tone="danger" role="alert">
       <p>{toast.message}</p>
       <button type="button" className="quiet small icon" aria-label="Dismiss" onClick={() => store.dismissToast(toast.id)}>
         <Icon name="close" />
       </button>
-    </li>
+    </div>
   );
 }
