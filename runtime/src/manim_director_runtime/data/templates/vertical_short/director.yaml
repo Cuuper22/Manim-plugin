@@ -1,0 +1,45 @@
+version: 1
+project:
+  name: {{name}}
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: TriangularNumbers
+render:
+  profile: preview
+  width: 1080
+  height: 1920
+  fps: 30
+profiles:
+  draft: {resolution: [480, 854], fps: 15}
+  preview: {resolution: [720, 1280], fps: 30}
+  production: {resolution: [1080, 1920], fps: 30}
+  ultra: {resolution: [2160, 3840], fps: 60}
+theme: {{theme}}
+# Phone players draw their controls over the bottom and the right edge.
+safe_area:
+  top: 0.06
+  right: 0.07
+  bottom: 0.12
+  left: 0.07
+storyboard:
+  - id: question
+    intent: introduce
+    audience_question: Is there a faster way to add 1 to 100 than adding?
+    takeaway: The sum can be drawn instead of computed.
+  - id: staircase
+    intent: explain
+    audience_question: What does 1 + 2 + 3 + 4 + 5 look like?
+    takeaway: Each term is a column; the sum is a staircase.
+  - id: double
+    intent: reveal
+    audience_question: What happens when a turned copy joins the staircase?
+    takeaway: Two staircases make an n by (n + 1) rectangle.
+  - id: count
+    intent: prove
+    audience_question: How big is one staircase?
+    takeaway: Half the rectangle, so 1 + ... + n = n(n + 1)/2.
+  - id: answer
+    intent: recap
+    audience_question: So what is 1 + 2 + ... + 100?
+    takeaway: 100 * 101 / 2 = 5050.

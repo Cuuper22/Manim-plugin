@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 
 from manim import (
     LEFT,
@@ -137,6 +137,28 @@ def introduced(animations: Iterable[object]) -> list[Mobject]:
         elif isinstance(animation, Animation) and animation.is_introducer():
             found.append(animation.mobject)
     return found
+
+
+def unwrapped(mobjects: Iterable[Mobject], animations: Iterable[object]) -> list[Mobject]:
+    """`mobjects` with every Group that an AnimationGroup among `animations` put on stage
+    replaced by its members (Manim adds that Group to the scene in their place)."""
+
+    wrappers = {id(group) for group in _groups(animations)}
+
+    def expand(items: Iterable[Mobject]) -> list[Mobject]:
+        expanded: list[Mobject] = []
+        for item in items:
+            expanded += expand(item.submobjects) if id(item) in wrappers else [item]
+        return expanded
+
+    return expand(mobjects)
+
+
+def _groups(animations: Iterable[object]) -> Iterator[Mobject]:
+    for animation in animations:
+        if isinstance(animation, AnimationGroup):
+            yield animation.group
+            yield from _groups(animation.animations)
 
 
 def _set_opacities(source: Mobject, target: Mobject, values: Mapping[int, tuple[float, float]]):

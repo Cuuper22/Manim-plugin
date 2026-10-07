@@ -45,7 +45,17 @@ from .derivation import Derivation, overlay, stack
 from .errors import CompositionError, parse_choice
 from .layout import LANES, Rect, Region, frame_regions
 from .project import load_style
-from .staging import Stage, bounds, describe, plan
+from .staging import (
+    Stage,
+    bounds,
+    describe,
+    on_stage,
+    parts_inside,
+    parts_outside,
+    plan,
+    split_by_stage,
+    within,
+)
 from .terms import term_glyphs
 from .texscan import atoms, colorize
 from .themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme, theme
@@ -80,8 +90,10 @@ class Directed:
     def play(self, *args: Any, **kwargs: Any) -> None:
         self._flush(introduced=motion.introduced(args))
         super().play(*args, **kwargs)  # type: ignore[misc]
+        self._unwrap(args)
 
     def _direct(self) -> None:
+        _require_matching_shape()
         style = load_style(_scene_directory(type(self)))
         self.theme = _resolve_theme(type(self).theme, style.theme)
         symbols = {**style.symbols, **type(self).symbols}
@@ -169,8 +181,9 @@ class Directed:
         min_scale: float = MIN_SCALE,
     ) -> Mobject:
         """Fit mobjects into a region (arranged along `direction`); they enter at the next
-        animation. Re-placing an object already on stage glides it there; `replaces` morphs
-        an on-stage object into this one. Nothing moves unless the placement is valid."""
+        animation. Parts already on stage glide there instead, so a new VGroup can gather
+        on-stage objects and new ones; `replaces` morphs an on-stage object into this one.
+        Nothing moves unless the placement is valid."""
 
         if not mobjects:
             raise CompositionError("place() needs at least one mobject.")
@@ -192,12 +205,15 @@ class Directed:
         self._require_free(layout.bounds, area_name, ignore=[*mobjects, replaces])
         visible = self._visible_ids()
         for mobject, center in zip(mobjects, layout.centers, strict=True):
-            if id(mobject) in visible:
-                self._stage.glides.setdefault(id(mobject), (mobject, mobject.copy()))
-                self._carry(mobject)
-            elif mobject not in self._stage.entering and replaces is None:
-                self._stage.entering.append(mobject)
+            staged, new = split_by_stage(mobject, visible)
+            for part in staged:
+                self._stage.glides.setdefault(id(part), (part, part.copy()))
+                self._carry(part)
+            if replaces is None:
+                self._stage.entering += [m for m in new if m not in self._stage.entering]
             mobject.scale(layout.scale).move_to(center)
+            for member in mobject.get_family()[1:]:  # the group now owns their placement
+                self._stage.placed.pop(id(member), None)
             self._stage.place(mobject, area_name)
             self._pin(mobject)
         if replaces is not None:
@@ -491,9 +507,9 @@ class Directed:
         restores: list[Animation] = []
         if starting:
             beat.transitioned = True
-            stage.leaving += [
-                m for m in beat.before if id(m) in visible and not self._carried(m, beat)
-            ]
+            for m in beat.before:
+                if id(m) in visible and not self._carried(m, beat):
+                    stage.leaving += parts_outside(m, beat.carried)
             restores = self._release_dimmed(set(map(id, stage.leaving)))
         covered = {id(leaf) for m in introduced for leaf in m.get_family()}
         entering = [m for m in stage.entering if id(m) not in visible | covered]
@@ -530,12 +546,18 @@ class Directed:
             return
         if run_time > 0:
             super().play(*animations, run_time=run_time)  # type: ignore[misc]
+            self._unwrap(animations)
             return
         for animation in animations:  # run_time 0: land on the end state without frames
             animation._setup_scene(self)
             animation.begin()
             animation.finish()
             animation.clean_up_from_scene(self)
+
+    def _unwrap(self, animations: Sequence[object]) -> None:
+        """Beats track what was played, not the Groups Manim leaves in its place."""
+
+        self.mobjects = motion.unwrapped(self.mobjects, animations)
 
     def _release_dimmed(self, leaving: set[int]) -> list[Animation]:
         """Restore what the previous focus dimmed, except what is leaving or gliding."""
@@ -568,39 +590,49 @@ class Directed:
             self._beat.carried.update(id(leaf) for leaf in mobject.get_family())
 
     def _carried(self, mobject: Mobject, beat: Beat) -> bool:
-        if any(id(leaf) in beat.carried for leaf in mobject.get_family()):
+        """Carried as a whole; a group carried only in part leaves its other parts behind."""
+
+        if id(mobject) in beat.carried:
             return True
         parent = self._stage.attached.get(id(mobject))
         return parent is not None and self._carried(parent, beat)
 
-    def _leaving(self, mobject: Mobject) -> bool:
+    def _staying(self, mobject: Mobject) -> list[Mobject]:
+        """The parts of an on-stage object that outlive the beat being set up."""
+
         beat = self._beat
-        if any(mobject is m for m in self._stage.leaving):
-            return True
-        return (
-            beat is not None
-            and not beat.transitioned
-            and any(mobject is m for m in beat.before)
-            and not self._carried(mobject, beat)
-        )
+        if within(mobject, self._stage.leaving):
+            return []
+        if (
+            beat is None
+            or beat.transitioned
+            or not within(mobject, beat.before)
+            or self._carried(mobject, beat)
+        ):
+            return [mobject]
+        return parts_inside(mobject, beat.carried)
+
+    def _leaving(self, mobject: Mobject) -> bool:
+        return not self._staying(mobject)
 
     def _require_free(self, area: Rect, region: Region, ignore: Sequence[Mobject | None]) -> None:
-        skipped = {id(m) for m in ignore if m is not None}
+        skipped = {id(member) for m in ignore if m is not None for member in m.get_family()}
         attached = self._stage.attached.items()
         skipped |= {child for child, parent in attached if id(parent) in skipped}
         visible = self._visible_ids()
         for mobject, _ in self._stage.placed.values():
-            if id(mobject) in skipped or self._leaving(mobject):
+            if id(mobject) in skipped:
                 continue
             if id(mobject) not in visible and mobject not in self._stage.entering:
                 continue
-            if area.overlaps(bounds(mobject)):
-                raise CompositionError(
-                    f"This placement in the {region} region would overlap {describe(mobject)}. "
-                    "Place both in one call (self.place(a, b)), use another region, or let "
-                    "the next beat retire it.",
-                    region=region.value,
-                )
+            for part in self._staying(mobject):
+                if id(part) not in skipped and area.overlaps(bounds(part)):
+                    raise CompositionError(
+                        f"This placement in the {region} region would overlap {describe(part)}. "
+                        "Place both in one call (self.place(a, b)), use another region, or let "
+                        "the next beat retire it.",
+                        region=region.value,
+                    )
 
     def _occupant(self, region: Region) -> Mobject | None:
         visible = self._visible_ids()
@@ -626,10 +658,10 @@ class Directed:
         return {id(m) for m in self.get_mobject_family_members()}
 
     def _visible(self, mobject: Mobject) -> bool:
-        return id(mobject) in self._visible_ids()
+        return on_stage(mobject, self._visible_ids())
 
     def _pin(self, mobject: Mobject) -> None:
-        """Hook for scenes whose camera moves: keep placed objects in screen space."""
+        """Hook for scenes whose camera moves: hold what should stay put on screen."""
 
 
 class DirectedScene(Directed, Scene):
@@ -637,7 +669,11 @@ class DirectedScene(Directed, Scene):
 
 
 class DirectedMovingCameraScene(Directed, MovingCameraScene):
-    pass
+    """Title and caption stay put on screen while the camera moves; placed content does not."""
+
+    def _pin(self, mobject: Mobject) -> None:
+        if self._stage.region_of(mobject) in LANES:
+            _hold_on_screen(mobject, self.camera.frame)
 
 
 class DirectedThreeDScene(Directed, ThreeDScene):
@@ -648,6 +684,19 @@ class DirectedThreeDScene(Directed, ThreeDScene):
             mobject.fix_in_frame()
         else:
             self.renderer.camera.add_fixed_in_frame_mobjects(mobject)
+
+
+def _hold_on_screen(mobject: Mobject, frame: Mobject) -> None:
+    """Keep `mobject` where it sits in the unmoved frame, however the camera pans or zooms."""
+
+    offset, width = mobject.get_center(), mobject.width
+
+    def follow(m: Mobject) -> None:
+        zoom = frame.width / config.frame_width
+        m.scale(width * zoom / m.width).move_to(frame.get_center() + offset * zoom)
+
+    follow(mobject)
+    mobject.add_updater(follow)
 
 
 def _fade_in(mobject: Mobject | None) -> list[Animation]:
@@ -673,6 +722,20 @@ def _scene_directory(scene_class: type) -> Path:
         return Path(inspect.getfile(scene_class)).resolve().parent
     except (TypeError, OSError):
         return Path.cwd()
+
+
+def _require_matching_shape() -> None:
+    frame = config.frame_width / config.frame_height
+    pixels = config.pixel_width / config.pixel_height
+    if abs(frame / pixels - 1) > 0.01:
+        raise CompositionError(
+            f"The frame is {config.frame_width:.2f} x {config.frame_height:.2f} units but the "
+            f"video is {config.pixel_width} x {config.pixel_height} pixels, so it would come out "
+            "squashed. Manim takes the frame's shape from manim.cfg, not from -q or -r: set "
+            "pixel_width and pixel_height there, or pass -r with the same shape.",
+            frame=[config.frame_width, config.frame_height],
+            pixels=[config.pixel_width, config.pixel_height],
+        )
 
 
 def _resolve_theme(declared: str | Theme | None, from_project: str | None) -> Theme:

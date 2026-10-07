@@ -1,197 +1,90 @@
 version: 1
-schema: manim-director/v1
 project:
   name: Generalized Fibonacci
-  source_dir: .
-  asset_dir: assets
-  output_dir: dist
-  media_dir: .manim-director/media
-  id: generalized-fibonacci
-  title: Generalized Fibonacci
-  description: A source-backed visual tour of second-order linear recurrences.
-  language: en-US
+  description: Every sequence with x[n+2] = p x[n+1] + q x[n], from a family of examples to its roots.
   seed: 73
-brief:
-  objective: Build intuition for the full second-order recurrence family, then derive its state-space and root forms.
-  audience: Curious adults comfortable with basic algebra
-  rigor: intuition-then-derivation
-  duration_seconds: 34.9
-  assumptions:
-    - Coefficients and seeds are real unless a beat says otherwise.
-  required_claims:
-    - The companion matrix advances the neighboring-term state.
-    - Distinct characteristic roots produce a two-mode closed form.
-    - A repeated root introduces a factor linear in n.
-  forbidden_elements:
-    - unexplained formula teleportation
-    - false line segments across discontinuities
+  source_dir: .
+  output_dir: dist
 engine:
-  backend: manim-ce
   source: scenes.py
   main_scene: GeneralizedFibonacci
-  compatible: ">=0.18,<1"
-  fallback: manim -pql scenes.py GeneralizedFibonacci
-render:
-  renderer: cairo
-  profile: preview
-  format: mp4
-  transparent: false
-  width: 854
-  height: 480
-  fps: 15
-theme:
-  preset: midnight
-  background: "#090D1A"
-  foreground: "#F7F8FC"
-  accent: "#FFD166"
-  font: Sans
-safe_area:
-  top: 0.08
-  right: 0.08
-  bottom: 0.08
-  left: 0.08
+theme: midnight
+direction:
+  symbols:
+    p: primary
+    q: secondary
+    \lambda: accent
+brief:
+  duration_seconds: 38.1
 inputs:
   data:
     - data/sequences.csv
-  assets:
-    manifest: assets/manifest.json
-  claims:
-    - "x[n+2] = p*x[n+1] + q*x[n]"
-    - "lambda^2 - p*lambda - q = 0"
-    - "lambda_plus/minus = (p +/- sqrt(p^2 + 4q))/2"
-storyboard:
-  - id: hook
-    objective: Establish Fibonacci as one member of a parameterized family.
-    visual: recurrence knot, title, and color-tokenized recurrence
-    duration: 4.1
-    narration_cue: cue-01
-  - id: family
-    objective: Show how coefficients and seeds change behavior.
-    visual: four computed sequence lanes
-    duration: 5.5
-    narration_cue: cue-02
-  - id: data
-    objective: Compare growth and oscillation using source data.
-    visual: CSV-backed plot with a camera detail move
-    duration: 6.2
-    narration_cue: cue-03
-  - id: state-space
-    objective: Reframe the recurrence as a companion-matrix update.
-    visual: state vector equation and matrix C
-    duration: 4.7
-    narration_cue: cue-04
-  - id: roots
-    objective: Connect the characteristic roots to long-run behavior.
-    visual: polynomial-to-roots-to-closed-form derivation
-    duration: 5.7
-    narration_cue: cue-05
-  - id: edge-case
-    objective: Handle the repeated-root case explicitly.
-    visual: discriminant branch and x[n]=n example
-    duration: 4.5
-    narration_cue: cue-06
-  - id: recap
-    objective: Compress the family into coefficients, seeds, and roots.
-    visual: three responsive recap cards
-    duration: 4.2
-    narration_cue: cue-07
 scenes:
   - id: narrative
     class: GeneralizedFibonacci
     file: scenes.py
-    purpose: Complete intuition-to-derivation cut.
-    duration_seconds: 34.9
-    sections: [hook, family, data, state-space, roots, edge-case, recap]
+    purpose: The full cut, from a family of sequences to its characteristic roots.
+    duration_seconds: 38.1
   - id: sequence-data
     class: SequenceData
     file: scenes.py
-    purpose: Standalone CSV-backed comparison.
-    sections: [csv-to-chart]
-    depends_on: [data/sequences.csv]
-  - id: companion-matrix
-    class: CompanionMatrix
-    file: scenes.py
-    purpose: Standalone geometric state walk.
-    sections: [state-walk]
+    purpose: The recorded data on a linear scale, then on a log scale.
+    duration_seconds: 8.6
   - id: characteristic-roots
     class: CharacteristicRoots
     file: scenes.py
-    purpose: Standalone distinct- and repeated-root derivation.
-    sections: [derive, branch]
+    purpose: The characteristic equation from a guess, and the double-root case.
+    duration_seconds: 14.9
+  - id: companion-matrix
+    class: CompanionMatrix
+    file: scenes.py
+    purpose: The Fibonacci state walk under C, with a camera close-up that pulls back.
+    duration_seconds: 20.1
   - id: state-orbit-3d
     class: StateOrbit3D
     file: scenes.py
-    purpose: Standalone 3D camera view of an oscillatory orbit.
-    sections: [orbit]
+    purpose: The oscillator's states winding around the time axis in 3D.
+    duration_seconds: 11.5
+storyboard:
+  - id: hook
+    intent: introduce
+    audience_question: Is Fibonacci a one-off, or one case of something larger?
+    takeaway: One two-step rule with coefficients p and q covers a whole family.
+    duration: 4.3
+  - id: family
+    intent: compare
+    audience_question: What do other coefficients and seeds produce?
+    takeaway: Lucas, Pell and an oscillator come from the same rule.
+    duration: 4.3
+  - id: data
+    intent: explain
+    audience_question: How differently do these sequences behave?
+    takeaway: Three grow and one cycles, read straight from the recorded data.
+    duration: 4.3
+  - id: state-space
+    intent: explain
+    audience_question: Can one step of the rule be a single operation?
+    takeaway: Stacking neighbors into a state makes each step one product with C.
+    duration: 5.4
+  - id: roots
+    intent: prove
+    audience_question: What decides the long-run behavior?
+    takeaway: The eigenvalues of C, the roots of the characteristic equation.
+    duration: 7.2
+  - id: edge-case
+    intent: prove
+    audience_question: What if the two roots are equal?
+    takeaway: A double root adds a factor linear in n.
+    duration: 7.2
+  - id: recap
+    intent: recap
+    audience_question: What fixes a sequence completely?
+    takeaway: Coefficients pick the rule, seeds the start, roots the long run.
+    duration: 5.4
 narration:
   manifest: narration.json
-  timing: cue
 captions:
-  format: vtt
-  burn_in: false
   source: captions.vtt
-  safe_area_percent: 8
-themes:
-  manifest: themes.json
-  default: midnight
 profiles:
-  preview:
-    resolution: [854, 480]
-    fps: 15
-    renderer: cairo
-    format: mp4
-    quality: low
-  production:
-    resolution: [1920, 1080]
-    fps: 60
-    renderer: cairo
-    format: mp4
-    quality: high
-  vertical:
-    resolution: [1080, 1920]
-    fps: 30
-    renderer: cairo
-    format: mp4
-    quality: high
-    layout: responsive
-  transparent:
-    resolution: [1920, 1080]
-    fps: 30
-    renderer: cairo
-    format: mov
-    alpha: true
-  loop-gif:
-    resolution: [640, 360]
-    fps: 15
-    renderer: cairo
-    format: gif
-    quality: low
-  orbit-3d:
-    resolution: [1280, 720]
-    fps: 30
-    renderer: opengl
-    format: mp4
-    scenes: [StateOrbit3D]
-validation:
-  math:
-    recurrence_samples: data/sequences.csv
-    tolerance: 1.0e-9
-  visual:
-    minimum_text_px: 20
-    minimum_contrast: 4.5
-    safe_area_percent: 8
-  assertions:
-    - fibonacci[7] == 13
-    - lucas[7] == 29
-    - pell[7] == 169
-    - oscillator[6] == 0
-accessibility:
-  captions: sidecar
-  direct_line_labels: true
-  high_contrast_theme: high-contrast
-  reduced_motion_strategy: replace camera travel with short dissolves
-budgets:
-  render_seconds: 1800
-  output_mb: 1024
-outputs:
-  manifest: expected/outputs.json
+  loop-gif: {resolution: [640, 360], fps: 15, format: gif}
+  transparent: {quality: high, format: mov, alpha: true}

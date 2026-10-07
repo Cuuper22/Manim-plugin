@@ -37,18 +37,29 @@ class SquaredSum(DirectedScene):
   the `x` in `\max`) and splits formulas into atoms that `TransformMatchingTex` can match.
 - `place(*mobjects, region=...)` fits objects into a `Region` (`SAFE`, `HEADER`, `CONTENT`,
   `LEFT`, `RIGHT`, `TOP`, `BOTTOM`, `CAPTION`), checking size and overlap before anything
-  moves; they enter at the next animation. Placing an on-stage object again glides it there;
+  moves; they enter at the next animation. Placing an on-stage object again glides it there,
+  so `place(VGroup(built_up, new_part))` moves what is shown and brings in the rest;
   `replaces=` morphs an on-stage object into the new one.
 - `with self.beat(id, transition=..., keep=[...], focus=..., hold=...)`: at the first
-  animation inside, whatever was not kept or placed again leaves; `continue`, `contrast`,
-  `reveal` and `chapter` style the change. Title and caption persist until a chapter.
-  `run_time=0` lands on the end state without frames. Under the bridge, beats form the
-  render's timeline.
+  animation inside, whatever was not kept or placed again leaves, including the rest of a
+  group whose part was kept; `continue`, `contrast`, `reveal` and `chapter` style the change.
+  Title and caption persist until a chapter, and stay on screen while a
+  `DirectedMovingCameraScene` camera moves. `run_time=0` lands on the end state without
+  frames. Under the bridge, beats form the render's timeline.
 - Math: `derive` (relations aligned, notes beside, matching terms carried between steps;
   `in_place=True` transforms one line), `term(eq, tex)` returns a sub-term's glyphs,
   `highlight`, `tag` numbers equations, `focus`/`unfocus` dim everything else.
 - Authoring errors are `CompositionError` (a `DirectorError`) with a message that says what
   to change.
+
+## Templates
+
+`init` copies a template from `data/templates/<name>/`: `explainer` (the default),
+`derivation`, `geometry`, `graph` and `vertical_short`. Each is a runnable project — a
+`DirectedScene` in `scenes/main.py` and a `director.yaml` whose storyboard matches its beats.
+Only `{{name}}`, `{{seed}}`, `{{theme}}` and `{{scene}}` in YAML and Markdown files are filled
+in; files in `_shared/` belong to every template that does not ship its own. With
+`scene_template`, `init` adds just a template's scene to an existing project.
 
 ## Bridge
 

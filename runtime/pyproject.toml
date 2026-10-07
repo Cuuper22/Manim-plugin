@@ -26,7 +26,13 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-manim_director_runtime = ["data/*.json"]
+manim_director_runtime = [
+  "data/*.json",
+  "data/templates/**/*.py",
+  "data/templates/**/*.yaml",
+  "data/templates/**/*.md",
+  "data/templates/**/*.cfg",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -40,6 +46,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I", "UP", "B", "SIM", "C4"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scene templates are user code, written the way Manim scenes usually are.
+"src/manim_director_runtime/data/templates/**/*.py" = ["F403", "F405"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["manim_director_runtime"]

@@ -1,0 +1,21 @@
+version: 1
+project:
+  name: {{name}}
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: PythagoreanRearrangement
+theme: {{theme}}
+storyboard:
+  - id: square
+    intent: introduce
+    audience_question: What do four copies of a right triangle leave inside a square of side a + b?
+    takeaway: A tilted square of area c^2.
+  - id: rearrange
+    intent: compare
+    audience_question: What do the same triangles leave after sliding?
+    takeaway: Two squares of areas a^2 and b^2.
+  - id: conclude
+    intent: prove
+    audience_question: Why must the leftover areas be equal?
+    takeaway: Both are (a + b)^2 minus the same triangles, so c^2 = a^2 + b^2.

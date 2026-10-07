@@ -7,9 +7,11 @@ SymPy (when installed) and numerically at seeded random points. No step is ever 
 from __future__ import annotations
 
 import ast
+import keyword
 import math
 import operator
 import random
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
@@ -45,6 +47,8 @@ _FUNCTIONS = (
     "max",
 )
 _CONSTANTS = ("pi", "e", "tau")
+_TOKEN = re.compile(r"[A-Za-z_]\w*|.", re.DOTALL)
+_KEYWORD_PREFIX = "_reserved_"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +118,8 @@ def parse_step(text: str, index: int) -> ast.expr:
         column = origin[min(max((exc.offset or 1) - 1, 0), len(origin) - 1)] + 1
         _invalid(index, column, "it does not parse; write multiplication explicitly, like 2*x")
     for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            node.id = node.id.removeprefix(_KEYWORD_PREFIX)
         problem = _unsupported(node)
         if problem:
             column = origin[min(getattr(node, "col_offset", 0), len(origin) - 1)] + 1
@@ -122,14 +128,22 @@ def parse_step(text: str, index: int) -> ast.expr:
 
 
 def _python_source(text: str) -> tuple[str, list[int]]:
-    """`^` becomes `**`; `origin[i]` is the index in `text` of source character `i`."""
+    """`^` becomes `**`, and names Python reserves (`lambda`) get a prefix that the parsed
+    tree drops again; `origin[i]` is the index in `text` of source character `i`."""
 
     chars: list[str] = []
     origin: list[int] = []
-    for position, char in enumerate(text):
-        replacement = "**" if char == "^" else char
-        chars.append(replacement)
-        origin.extend([position] * len(replacement))
+    for match in _TOKEN.finditer(text):
+        start, token = match.start(), match.group()
+        if token == "^":
+            chars.append("**")
+            origin += [start, start]
+            continue
+        if keyword.iskeyword(token):
+            chars.append(_KEYWORD_PREFIX)
+            origin += [start] * len(_KEYWORD_PREFIX)
+        chars.append(token)
+        origin += range(start, match.end())
     return "".join(chars), origin or [0]
 
 

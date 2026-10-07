@@ -53,8 +53,8 @@ def test_ready_frame_comes_first_and_idle_eof_exits_quietly(project: Path) -> No
         "success",
     ]
     assert all(color.startswith("#") and color == color.upper() for _, color in themes[0]["tokens"])
-    assert ready["catalog"]["project_templates"] == ["explainer"]
-    assert "equation_derivation" in ready["catalog"]["scene_templates"]
+    templates = ["explainer", "derivation", "geometry", "graph", "vertical_short"]
+    assert ready["catalog"]["project_templates"] == ready["catalog"]["scene_templates"] == templates
 
 
 def test_the_package_and_catalog_import_without_manim() -> None:

@@ -20,12 +20,15 @@ from manim import (  # noqa: E402
     RIGHT,
     Circle,
     Dot,
+    FadeIn,
+    Group,
     Line,
     Rectangle,
     Square,
     Text,
     ThreeDAxes,
     Triangle,
+    VGroup,
     tempconfig,
 )
 
@@ -76,6 +79,10 @@ def on_stage(scene: Any) -> list[Any]:
     """The scene's visible mobjects (Manim's wait() leaves empty Mobjects behind)."""
 
     return [m for m in scene.mobjects if m.family_members_with_points()]
+
+
+def drawn(scene: Any) -> set[int]:
+    return {id(m) for m in scene.get_mobject_family_members()}
 
 
 def colors(mobject: Any) -> list[str]:
@@ -188,6 +195,26 @@ def test_beats_retire_what_they_do_not_keep(render: Render) -> None:
     ]
 
 
+def test_title_and_caption_outlast_beats_that_swap_the_content(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Lanes(DirectedScene):
+        def construct(self):
+            with self.beat("one"):
+                title = self.title("Title")
+                self.place(Square())
+            with self.beat("two"):
+                caption = self.caption("Caption")
+                self.place(Circle())  # the square leaves while circle and caption arrive
+            with self.beat("three"):
+                self.place(Triangle())
+            seen["lanes"] = [id(m) in drawn(self) for m in (title, caption)]
+            seen["groups"] = [type(m).__name__ for m in on_stage(self) if type(m) is Group]
+
+    render(Lanes)
+    assert seen == {"lanes": [True, True], "groups": []}
+
+
 def test_replacing_morphs_and_re_placing_glides(render: Render) -> None:
     seen: dict[str, Any] = {}
 
@@ -205,6 +232,58 @@ def test_replacing_morphs_and_re_placing_glides(render: Render) -> None:
 
     render(Moves)
     assert seen == {"glided": True, "morphed": (False, True)}
+
+
+def test_a_new_group_glides_what_is_on_stage_and_brings_in_the_rest(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Gather(DirectedScene):
+        def construct(self):
+            square, circle, dot = Square(), Circle(), Dot()
+            with self.beat("one"):
+                self.place(square)
+            self.play(FadeIn(circle.next_to(square, RIGHT)))  # plain Manim, never placed
+            pair = VGroup(square, circle)
+            with self.beat("two"):
+                self.place(pair, region=Region.LEFT)
+            seen["glided"] = inside(pair, self.region("left")) and {
+                id(square),
+                id(circle),
+            } <= drawn(self)
+            with self.beat("three"):
+                self.place(VGroup(pair, dot), region=Region.RIGHT)
+            seen["joined"] = inside(dot, self.region("right")) and {id(square), id(dot)} <= drawn(
+                self
+            )
+
+    render(Gather)
+    assert seen == {"glided": True, "joined": True}
+
+
+def test_keeping_part_of_a_group_retires_the_rest(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Partial(DirectedScene):
+        def construct(self):
+            row = VGroup(Square(), Circle(), Triangle()).arrange(RIGHT)
+            with self.beat("one"):
+                self.place(row)
+            with self.beat("two", keep=[row[-1]]):
+                self.place(Dot(), region=Region.TOP)
+            seen["kept"] = [id(part) in drawn(self) for part in row]
+
+    render(Partial)
+    assert seen["kept"] == [False, False, True]
+
+
+def test_a_frame_the_pixels_would_squash_is_refused(tex_dir: Path, tmp_path: Path) -> None:
+    class Anything(DirectedScene):
+        def construct(self):
+            self.add(Dot())
+
+    portrait_pixels = {"pixel_width": 180, "pixel_height": 320, "media_dir": str(tmp_path)}
+    with tempconfig(portrait_pixels), pytest.raises(CompositionError, match="squashed"):
+        Anything().render()
 
 
 def test_focus_dims_the_rest_until_the_next_beat(render: Render) -> None:
@@ -425,13 +504,24 @@ def test_three_d_scenes_keep_placed_objects_in_screen_space(render: Render) -> N
     assert inside(title, scene.region("header"))
 
 
-def test_moving_camera_scenes_are_directed_too(render: Render) -> None:
+def test_moving_camera_scenes_keep_title_and_caption_on_screen(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    def on_screen(mobject: Any, frame: Any) -> tuple[float, float, float]:
+        x, y = (mobject.get_center() - frame.get_center())[:2] / frame.width
+        return (round(x, 4), round(y, 4), round(mobject.width / frame.width, 4))
+
     class Zoom(DirectedMovingCameraScene):
         def construct(self):
-            square = Square()
+            square, frame = Square(), self.camera.frame
             with self.beat("zoom", focus=square):
+                title = self.title("Zoom")
                 self.place(square, Circle(), direction=RIGHT)
-            self.play(self.camera.frame.animate.scale(0.5).move_to(square))
+            seen["before"] = (on_screen(title, frame), square.width / frame.width)
+            self.play(frame.animate.scale(0.5).move_to(square))
+            seen["after"] = (on_screen(title, frame), square.width / frame.width)
 
     scene = render(Zoom)
     assert scene.camera.background_color == MIDNIGHT.background
+    assert seen["after"][0] == seen["before"][0]
+    assert seen["after"][1] == pytest.approx(2 * seen["before"][1])

@@ -1,39 +1,43 @@
 # Generalized Fibonacci
 
-This example is both a standalone Manim project and a director project. It computes every displayed term from
+Every sequence with
 
-\[
-x_{n+2}=p x_{n+1}+q x_n
-\]
+$$x_{n+2} = p\,x_{n+1} + q\,x_n$$
 
-and covers concrete families, CSV-backed plots, the companion matrix, characteristic roots, a repeated-root edge case, responsive layout, a moving 2D camera, and a rotating 3D state orbit.
+in five scenes: a family of examples, recorded data, the companion matrix, its characteristic
+roots and a 3D view of an oscillating orbit. `scenes.py` is plain Manim on top of
+`DirectedScene`; `director.yaml` sets the theme and the colors of `p`, `q` and `λ` for every
+scene at once.
 
-Render the narrative cut through the plugin:
+| Scene | What it shows |
+|---|---|
+| `GeneralizedFibonacci` | The full 38-second cut: family, data, matrix, roots, double root, recap. |
+| `SequenceData` | `data/sequences.csv` on a linear scale, then on a log scale where growth is a slope. |
+| `CharacteristicRoots` | The characteristic equation from the guess `x_n = λ^n`, and the double-root case. |
+| `CompanionMatrix` | The Fibonacci states under `C`, with a camera close-up that pulls back to the trend. |
+| `StateOrbit3D` | The oscillator `p = 1, q = −1`: its states wind around the time axis every six steps. |
 
-```bash
-manim-director render --project examples/generalized-fibonacci --profile preview
-```
-
-Render it directly with Manim CE:
-
-```bash
-cd examples/generalized-fibonacci
-manim -pql scenes.py GeneralizedFibonacci
-```
-
-Render a focused chapter or the 3D orbit:
+Render with Manim Director, then look at what you rendered:
 
 ```bash
-manim -pql scenes.py SequenceData
-manim -pql scenes.py CompanionMatrix
-manim -pql scenes.py CharacteristicRoots
-manim -pql --renderer opengl scenes.py StateOrbit3D
+manim-director --project examples/generalized-fibonacci render --profile draft
+manim-director --project examples/generalized-fibonacci contact-sheet
+manim-director --project examples/generalized-fibonacci render --scene StateOrbit3D
 ```
 
-Select the high-contrast theme without editing source:
+Or with plain Manim, from this directory:
 
 ```bash
-MANIM_DIRECTOR_THEME=high-contrast manim -pql scenes.py GeneralizedFibonacci
+manim -ql scenes.py GeneralizedFibonacci
+manim -ql scenes.py CompanionMatrix
 ```
 
-`director.yaml` is the source of truth for beats and render profiles. `narration.json` and `captions.vtt` share its section IDs; `assets/manifest.json` records the only visual asset; `expected/outputs.json` describes the deliverables rather than pretending unrendered files already exist.
+Check the algebra behind the `roots` beat (`λ₊` solves `λ² = pλ + q`):
+
+```bash
+manim-director validate-math "((p + sqrt(p^2 + 4*q))/2)^2" "p*(p + sqrt(p^2 + 4*q))/2 + q" --range q=0:5
+```
+
+`captions.vtt` and `narration.json` follow the beats of `GeneralizedFibonacci` (their ids and
+times match its render timeline). `expected/outputs.json` lists the deliverables and the commands
+that produce them; none of them is checked in.

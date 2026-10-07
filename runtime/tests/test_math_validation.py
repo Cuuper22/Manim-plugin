@@ -25,6 +25,14 @@ def test_a_correct_derivation_is_valid(ctx) -> None:
     assert first["numeric"]["samples_valid"] == 50 and first["numeric"]["counterexample"] is None
 
 
+def test_reserved_python_words_work_as_variable_names(ctx) -> None:
+    result = check(ctx, "lambda^2 - p*lambda", "lambda*(lambda - p)", ranges={"lambda": [0, 3]})
+    assert result["valid"] is True and result["variables"] == ["lambda", "p"]
+    with pytest.raises(DirectorError) as raised:
+        check(ctx, "lambda^2", "lambda lambda")
+    assert raised.value.data == {"step": 1, "column": 8}
+
+
 def test_a_wrong_step_is_pinpointed_with_a_counterexample(ctx) -> None:
     result = check(ctx, "x^2 - 1", "(x-1)*(x+1)", "(x-1)^2")
     assert result["valid"] is False

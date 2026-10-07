@@ -1,22 +1,41 @@
-"""The `init` operation: create a project from a template or add one scene template."""
+"""The `init` operation: create a project from a packaged template, or add a template's scene
+to an existing project.
+
+Templates are ordinary files under `data/templates/<name>/`, each with a runnable
+`scenes/main.py`. Files in `data/templates/_shared/` belong to every template that does not
+ship its own copy. Only YAML and Markdown files are filled in (`{{name}}`, `{{seed}}`,
+`{{theme}}`, `{{scene}}`); scene sources are copied byte for byte.
+"""
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from dataclasses import dataclass
+from functools import cache
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from . import catalog
+import yaml
+
 from .errors import DirectorError, invalid_params, io_error
+from .inspection import DIRECTOR_SCENE_BASES
 from .model import ArtifactKind, RuntimeArtifact, SceneRef
 from .paths import atomic_target, slug
-from .protocol import Context
 from .tasks import InitTask
-from .templates import SCENE_TEMPLATES
+from .themes import themes
 
+if TYPE_CHECKING:
+    from .protocol import Context
+
+DEFAULT_TEMPLATE = "explainer"
+SCENE_FILE = "scenes/main.py"
+_SHARED = "_shared"
+_FILLED_SUFFIXES = frozenset({".yaml", ".md"})
 _GITIGNORE_LINES = (".manim-director/", "__pycache__/")
-_MAIN_SCENE = "MainScene"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +51,29 @@ class InitResult:
     artifacts: list[RuntimeArtifact]
 
 
+@cache
+def templates() -> tuple[str, ...]:
+    """Packaged template names, the default first."""
+
+    names = [node.name for node in _root().iterdir() if node.is_dir() and node.name != _SHARED]
+    return tuple(sorted(names, key=lambda name: (name != DEFAULT_TEMPLATE, name)))
+
+
+def scene_source(template: str) -> str:
+    return _files(template)[SCENE_FILE].read_text(encoding="utf-8")
+
+
+def scene_class(source: str) -> str:
+    """The template's scene: its first class built directly on a DirectedScene base."""
+
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.ClassDef) and any(
+            isinstance(base, ast.Name) and base.id in DIRECTOR_SCENE_BASES for base in node.bases
+        ):
+            return node.name
+    raise AssertionError("every packaged template defines a DirectedScene subclass")
+
+
 def init(task: InitTask, ctx: Context) -> InitResult:
     if task.mode == "add_scene":
         return _add_scene(task, ctx)
@@ -40,34 +82,31 @@ def init(task: InitTask, ctx: Context) -> InitResult:
 
 def _create(task: InitTask, ctx: Context) -> InitResult:
     root = ctx.project_root
-    template = task.template or catalog.PROJECT_TEMPLATES[0]
-    if template not in catalog.PROJECT_TEMPLATES:
-        raise invalid_params(
-            "template", "unknown template", allowed=list(catalog.PROJECT_TEMPLATES)
-        )
-    theme = task.theme or catalog.default_theme()
-    if theme not in catalog.theme_names():
-        raise invalid_params("theme", "unknown theme", allowed=catalog.theme_names())
+    template = task.template or DEFAULT_TEMPLATE
+    if template not in templates():
+        raise invalid_params("template", "unknown template", allowed=list(templates()))
+    theme = task.theme or next(iter(themes()))
+    if theme not in themes():
+        raise invalid_params("theme", "unknown theme", allowed=list(themes()))
     name = (task.name or root.name or "Manim Project").strip()
     project_slug = slug(name, fallback="manim-project")
     seed = task.seed if task.seed is not None else _seed_for(project_slug)
+    sources = _files(template)
+    scene = scene_class(sources[SCENE_FILE].read_text(encoding="utf-8"))
+    values = {"name": name, "seed": seed, "theme": theme, "scene": scene}
 
-    files = {
-        "director.yaml": _director_yaml(name, seed, theme),
-        "manim.cfg": "[CLI]\nmedia_dir = .manim-director/media\n",
-        "requirements.txt": "manim>=0.21,<0.22\n",
-        "README.md": _readme(name),
-        "scenes/main.py": _starter_scene(name),
-    }
     if task.mode == "create":
-        existing = sorted(path for path in files if (root / path).exists())
+        existing = sorted(path for path in sources if (root / path).exists())
         if existing:
             raise DirectorError(
                 "project_not_empty",
                 f"{len(existing)} template file(s) already exist; pass force to overwrite them.",
                 {"paths": existing},
             )
-    written = [_write(root / path, content) for path, content in files.items()]
+    written = [
+        _write(root / path, _fill(path, source.read_text(encoding="utf-8"), values))
+        for path, source in sources.items()
+    ]
     written.append(_merge_gitignore(root / ".gitignore"))
     return InitResult(
         mode=task.mode,
@@ -77,19 +116,16 @@ def _create(task: InitTask, ctx: Context) -> InitResult:
         template=template,
         scene_template=None,
         theme=theme,
-        scene=SceneRef(name=_MAIN_SCENE, file="scenes/main.py"),
+        scene=SceneRef(name=scene, file=SCENE_FILE),
         artifacts=[ctx.artifact(ArtifactKind.FILE, path) for path in written],
     )
 
 
 def _add_scene(task: InitTask, ctx: Context) -> InitResult:
     assert task.scene_template is not None and task.source_dir is not None
-    entry = SCENE_TEMPLATES.get(task.scene_template)
-    if entry is None:
-        raise invalid_params(
-            "scene_template", "unknown scene template", allowed=list(SCENE_TEMPLATES)
-        )
-    scene_class, source = entry
+    if task.scene_template not in templates():
+        raise invalid_params("scene_template", "unknown scene template", allowed=list(templates()))
+    source = scene_source(task.scene_template)
     source_dir = ctx.require_inside(task.source_dir, "source_dir")
     target = source_dir / f"{task.scene_template}.py"
     try:
@@ -112,9 +148,46 @@ def _add_scene(task: InitTask, ctx: Context) -> InitResult:
         template=None,
         scene_template=task.scene_template,
         theme=None,
-        scene=SceneRef(name=scene_class, file=ctx.relative(target)),
+        scene=SceneRef(name=scene_class(source), file=ctx.relative(target)),
         artifacts=[ctx.artifact(ArtifactKind.FILE, target)],
     )
+
+
+def _root() -> Traversable:
+    return resources.files(__package__).joinpath("data", "templates")
+
+
+def _files(template: str) -> dict[str, Traversable]:
+    """Project-relative path -> packaged file, sorted by path."""
+
+    root = _root()
+    return dict(sorted({**_walk(root / _SHARED), **_walk(root / template)}.items()))
+
+
+def _walk(directory: Traversable, prefix: str = "") -> dict[str, Traversable]:
+    found: dict[str, Traversable] = {}
+    for node in directory.iterdir():
+        path = f"{prefix}{node.name}"
+        if node.is_dir():
+            if node.name != "__pycache__":
+                found.update(_walk(node, f"{path}/"))
+        else:
+            found[path] = node
+    return found
+
+
+def _fill(path: str, text: str, values: dict[str, str | int]) -> str:
+    if Path(path).suffix not in _FILLED_SUFFIXES:
+        return text
+    spell = _yaml_scalar if path.endswith(".yaml") else str
+    for key, value in values.items():
+        text = text.replace(f"{{{{{key}}}}}", spell(value))
+    return text
+
+
+def _yaml_scalar(value: str | int) -> str:
+    plain = str(value)
+    return plain if yaml.safe_load(plain) == value else json.dumps(value, ensure_ascii=False)
 
 
 def _seed_for(project_slug: str) -> int:
@@ -136,83 +209,3 @@ def _merge_gitignore(path: Path) -> Path:
         separator = "" if not current or current.endswith("\n") else "\n"
         _write(path, current + separator + "\n".join(missing) + "\n")
     return path
-
-
-def _director_yaml(name: str, seed: int, theme: str) -> str:
-    return f"""version: 1
-project:
-  name: {json.dumps(name)}
-  seed: {seed}
-  source_dir: scenes
-  asset_dir: assets
-  output_dir: output
-  media_dir: .manim-director/media
-engine:
-  source: scenes/main.py
-  main_scene: {_MAIN_SCENE}
-render:
-  profile: preview
-  renderer: cairo
-  format: mp4
-  transparent: false
-  width: 1920
-  height: 1080
-  fps: 60
-theme: {theme}
-safe_area:
-  top: 0.05
-  right: 0.05
-  bottom: 0.08
-  left: 0.05
-budgets:
-  render_seconds: 900
-"""
-
-
-def _readme(name: str) -> str:
-    return f"""# {name}
-
-Render a quick draft, then look at it:
-
-```bash
-manim-director render --scene {_MAIN_SCENE} --profile draft
-manim-director contact-sheet --scene {_MAIN_SCENE}
-```
-
-Production render:
-
-```bash
-manim-director render --scene {_MAIN_SCENE} --profile production
-```
-
-Scenes are ordinary Manim Python, so `manim -ql scenes/main.py {_MAIN_SCENE}` works too
-from the environment where Manim Director is installed.
-"""
-
-
-def _starter_scene(name: str) -> str:
-    return f'''"""{name}: one idea, one beat at a time."""
-
-from manim import *
-from manim_director_runtime import DirectedScene
-
-
-class {_MAIN_SCENE}(DirectedScene):
-    symbols = {{"a": "primary", "b": "secondary"}}
-
-    def construct(self):
-        question = self.math(r"(a + b)^2 = ?")
-        with self.beat("question", transition="reveal"):
-            self.title({name!r})
-            self.place(question)
-            self.caption("What happens when a sum is squared?")
-
-        with self.beat("expand"):
-            self.derive(
-                r"(a + b)^2",
-                (r"= (a + b)(a + b)", "definition"),
-                (r"= a^2 + 2ab + b^2", "distribute and collect"),
-                replaces=question,
-            )
-        self.wait()
-'''

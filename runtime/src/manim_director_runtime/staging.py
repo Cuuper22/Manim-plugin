@@ -5,7 +5,7 @@ Planning only reads sizes, so a placement is fully validated before anything mov
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -104,3 +104,48 @@ def plan(
 def describe(mobject: Mobject) -> str:
     text = repr(mobject)
     return text if len(text) <= 60 else text[:57] + "..."
+
+
+def on_stage(mobject: Mobject, visible: set[int]) -> bool:
+    """On stage itself, or a group (perhaps never added) whose drawn parts all are."""
+
+    if id(mobject) in visible:
+        return True
+    parts = mobject.family_members_with_points()
+    return bool(parts) and all(id(part) in visible for part in parts)
+
+
+def split_by_stage(mobject: Mobject, visible: set[int]) -> tuple[list[Mobject], list[Mobject]]:
+    """The largest pieces of `mobject` that are on stage, and those that are not."""
+
+    if on_stage(mobject, visible):
+        return [mobject], []
+    if not any(id(part) in visible for part in mobject.family_members_with_points()):
+        return [], [mobject]
+    staged: list[Mobject] = []
+    new: list[Mobject] = []
+    for sub in mobject.submobjects:
+        sub_staged, sub_new = split_by_stage(sub, visible)
+        staged += sub_staged
+        new += sub_new
+    return staged, new
+
+
+def parts_outside(mobject: Mobject, carried: set[int]) -> list[Mobject]:
+    """The largest pieces of `mobject` with nothing in `carried`."""
+
+    if not any(id(member) in carried for member in mobject.get_family()):
+        return [mobject]
+    return [part for sub in mobject.submobjects for part in parts_outside(sub, carried)]
+
+
+def parts_inside(mobject: Mobject, carried: set[int]) -> list[Mobject]:
+    """The largest pieces of `mobject` that are in `carried`."""
+
+    if id(mobject) in carried:
+        return [mobject]
+    return [part for sub in mobject.submobjects for part in parts_inside(sub, carried)]
+
+
+def within(mobject: Mobject, groups: Iterable[Mobject]) -> bool:
+    return any(mobject is part for group in groups for part in group.get_family())

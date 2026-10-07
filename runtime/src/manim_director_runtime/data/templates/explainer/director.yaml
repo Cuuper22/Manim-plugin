@@ -1,0 +1,25 @@
+version: 1
+project:
+  name: {{name}}
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: GeometricSeries
+theme: {{theme}}
+storyboard:
+  - id: hook
+    intent: introduce
+    audience_question: Can infinitely many pieces add up to something finite?
+    takeaway: One whole square is the budget every piece must fit into.
+  - id: halving
+    intent: explain
+    audience_question: How much does each new piece cover?
+    takeaway: Each piece fills half of what is still empty.
+  - id: gap
+    intent: reveal
+    audience_question: How much is still missing after n pieces?
+    takeaway: The empty corner is exactly 1/2^n of the square.
+  - id: limit
+    intent: prove
+    audience_question: Why is the infinite sum exactly one?
+    takeaway: S_n = 1 - 1/2^n, and the gap shrinks to nothing.
