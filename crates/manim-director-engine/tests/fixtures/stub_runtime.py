@@ -78,7 +78,11 @@ def diagnose(task, root, rid):
     if text == "huge":
         send({"type": "log", "request_id": rid, "level": "info", "message": "x" * (1100 * 1024)})
     if text == "error":
-        raise StubError("render_failed", "Scene raised NameError.", {"stage": "construct"})
+        cause = {"code": "name_error", "severity": "error", "message": "name 'x' is not defined",
+                 "hint": None, "location": {"file": "scenes/main.py", "line": 3, "column": None},
+                 "at_seconds": None, "beat": None, "frame": None}
+        raise StubError("render_failed", "Scene raised NameError.",
+                        {"stage": "construct", "findings": [cause]})
     if text == "unknown-code":
         raise StubError("exploded", "Something odd.", None)
     if text == "null-id":

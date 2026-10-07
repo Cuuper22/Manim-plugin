@@ -175,6 +175,47 @@ async fn job_tools_wait_for_the_result_and_failures_are_error_results() {
 }
 
 #[tokio::test]
+async fn job_answers_say_the_verdict_and_give_absolute_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let scheduler = scheduler(directory.path()).await;
+    let doctor = call(&scheduler, "doctor", json!({"wait_seconds": 10})).await;
+    assert!(text(&doctor).contains("\nready to render: yes"), "{doctor}");
+    let diagnosed = call(
+        &scheduler,
+        "submit",
+        json!({"operation": "diagnose", "text": "hello", "wait_seconds": 10}),
+    )
+    .await;
+    assert!(text(&diagnosed).ends_with("\ninfo hello"), "{diagnosed}");
+    let failed = call(
+        &scheduler,
+        "submit",
+        json!({"operation": "diagnose", "text": "error", "wait_seconds": 10}),
+    )
+    .await;
+    let cause = "\nerror scenes/main.py:3: name 'x' is not defined";
+    assert!(text(&failed).ends_with(cause), "{failed}");
+
+    fs::create_dir_all(scheduler.root().join("captions")).unwrap();
+    fs::write(
+        scheduler.root().join("captions/en.vtt"),
+        "WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n",
+    )
+    .unwrap();
+    let arguments = json!({"operation": "captions", "path": "captions/en.vtt",
+        "output": "captions/en.srt", "wait_seconds": 10});
+    let captions = call(&scheduler, "submit", arguments).await;
+    let path = scheduler
+        .root()
+        .join("captions/en.srt")
+        .display()
+        .to_string();
+    assert_eq!(captions["structuredContent"]["paths"], json!([path]));
+    assert_eq!(text(&captions).lines().nth(1), Some("1 cues, 1.0 s"));
+    assert!(text(&captions).ends_with(&path));
+}
+
+#[tokio::test]
 async fn job_status_cancels_and_pages_events() {
     let directory = tempfile::tempdir().unwrap();
     let scheduler = scheduler(directory.path()).await;

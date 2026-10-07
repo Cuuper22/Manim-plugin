@@ -4,8 +4,8 @@
 use super::bound::{bound, size};
 use crate::{init_project, inspect, parse_params, parse_request, Frontend, Scheduler};
 use manim_director_core::{
-    CursorPage, EngineError, JobOrigin, JobRecord, JobStatus, JobSummary, LogRecord, Operation,
-    OperationRequest,
+    summary as verdicts, Artifact, CursorPage, EngineError, JobOrigin, JobRecord, JobStatus,
+    JobSummary, LogRecord, Operation, OperationRequest, OperationResult,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Map, Value};
@@ -19,6 +19,7 @@ const MAX_JOB_BYTES: usize = 32 * 1024;
 const DEFAULT_WAIT_SECONDS: u64 = 20;
 const MAX_WAIT_SECONDS: u64 = 50;
 const MAX_LISTED_ARTIFACTS: usize = 64;
+const MAX_LISTED_FINDINGS: usize = 5;
 
 /// Runs a tool from the catalog; every other name is refused by the caller.
 /// Dedicated job tools are named after their operation.
@@ -61,11 +62,8 @@ async fn init(scheduler: &Scheduler, arguments: Value) -> Result<Value, EngineEr
     );
     list_paths(
         &mut text,
-        scheduler,
-        result
-            .artifacts
-            .iter()
-            .map(|artifact| artifact.path.as_str()),
+        &absolute_paths(scheduler, &result.artifacts),
+        result.artifacts.len(),
     );
     let mut structured = serde_json::to_value(&result).map_err(EngineError::internal)?;
     bound(&mut structured, MAX_STRUCTURED_BYTES);
@@ -187,32 +185,33 @@ async fn settle(
     }
 }
 
-/// `{job, result, error}` (plus `events`, `next_cursor` for `job_status`),
-/// a summary line and every artifact's absolute path.
+/// `{job, result, error, paths}` (plus `events`, `next_cursor` for
+/// `job_status`); the text repeats the status, verdict and paths. `paths`
+/// holds every artifact's absolute path, since some hosts show the model only
+/// the structured content and artifact paths are project-relative.
 fn job_response(scheduler: &Scheduler, job: &JobRecord, events: Option<Events>) -> Value {
+    let artifacts = job
+        .result
+        .as_ref()
+        .map_or(&[][..], OperationResult::artifacts);
+    let paths = absolute_paths(scheduler, artifacts);
     let mut structured = json!({
         "job": JobSummary::from(job),
         "result": job.result,
         "error": job.error,
     });
     bound(&mut structured, MAX_JOB_BYTES);
-    if let (Some(events), Value::Object(fields)) = (events, &mut structured) {
-        let budget = MAX_STRUCTURED_BYTES.saturating_sub(size(&Value::Object(fields.clone())));
-        let (records, next_cursor) = fit_events(events, budget);
-        fields.insert("events".into(), Value::Array(records));
-        fields.insert("next_cursor".into(), json!(next_cursor));
+    if let Value::Object(fields) = &mut structured {
+        fields.insert("paths".into(), json!(paths));
+        if let Some(events) = events {
+            let budget = MAX_STRUCTURED_BYTES.saturating_sub(size(&Value::Object(fields.clone())));
+            let (records, next_cursor) = fit_events(events, budget);
+            fields.insert("events".into(), Value::Array(records));
+            fields.insert("next_cursor".into(), json!(next_cursor));
+        }
     }
     let mut text = summary(job);
-    if let Some(result) = &job.result {
-        list_paths(
-            &mut text,
-            scheduler,
-            result
-                .artifacts()
-                .iter()
-                .map(|artifact| artifact.path.as_str()),
-        );
-    }
+    list_paths(&mut text, &paths, artifacts.len());
     let failed = matches!(job.status, JobStatus::Failed | JobStatus::Cancelled);
     response(text, structured, failed)
 }
@@ -256,16 +255,38 @@ fn summary(job: &JobRecord) -> String {
     if !job.status.is_terminal() {
         text.push_str("; follow it with job_status.");
     }
+    let error_findings = job.error.as_ref().map(verdicts::error_findings);
+    let findings = match &job.result {
+        Some(result) => verdicts::findings(result),
+        None => error_findings.as_deref().unwrap_or_default(),
+    };
+    let verdict = job.result.iter().flat_map(verdicts::verdict);
+    let listed = findings.iter().take(MAX_LISTED_FINDINGS);
+    for line in verdict.chain(listed.flat_map(verdicts::finding_lines)) {
+        let _ = write!(text, "\n{line}");
+    }
+    if findings.len() > MAX_LISTED_FINDINGS {
+        let more = findings.len() - MAX_LISTED_FINDINGS;
+        let _ = write!(text, "\n… {more} more findings");
+    }
     text
 }
 
-fn list_paths<'a>(text: &mut String, scheduler: &Scheduler, paths: impl Iterator<Item = &'a str>) {
-    let paths: Vec<_> = paths.collect();
-    for path in paths.iter().take(MAX_LISTED_ARTIFACTS) {
-        let _ = write!(text, "\n{}", scheduler.root().join(path).display());
+/// Absolute paths of the first `MAX_LISTED_ARTIFACTS` artifacts.
+fn absolute_paths(scheduler: &Scheduler, artifacts: &[Artifact]) -> Vec<String> {
+    artifacts
+        .iter()
+        .take(MAX_LISTED_ARTIFACTS)
+        .map(|artifact| scheduler.root().join(&artifact.path).display().to_string())
+        .collect()
+}
+
+fn list_paths(text: &mut String, paths: &[String], total: usize) {
+    for path in paths {
+        let _ = write!(text, "\n{path}");
     }
-    if paths.len() > MAX_LISTED_ARTIFACTS {
-        let _ = write!(text, "\n… {} more", paths.len() - MAX_LISTED_ARTIFACTS);
+    if total > paths.len() {
+        let _ = write!(text, "\n… {} more", total - paths.len());
     }
 }
 

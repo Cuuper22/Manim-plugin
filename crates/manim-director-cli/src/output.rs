@@ -1,8 +1,6 @@
 //! Human and `--json` rendering of command results.
 
-use manim_director_core::{
-    ErrorBody, Finding, InitResult, JobRecord, OperationResult, QaStatus, Severity,
-};
+use manim_director_core::{summary, ErrorBody, Finding, InitResult, JobRecord};
 use manim_director_engine::Inspect;
 use serde::Serialize;
 
@@ -20,7 +18,10 @@ pub fn job(job: &JobRecord, machine: bool) {
     let cached = if job.cached { " (cached)" } else { "" };
     println!("{} {} {}{cached}", job.operation, job.status, job.id);
     if let Some(result) = &job.result {
-        summary(result);
+        for line in summary::verdict(result) {
+            println!("  {line}");
+        }
+        findings(summary::findings(result));
         for artifact in result.artifacts() {
             println!("  {}", artifact.path);
         }
@@ -30,86 +31,14 @@ pub fn job(job: &JobRecord, machine: bool) {
     }
 }
 
-fn summary(result: &OperationResult) {
-    match result {
-        OperationResult::Doctor(doctor) => {
-            println!(
-                "  ready to render: {}",
-                if doctor.ok { "yes" } else { "no" }
-            );
-            findings(&doctor.findings);
-        }
-        OperationResult::Render(render) => println!(
-            "  {} ({}): {:.1} s, {} animations",
-            render.scene.name, render.scene.file, render.duration_seconds, render.animations
-        ),
-        OperationResult::Qa(qa) => {
-            let status = match qa.status {
-                QaStatus::Pass => "pass",
-                QaStatus::Warn => "warn",
-                QaStatus::Fail => "fail",
-            };
-            println!("  {status}");
-            findings(&qa.findings);
-        }
-        OperationResult::Diagnose(diagnosis) => findings(&diagnosis.findings),
-        OperationResult::ValidateMath(math) => {
-            let verdict = match math.valid {
-                Some(true) => "every step is equivalent",
-                Some(false) => "a step is not equivalent",
-                None => "undecided",
-            };
-            println!("  {verdict}");
-            for pair in &math.pairs {
-                if pair.equivalent != Some(true) {
-                    println!(
-                        "  steps {} → {}: {:?}",
-                        pair.index + 1,
-                        pair.index + 2,
-                        pair.equivalent
-                    );
-                }
-            }
-        }
-        OperationResult::Captions(captions) => {
-            println!(
-                "  {} cues, {:.1} s",
-                captions.cue_count, captions.duration_seconds
-            );
-            findings(&captions.findings);
-        }
-        _ => {}
-    }
-}
-
 pub fn failure(error: &ErrorBody) {
     println!("  {}: {}", error.code, error.message);
-    let nested = error
-        .data
-        .as_ref()
-        .and_then(|data| data.get("findings"))
-        .and_then(|findings| serde_json::from_value::<Vec<Finding>>(findings.clone()).ok());
-    if let Some(nested) = nested {
-        findings(&nested);
-    }
+    findings(&summary::error_findings(error));
 }
 
 fn findings(findings: &[Finding]) {
-    for finding in findings {
-        let severity = match finding.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Info => "info",
-        };
-        let location = finding
-            .location
-            .as_ref()
-            .map(|location| format!("{}:{}: ", location.file, location.line))
-            .unwrap_or_default();
-        println!("  {severity} {location}{}", finding.message);
-        if let Some(hint) = &finding.hint {
-            println!("    hint: {hint}");
-        }
+    for line in findings.iter().flat_map(summary::finding_lines) {
+        println!("  {line}");
     }
 }
 
