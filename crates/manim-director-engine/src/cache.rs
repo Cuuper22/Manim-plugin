@@ -172,8 +172,10 @@ mod tests {
                 .value
         );
         fs::write(root.join("manim.cfg"), "[CLI]\nframe_rate = 30").unwrap();
+        fs::write(root.join("radius.npy"), "data").unwrap();
         let with_cfg = fingerprint(root, &spec, "py", &still("/a", false)).unwrap();
         assert!(with_cfg.file_hash("manim.cfg").is_some());
+        assert!(with_cfg.file_hash("radius.npy").is_some());
         assert_ne!(
             with_cfg.value,
             fingerprint(root, &spec, "other-runtime", &still("/a", false))

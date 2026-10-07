@@ -24,10 +24,12 @@ pub const VIDEO: &[&str] = &["mp4", "mov", "webm", "gif"];
 pub const IMAGE: &[&str] = &["png", "jpg", "jpeg", "webp"];
 pub const CAPTIONS: &[&str] = &["vtt", "srt"];
 
-/// Project files whose content can change a render (cache fingerprint).
+/// Project files whose content can change a render (cache fingerprint):
+/// code, data, TeX, shaders, images, audio and fonts.
 pub const RENDER_INPUTS: &[&str] = &[
-    "py", "svg", "png", "jpg", "jpeg", "webp", "csv", "json", "tex", "typ", "md", "wav", "mp3",
-    "ogg", "ttf", "otf", "cfg", "toml", "txt", "yaml", "yml",
+    "py", "cfg", "toml", "yaml", "yml", "json", "csv", "tsv", "txt", "dat", "npy", "npz",
+    "parquet", "md", "tex", "sty", "cls", "bib", "typ", "glsl", "frag", "vert", "svg", "png",
+    "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "wav", "mp3", "ogg", "ttf", "otf",
 ];
 
 /// Text files the source API reads and writes.
