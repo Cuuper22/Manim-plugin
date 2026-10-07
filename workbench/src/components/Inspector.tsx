@@ -1,4 +1,5 @@
 import { lazy, Suspense, type ComponentProps, type ReactNode } from "react";
+import { CodeSkeleton } from "./CodeSkeleton.tsx";
 import { TabList, panelId, tabId } from "./TabList.tsx";
 
 // CodeMirror is most of the bundle; it loads after the first paint.
@@ -45,7 +46,7 @@ export function Inspector({ tab, onTab, active, editor, findingCount, children }
         <TabList label="Inspector" idPrefix="inspector" tabs={tabs} selected={tab} onSelect={onTab} />
       </header>
       <div className="inspector-panel" {...panel("code")} hidden={tab !== "code"}>
-        <Suspense fallback={<p className="pane-note">Loading the editor…</p>}>
+        <Suspense fallback={<CodeSkeleton label="Loading the editor" />}>
           <CodeEditor {...editor} />
         </Suspense>
       </div>

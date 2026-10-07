@@ -1,13 +1,16 @@
 import { useMemo, useState } from "react";
-import type { DoctorSnapshot, Finding, Scene, SceneId } from "../api/types.ts";
-import type { Diagnosis } from "../hooks/useDiagnosis.ts";
-import { bySeverity, codeTarget, fromWorkspace, type CodeTarget, type ShownFinding } from "../model/findings.ts";
+import type { DoctorSnapshot, Scene, SceneId } from "../api/types.ts";
+import { bySeverity, cleanQa, codeTarget, type CodeTarget, type FindingCard, type ShownFinding } from "../model/findings.ts";
 import { formatTime } from "../model/format.ts";
 import { sceneName } from "../model/jobs.ts";
+import { useWorkbench } from "../store/useWorkbench.ts";
+import { Icon } from "./Icon.tsx";
 
 interface FindingsPaneProps {
-  findings: readonly Finding[];
-  diagnosis: Diagnosis | null;
+  /** The workspace's findings and the newest diagnosis's. */
+  findings: readonly ShownFinding[];
+  /** Whose findings these include, e.g. `Render Recurrence · draft`. */
+  diagnosed: string | null;
   doctor: DoctorSnapshot | null;
   selected: Scene | null;
   onJump: (target: CodeTarget) => void;
@@ -18,7 +21,7 @@ interface FindingsPaneProps {
 
 const GROUP_TITLES = { error: "Errors", warning: "Warnings", info: "Notes" } as const;
 const TONES = { error: "danger", warning: "warning", info: undefined } as const;
-const SOURCE_LABELS: Record<ShownFinding["source"], string> = {
+const SOURCE_LABELS: Record<FindingCard["finding"]["source"], string> = {
   spec: "director.yaml",
   index: "Scene index",
   render: "Render",
@@ -28,38 +31,58 @@ const SOURCE_LABELS: Record<ShownFinding["source"], string> = {
 };
 
 /** QA, render, doctor and spec findings plus the newest diagnosis, errors first. */
-export function FindingsPane({ findings, diagnosis, doctor, selected, onJump, onSeek, onDoctor, doctorBusy }: FindingsPaneProps) {
+export function FindingsPane({ findings, diagnosed, doctor, selected, onJump, onSeek, onDoctor, doctorBusy }: FindingsPaneProps) {
+  const jobs = useWorkbench((state) => state.jobs);
   const [onlySelected, setOnlySelected] = useState(false);
-  const shown = useMemo(() => {
-    const all = [...fromWorkspace(findings), ...(diagnosis?.findings ?? [])];
-    return onlySelected && selected ? all.filter((finding) => finding.scene_id === selected.id) : all;
-  }, [findings, diagnosis, onlySelected, selected]);
-  const groups = bySeverity(shown);
+  const groups = useMemo(
+    () => bySeverity(onlySelected && selected ? findings.filter((finding) => finding.scene_id === selected.id) : findings),
+    [findings, onlySelected, selected],
+  );
+  const passed = selected ? cleanQa(jobs, findings, selected.id) : null;
+  const checkedFrames = passed?.request.operation === "qa" ? passed.request.frames : undefined;
 
   return (
     <div className="findings">
       <div className="bar">
         <p className="meta">{environment(doctor)}</p>
-        <button type="button" className="quiet" disabled={doctorBusy} onClick={onDoctor}>
+        <button type="button" className="small" aria-busy={doctorBusy || undefined} disabled={doctorBusy} onClick={onDoctor}>
           {doctorBusy ? "Checking…" : "Re-check environment"}
         </button>
       </div>
-      {selected ? (
-        <label>
-          <input type="checkbox" checked={onlySelected} onChange={(event) => setOnlySelected(event.target.checked)} />
-          Only {selected.class_name}
-        </label>
+      {selected || diagnosed ? (
+        <div className="findings-filters">
+          {selected ? (
+            <label>
+              <input type="checkbox" checked={onlySelected} onChange={(event) => setOnlySelected(event.target.checked)} />
+              Only {selected.class_name}
+            </label>
+          ) : null}
+          {diagnosed ? <p className="meta">Includes the diagnosis of {diagnosed}.</p> : null}
+        </div>
       ) : null}
-      {diagnosis ? <p className="meta">Includes the diagnosis of {diagnosis.subject}.</p> : null}
-      {groups.length === 0 ? <p className="pane-note">No findings.</p> : null}
+      {passed && selected ? (
+        <p className="card verdict" data-tone="success">
+          <Icon name="check" />
+          <span>
+            QA found no issues in {selected.class_name}
+            {checkedFrames ? ` (${checkedFrames} frames checked)` : ""}.
+          </span>
+        </p>
+      ) : null}
+      {groups.length === 0 && !passed ? (
+        <div className="pane-empty">
+          <p>No findings.</p>
+          <p className="meta">QA checks a render's frames for blank frames, low contrast and content outside the safe area.</p>
+        </div>
+      ) : null}
       {groups.map((group) => (
         <section key={group.severity} aria-labelledby={`findings-${group.severity}`}>
           <h3 id={`findings-${group.severity}`} className="group-title">
-            {GROUP_TITLES[group.severity]} <span className="muted">{group.findings.length}</span>
+            {GROUP_TITLES[group.severity]} <span className="muted">{group.cards.length}</span>
           </h3>
           <ul>
-            {group.findings.map((finding) => (
-              <FindingItem key={finding.key} finding={finding} onJump={onJump} onSeek={onSeek} />
+            {group.cards.map((card) => (
+              <FindingItem key={card.key} card={card} onJump={onJump} onSeek={onSeek} />
             ))}
           </ul>
         </section>
@@ -69,14 +92,15 @@ export function FindingsPane({ findings, diagnosis, doctor, selected, onJump, on
 }
 
 interface FindingItemProps {
-  finding: ShownFinding;
+  card: FindingCard;
   onJump: (target: CodeTarget) => void;
   onSeek: (sceneId: SceneId, seconds: number) => void;
 }
 
-function FindingItem({ finding, onJump, onSeek }: FindingItemProps) {
+function FindingItem({ card, onJump, onSeek }: FindingItemProps) {
+  const { finding, moments } = card;
   const target = codeTarget(finding.location);
-  const { location, at_seconds: at, scene_id: sceneId } = finding;
+  const { location, scene_id: sceneId } = finding;
   return (
     <li className="card finding" data-tone={TONES[finding.severity]}>
       <p>{finding.message}</p>
@@ -91,22 +115,34 @@ function FindingItem({ finding, onJump, onSeek }: FindingItemProps) {
             {target.path}:{target.line}
           </button>
         ) : location ? (
-          <span>
+          <span className="mono">
             {location.file}:{location.line}
           </span>
         ) : null}
-        {at !== null && sceneId ? (
-          <button type="button" className="link" onClick={() => onSeek(sceneId, at)}>
-            at {formatTime(at)}
-          </button>
-        ) : null}
-        {finding.frame_url ? (
-          <a href={finding.frame_url} target="_blank" rel="noreferrer">
-            Frame
-          </a>
-        ) : null}
         {finding.outdated ? <span className="warning">Outdated</span> : null}
       </p>
+      {moments.length > 0 ? (
+        <ul className="row moments" aria-label="When it happens">
+          {moments.map(({ at_seconds: at, frame_url: frame }) => (
+            <li key={at} className="moment">
+              <button
+                type="button"
+                className="mono"
+                disabled={!sceneId}
+                aria-label={`Show the render at ${formatTime(at)}`}
+                onClick={() => sceneId && onSeek(sceneId, at)}
+              >
+                {formatTime(at)}
+              </button>
+              {frame ? (
+                <a href={frame} target="_blank" rel="noreferrer" title="Open the measured frame" aria-label={`Measured frame at ${formatTime(at)}`}>
+                  <Icon name="image" />
+                </a>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </li>
   );
 }

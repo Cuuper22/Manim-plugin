@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { JobSummary, Scene, SceneId, SceneIndexStatus, SceneLatest, StoryboardBeat, TimelineMark } from "../api/types.ts";
 import { formatSeconds } from "../model/format.ts";
-import { isActive, statusText } from "../model/jobs.ts";
+import { activityText, isActive, progressDetail, stageActivity } from "../model/jobs.ts";
 import { markAt } from "../model/timeline.ts";
 import type { PlaybackController } from "../stage/playback.ts";
 
@@ -30,7 +30,9 @@ export function ScenePanel(props: ScenePanelProps) {
         <h2>Scenes</h2>
         <span className="meta">{indexNote(index, scenes.length)}</span>
       </header>
-      {scenes.length === 0 ? (
+      {scenes.length === 0 && index.state === "indexing" ? (
+        <SkeletonRows />
+      ) : scenes.length === 0 ? (
         <p className="pane-note">{emptyNote(index)}</p>
       ) : (
         <ul>
@@ -71,17 +73,41 @@ export function ScenePanel(props: ScenePanelProps) {
   );
 }
 
+type StatusState = "none" | "running" | "rendered" | "outdated" | "failed";
+
 function SceneStatus({ scene, latest, jobs }: { scene: Scene; latest: SceneLatest | null; jobs: readonly JobSummary[] }) {
-  if (scene.parse_failed) return <span className="meta danger">Does not parse; showing its last good version</span>;
-  const running = jobs.find((job) => job.scene_id === scene.id && isActive(job));
-  if (running) return <span className="meta">{statusText(running)}</span>;
+  if (scene.parse_failed) return <Status state="failed">Does not parse; showing its last good version</Status>;
+  const activity = stageActivity(jobs, scene.id);
+  if (activity && isActive(activity)) {
+    const detail = activity.progress ? ` · ${progressDetail(activity.progress)}` : "…";
+    return <Status state="running">{`${activityText(activity)}${detail}`}</Status>;
+  }
+  if (activity) return <Status state="failed">{activityText(activity)}</Status>;
   const video = latest?.video;
-  if (!video) return <span className="meta">Not rendered</span>;
+  if (!video) return <Status state="none">Not rendered</Status>;
+  const rendered = video.profile ? `${video.profile} render` : "Rendered";
+  return <Status state={video.outdated ? "outdated" : "rendered"}>{video.outdated ? `${rendered} · outdated` : rendered}</Status>;
+}
+
+function Status({ state, children }: { state: StatusState; children: string }) {
   return (
-    <span className="meta">
-      {video.profile ? `${video.profile} render` : "Rendered"}
-      {video.outdated ? <span className="warning"> · outdated</span> : null}
+    <span className="meta status" data-state={state}>
+      {children}
     </span>
+  );
+}
+
+/** Stand-ins for the scene list while the first scan runs. */
+function SkeletonRows() {
+  return (
+    <ul className="skeleton" aria-busy="true" aria-label="Looking for scenes">
+      {[60, 44, 52].map((width) => (
+        <li key={width}>
+          <span style={{ width: `${width}%` }} />
+          <span style={{ width: `${width + 24}%` }} />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -138,7 +164,6 @@ function indexNote(index: SceneIndexStatus, count: number): string {
 }
 
 function emptyNote(index: SceneIndexStatus): string {
-  if (index.state === "indexing") return "Looking for scenes in the project's Python files…";
   if (index.state === "failed") return `Scenes could not be read: ${index.error?.message ?? "unknown error"}`;
   return "No scenes yet. A scene is a Python class that derives from a Manim Scene, e.g. DirectedScene.";
 }

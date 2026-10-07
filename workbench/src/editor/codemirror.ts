@@ -32,7 +32,8 @@ const selection = "color-mix(in srgb, var(--accent) 28%, transparent)";
 
 const theme = EditorView.theme({
   "&": { height: "100%", color: "var(--text)", backgroundColor: "var(--surface)", fontSize: "var(--text-sm)" },
-  "&.cm-focused": { outline: "2px solid var(--accent)", outlineOffset: "-2px" },
+  // A quiet frame: the caret and the active line already show where typing goes.
+  "&.cm-focused": { outline: "1px solid color-mix(in srgb, var(--accent) 50%, transparent)", outlineOffset: "-1px" },
   ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.6" },
   ".cm-content": { caretColor: "var(--text)" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text)" },

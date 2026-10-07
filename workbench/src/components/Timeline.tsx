@@ -1,6 +1,6 @@
-import { useSyncExternalStore, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from "react";
 import { formatTime } from "../model/format.ts";
-import { lanes, markAt } from "../model/timeline.ts";
+import { lanes, markAt, rulerTicks, tickLabel } from "../model/timeline.ts";
 import type { PlaybackController } from "../stage/playback.ts";
 
 const percent = (part: number, whole: number) => `${whole > 0 ? (part / whole) * 100 : 0}%`;
@@ -8,6 +8,7 @@ const percent = (part: number, whole: number) => `${whole > 0 ? (part / whole) *
 /** Transport and a scrubbable track of the render's beats and sections; the track is a slider. */
 export function Timeline({ playback }: { playback: PlaybackController }) {
   const { source, time, rate } = useSyncExternalStore(playback.subscribe, playback.getSnapshot);
+  const ticks = useMemo(() => rulerTicks(source?.duration ?? 0), [source]);
   if (!source) return null;
   const { duration, marks } = source;
   const current = markAt(marks, "beat", time) ?? markAt(marks, "section", time);
@@ -68,6 +69,13 @@ export function Timeline({ playback }: { playback: PlaybackController }) {
         }}
         onPointerMove={(event) => event.currentTarget.hasPointerCapture(event.pointerId) && seekTo(event)}
       >
+        <div className="ruler" aria-hidden="true">
+          {ticks.map(({ seconds, labelled }) => (
+            <span key={seconds} className="tick" data-labelled={labelled || undefined} style={{ left: percent(seconds, duration) }}>
+              {labelled ? <span>{tickLabel(seconds)}</span> : null}
+            </span>
+          ))}
+        </div>
         {lanes(marks).map((lane) => (
           <div key={lane.kind} className="lane" data-kind={lane.kind}>
             {lane.marks.map((mark) => (

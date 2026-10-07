@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { Toast } from "../store/reducer.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
+import { Icon } from "./Icon.tsx";
 
 const TOAST_MS = 8000;
 
@@ -24,8 +25,8 @@ function ToastItem({ toast }: { toast: Toast }) {
   return (
     <li className="card toast" data-tone="danger" role="alert">
       <p>{toast.message}</p>
-      <button type="button" aria-label="Dismiss" onClick={() => store.dismissToast(toast.id)}>
-        ×
+      <button type="button" className="quiet small icon" aria-label="Dismiss" onClick={() => store.dismissToast(toast.id)}>
+        <Icon name="close" />
       </button>
     </li>
   );

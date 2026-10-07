@@ -1,4 +1,5 @@
 import type { Artifact, JobOperation, JobSummary, OperationRequest, Progress, SceneId } from "../api/types.ts";
+import { formatTime } from "./format.ts";
 
 const OPERATION_LABELS: Record<JobOperation, string> = {
   doctor: "Doctor",
@@ -42,17 +43,20 @@ export function progressFraction(progress: Progress | null): number | null {
   return Math.min(Math.max(progress.current / progress.total, 0), 1);
 }
 
+/** `animate 40%`, or how far into the scene a render of unknown length got: `animate at 0:10.03`. */
+export function progressDetail(progress: Progress): string {
+  const fraction = progressFraction(progress);
+  if (fraction !== null) return `${progress.phase} ${Math.round(fraction * 100)}%`;
+  return progress.scene_seconds === null ? progress.phase : `${progress.phase} at ${formatTime(progress.scene_seconds)}`;
+}
+
 export function statusText(job: JobSummary): string {
   switch (job.status) {
     case "queued":
       return job.cancel_requested ? "Cancelling" : "Queued";
-    case "running": {
+    case "running":
       if (job.cancel_requested) return "Cancelling";
-      const progress = job.progress;
-      if (!progress) return "Running";
-      const fraction = progressFraction(progress);
-      return fraction === null ? `Running · ${progress.phase}` : `Running · ${progress.phase} ${Math.round(fraction * 100)}%`;
-    }
+      return job.progress ? `Running · ${progressDetail(job.progress)}` : "Running";
     case "succeeded":
       return job.cached ? "Done (cached)" : "Done";
     case "failed":
@@ -60,6 +64,34 @@ export function statusText(job: JobSummary): string {
     case "cancelled":
       return "Cancelled";
   }
+}
+
+/** The operations the stage starts for its scene. */
+const STAGE_OPERATIONS = new Set<JobOperation>(["render", "still", "frame", "contact_sheet", "qa", "export"]);
+
+const ACTIVITY: Partial<Record<JobOperation, string>> = {
+  render: "Rendering",
+  still: "Rendering the last frame",
+  frame: "Grabbing a frame",
+  contact_sheet: "Laying out a contact sheet",
+  qa: "Checking frames",
+  export: "Exporting",
+};
+
+/**
+ * What the stage reports for a scene: its newest stage job while it is
+ * queued or running, or when it failed and nothing has run for the scene since.
+ */
+export function stageActivity(jobs: readonly JobSummary[], sceneId: SceneId): JobSummary | null {
+  const newest = jobs.find((job) => job.scene_id === sceneId && STAGE_OPERATIONS.has(job.operation));
+  return newest && (isActive(newest) || newest.status === "failed") ? newest : null;
+}
+
+/** `Rendering · draft`, `Export failed`. */
+export function activityText(job: JobSummary): string {
+  if (job.status === "failed") return `${OPERATION_LABELS[job.operation]} failed`;
+  const detail = job.request.operation === "export" ? job.request.format ?? "zip" : job.profile;
+  return `${ACTIVITY[job.operation] ?? OPERATION_LABELS[job.operation]}${detail ? ` · ${detail}` : ""}`;
 }
 
 const DELIVERABLE_KINDS = new Set<Artifact["kind"]>(["archive", "video", "image", "contact_sheet"]);

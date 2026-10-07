@@ -1,6 +1,7 @@
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref, type RefObject } from "react";
+import { CodeSkeleton } from "../components/CodeSkeleton.tsx";
 import { TabList, tabId } from "../components/TabList.tsx";
 import { baseName } from "../model/format.ts";
 import type { WorkbenchStore } from "../store/store.ts";
@@ -91,7 +92,13 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
   useEffect(() => {
     const view = new EditorView({ parent: host.current!, state: EditorState.create({ extensions: baseExtensions }) });
     session.attach(portFor(view));
+    // A banner above the editor shrinks it; keep the line being typed on in view.
+    const resized = new ResizeObserver(() => {
+      if (view.hasFocus) view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) });
+    });
+    resized.observe(host.current!);
     return () => {
+      resized.disconnect();
       session.attach(null);
       view.destroy();
     };
@@ -148,6 +155,7 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
           Could not open {snapshot.openError.path}: {snapshot.openError.message}
         </p>
       ) : null}
+      {!active && snapshot.opening ? <CodeSkeleton label={`Opening ${snapshot.opening}`} /> : null}
       <div
         ref={host}
         className="code-host"

@@ -4,9 +4,18 @@ import { useDismiss } from "../hooks/useShortcuts.ts";
 import { deliverable, isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
 import { downloadUrl } from "../model/media.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
+import { Icon } from "./Icon.tsx";
 import { Progress } from "./Progress.tsx";
 
 const PAGE = 25;
+
+const DOT_STATES: Record<JobStatus, string> = {
+  queued: "running",
+  running: "running",
+  succeeded: "rendered",
+  failed: "failed",
+  cancelled: "none",
+};
 
 interface JobTrayProps {
   open: boolean;
@@ -32,19 +41,32 @@ export function JobTray({ open, onOpenChange, onLogs, onDiagnose }: JobTrayProps
       <p className="visually-hidden" aria-live="polite">
         {announcement}
       </p>
-      {open ? <TrayPanel jobs={jobs} onLogs={onLogs} onDiagnose={onDiagnose} /> : null}
+      {open ? <TrayPanel jobs={jobs} running={running} onClose={() => onOpenChange(false)} onLogs={onLogs} onDiagnose={onDiagnose} /> : null}
     </div>
   );
 }
 
-function TrayPanel({ jobs, onLogs, onDiagnose }: { jobs: readonly JobSummary[] } & Pick<JobTrayProps, "onLogs" | "onDiagnose">) {
+interface TrayPanelProps extends Pick<JobTrayProps, "onLogs" | "onDiagnose"> {
+  jobs: readonly JobSummary[];
+  running: number;
+  onClose: () => void;
+}
+
+function TrayPanel({ jobs, running, onClose, onLogs, onDiagnose }: TrayPanelProps) {
   const store = useStore();
   const hasOlder = useWorkbench((state) => state.jobsNextBefore !== null);
   const [shown, setShown] = useState(PAGE);
   const visible = jobs.slice(0, shown);
   return (
-    <section className="popover tray" id="job-tray" aria-label="Jobs">
-      {visible.length === 0 ? <p className="pane-note">No jobs yet.</p> : null}
+    <section className="popover tray" id="job-tray" aria-labelledby="job-tray-title">
+      <header className="row tray-header">
+        <h2 id="job-tray-title">Jobs</h2>
+        <span className="meta">{running > 0 ? `${running} active` : "None running"}</span>
+        <button type="button" className="quiet small icon" aria-label="Close" onClick={onClose}>
+          <Icon name="close" />
+        </button>
+      </header>
+      {visible.length === 0 ? <p className="pane-note">No jobs yet. Preview a scene to start one.</p> : null}
       <ul>
         {visible.map((job) => (
           <JobRow key={job.id} job={job} onLogs={onLogs} onDiagnose={onDiagnose} />
@@ -71,12 +93,16 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
   return (
     <li className="job" data-status={job.status}>
       <div className="row">
+        <span className="dot" data-state={DOT_STATES[job.status]} aria-hidden="true" />
         <span className="job-title">{title}</span>
-        <span className="meta job-status">{statusText(job)}</span>
+        <time className="meta" dateTime={job.created_at}>
+          {new Date(job.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </time>
       </div>
       {job.status === "running" ? <Progress fraction={progressFraction(job.progress)} label={`${title} progress`} /> : null}
       {job.error && job.status === "failed" ? <p className="meta danger clamp">{job.error.message}</p> : null}
-      <div className="row">
+      <div className="row job-actions">
+        <span className="meta job-status">{statusText(job)}</span>
         <button type="button" className="quiet small" onClick={() => onLogs(job.id)}>
           Logs
         </button>
@@ -96,13 +122,11 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
           </button>
         ) : null}
         {download ? (
-          <a className="button quiet small" href={downloadUrl(download)} download>
+          <a className="button small" href={downloadUrl(download)} download>
+            <Icon name="export" />
             Download
           </a>
         ) : null}
-        <time className="meta" dateTime={job.created_at}>
-          {new Date(job.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-        </time>
       </div>
     </li>
   );

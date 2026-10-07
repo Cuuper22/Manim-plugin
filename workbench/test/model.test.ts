@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Artifact, Scene, SceneLatest, TimelineMark } from "../src/api/types.ts";
+import type { Artifact, Finding, Scene, SceneLatest, TimelineMark } from "../src/api/types.ts";
 import { planAction, planExport } from "../src/model/actions.ts";
-import { bySeverity, codeTarget, fromDiagnosis } from "../src/model/findings.ts";
+import { bySeverity, cleanQa, codeTarget, fromDiagnosis, fromWorkspace } from "../src/model/findings.ts";
 import { formatTime } from "../src/model/format.ts";
-import { deliverable, jobTitle, retryRequest, statusText } from "../src/model/jobs.ts";
+import { activityText, deliverable, jobTitle, retryRequest, stageActivity, statusText } from "../src/model/jobs.ts";
 import { downloadUrl, playback } from "../src/model/media.ts";
 import { commandFor, type FocusZone, type KeyInput } from "../src/model/shortcuts.ts";
-import { lanes, markAt, markStep, shuttleRate, stepFrames } from "../src/model/timeline.ts";
+import { lanes, markAt, markStep, rulerTicks, shuttleRate, stepFrames, tickLabel } from "../src/model/timeline.ts";
 import { job, progress } from "./fixtures.ts";
 
 const scene: Scene = {
@@ -103,6 +103,17 @@ test("the timeline steps between beats, frames and shuttle speeds", () => {
   assert.equal(shuttleRate(-2, 0), 0);
 });
 
+test("the ruler labels at most ten whole steps and halves them", () => {
+  const short = rulerTicks(8.6);
+  assert.deepEqual(short.filter((tick) => tick.labelled).map((tick) => tick.seconds), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(short[0]?.seconds, 0.5);
+  assert.equal(short.length, 17, "nothing at 0 or past the end");
+  assert.deepEqual(rulerTicks(38.1).filter((tick) => tick.labelled).map((tick) => tick.seconds), [5, 10, 15, 20, 25, 30, 35]);
+  assert.deepEqual(rulerTicks(0), []);
+  assert.equal(tickLabel(2.5), "2.5s");
+  assert.equal(tickLabel(90), "1:30");
+});
+
 test("only browser codecs play; GIFs show as images", () => {
   const latest = (media: Partial<Artifact["media"] & object>) => video(media);
   assert.equal(playback(latest({}), false), "video");
@@ -124,11 +135,71 @@ test("findings group by severity and jump only to project files", () => {
     { sceneId: "scenes.py#A", outdated: false },
   );
   assert.deepEqual(bySeverity(diagnosed).map((group) => group.severity), ["error", "info"]);
+  assert.equal(bySeverity(diagnosed)[0]?.cards[0]?.key, "diagnose:j9:1");
   assert.equal(diagnosed[1]?.key, "diagnose:j9:1");
   assert.deepEqual(codeTarget({ file: "scenes.py", line: 3, column: 4 }), { path: "scenes.py", line: 3 });
   assert.equal(codeTarget({ file: "/usr/lib/python3/site.py", line: 3, column: null }), null);
   assert.equal(codeTarget({ file: "C:\\x.py", line: 3, column: null }), null);
   assert.equal(codeTarget(null), null);
+});
+
+function qaFinding(id: string, at: number | null, overrides: Partial<Finding> = {}): Finding {
+  return {
+    id,
+    code: "safe_area",
+    severity: "warning",
+    message: "Content extends outside the safe area.",
+    hint: null,
+    location: { file: "scenes.py", line: 14, column: null },
+    at_seconds: at,
+    beat: "hook",
+    frame: null,
+    source: "qa",
+    scene_id: scene.id,
+    job_id: "qa1",
+    outdated: false,
+    frame_url: at === null ? null : `/api/files/f-${at}.png`,
+    ...overrides,
+  };
+}
+
+test("a finding repeated across frames is one card listing its moments", () => {
+  const findings = [
+    qaFinding("a", 2.5),
+    qaFinding("b", 0.5),
+    qaFinding("c", 1.5, { location: { file: "scenes.py", line: 20, column: null } }),
+    qaFinding("d", null, { code: "blank_frame", severity: "error", message: "Blank." }),
+  ];
+  const groups = bySeverity(fromWorkspace(findings));
+  assert.deepEqual(groups.map((group) => [group.severity, group.cards.length]), [["error", 1], ["warning", 2]]);
+  const repeated = groups[1]!.cards[0]!;
+  assert.equal(repeated.key, "a");
+  assert.deepEqual(repeated.moments, [
+    { at_seconds: 0.5, frame_url: "/api/files/f-0.5.png" },
+    { at_seconds: 2.5, frame_url: "/api/files/f-2.5.png" },
+  ]);
+  assert.deepEqual(groups[0]!.cards[0]!.moments, []);
+});
+
+test("a passing QA is reported only while it is the scene's newest and found nothing", () => {
+  const qa = job({ id: "qa1", sequence: 3, operation: "qa", status: "succeeded", request: { operation: "qa", source: { job_id: "j1" } }, scene_id: scene.id });
+  assert.equal(cleanQa([qa], [], scene.id)?.id, "qa1");
+  assert.equal(cleanQa([qa], fromWorkspace([qaFinding("a", 1)]), scene.id), null);
+  assert.equal(cleanQa([{ ...qa, status: "running" }], [], scene.id), null);
+  assert.equal(cleanQa([qa], [], "scenes.py#Other"), null);
+});
+
+test("the stage reports its scene's newest job while active or failed", () => {
+  const sceneId = "scenes/main.py#Recurrence";
+  const failed = job({ id: "r1", sequence: 1, status: "failed" });
+  assert.equal(stageActivity([failed], sceneId)?.id, "r1");
+  assert.equal(activityText(failed), "Render failed");
+  const running = job({ id: "s2", sequence: 2, operation: "still", status: "running", profile: "preview" });
+  assert.equal(stageActivity([running, failed], sceneId)?.id, "s2");
+  assert.equal(activityText(running), "Rendering the last frame · preview");
+  assert.equal(stageActivity([{ ...running, status: "succeeded" }, failed], sceneId), null, "a newer success clears the failure");
+  const doctor = job({ id: "d3", sequence: 3, operation: "doctor", status: "running", scene_id: null });
+  assert.equal(stageActivity([doctor, failed], sceneId)?.id, "r1");
 });
 
 test("jobs read as one line and retry only what HTTP accepts", () => {
@@ -139,6 +210,8 @@ test("jobs read as one line and retry only what HTTP accepts", () => {
   );
   assert.equal(statusText(job({ status: "running", progress: progress(5, "2026-10-07T10:00:00.000Z") })), "Running · animate 50%");
   assert.equal(statusText(job({ status: "running", cancel_requested: true })), "Cancelling");
+  const open = { ...progress(4, "2026-10-07T10:00:00.000Z"), total: null, scene_seconds: 10.033 };
+  assert.equal(statusText(job({ status: "running", progress: open })), "Running · animate at 0:10.03");
   assert.equal(retryRequest(job({ status: "succeeded" })), null);
   assert.deepEqual(retryRequest(job({ status: "failed" })), job().request);
   assert.equal(

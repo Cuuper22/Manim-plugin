@@ -7,6 +7,33 @@ export interface Lane {
   marks: TimelineMark[];
 }
 
+export interface Tick {
+  seconds: number;
+  /** Labelled ticks fall on whole steps; the others halve them. */
+  labelled: boolean;
+}
+
+const RULER_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+const MAX_RULER_LABELS = 10;
+
+/** A ruler for the track: labelled ticks at the finest step that keeps at most ten labels, unlabelled ones between. */
+export function rulerTicks(duration: number): Tick[] {
+  if (!(duration > 0)) return [];
+  const step = RULER_STEPS.find((candidate) => duration / candidate <= MAX_RULER_LABELS) ?? RULER_STEPS.at(-1)!;
+  const ticks: Tick[] = [];
+  for (let index = 1; index * (step / 2) < duration - 1e-6; index += 1) {
+    ticks.push({ seconds: index * (step / 2), labelled: index % 2 === 0 });
+  }
+  return ticks;
+}
+
+/** `4s`, `1:30`. */
+export function tickLabel(seconds: number): string {
+  if (seconds < 60) return `${Number(seconds.toFixed(1))}s`;
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
 /** A previous-mark step from less than this far past a mark's start goes one mark further back. */
 const STEP_BACK_SLACK_SECONDS = 0.25;
 const MAX_SHUTTLE_RATE = 4;

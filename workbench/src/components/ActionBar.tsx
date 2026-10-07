@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ExportFormat } from "../api/types.ts";
 import type { StageAction } from "../model/actions.ts";
 import { useDismiss } from "../hooks/useShortcuts.ts";
+import { Icon, type IconName } from "./Icon.tsx";
 
 export interface ActionState {
   busy: boolean;
@@ -19,13 +20,25 @@ interface ActionBarProps {
   onExport: (format: ExportFormat) => void;
 }
 
-const ACTIONS: readonly { action: StageAction; label: string; keys?: string }[] = [
-  { action: "preview", label: "Preview", keys: "Meta+Enter Control+Enter" },
-  { action: "render", label: "Render" },
-  { action: "still", label: "Still" },
-  { action: "frame", label: "Frame at playhead" },
-  { action: "contact_sheet", label: "Contact sheet" },
-  { action: "qa", label: "QA" },
+interface ActionSpec {
+  action: StageAction;
+  label: string;
+  icon: IconName;
+  keys?: string;
+}
+
+/** Make the scene, look at frames of it, check it; Export joins the last group. */
+const GROUPS: readonly (readonly ActionSpec[])[] = [
+  [
+    { action: "preview", label: "Preview", icon: "play", keys: "Meta+Enter Control+Enter" },
+    { action: "render", label: "Render", icon: "render" },
+  ],
+  [
+    { action: "still", label: "Still", icon: "still" },
+    { action: "frame", label: "Frame at playhead", icon: "frame" },
+    { action: "contact_sheet", label: "Contact sheet", icon: "sheet" },
+  ],
+  [{ action: "qa", label: "QA", icon: "qa" }],
 ];
 
 const EXPORTS: readonly { format: ExportFormat; label: string }[] = [
@@ -39,24 +52,30 @@ const EXPORTS: readonly { format: ExportFormat; label: string }[] = [
 export function ActionBar({ reason, state, exportReason, exportState, onRun, onExport }: ActionBarProps) {
   return (
     <div className="row actions" role="group" aria-label="Scene actions">
-      {ACTIONS.map(({ action, label, keys }) => (
-        <ActionButton
-          key={action}
-          label={label}
-          primary={action === "preview"}
-          keys={keys}
-          reason={reason(action)}
-          state={state(action)}
-          onClick={() => onRun(action)}
-        />
+      {GROUPS.map((group, index) => (
+        <div key={index} className="row action-group">
+          {group.map(({ action, label, icon, keys }) => (
+            <ActionButton
+              key={action}
+              label={label}
+              icon={icon}
+              primary={action === "preview"}
+              keys={keys}
+              reason={reason(action)}
+              state={state(action)}
+              onClick={() => onRun(action)}
+            />
+          ))}
+          {index === GROUPS.length - 1 ? <ExportMenu reason={exportReason} state={exportState} onExport={onExport} /> : null}
+        </div>
       ))}
-      <ExportMenu reason={exportReason} state={exportState} onExport={onExport} />
     </div>
   );
 }
 
 interface ActionButtonProps {
   label: string;
+  icon: IconName;
   primary?: boolean;
   keys?: string;
   reason: string | null;
@@ -64,7 +83,7 @@ interface ActionButtonProps {
   onClick: () => void;
 }
 
-function ActionButton({ label, primary, keys, reason, state, onClick }: ActionButtonProps) {
+function ActionButton({ label, icon, primary, keys, reason, state, onClick }: ActionButtonProps) {
   return (
     <button
       type="button"
@@ -75,6 +94,7 @@ function ActionButton({ label, primary, keys, reason, state, onClick }: ActionBu
       title={reason ?? undefined}
       onClick={() => reason === null && onClick()}
     >
+      <Icon name={icon} />
       {label}
       {state.busy ? <BusyBar fraction={state.fraction} /> : null}
     </button>
@@ -133,10 +153,9 @@ function ExportMenu({ reason, state, onExport }: ExportMenuProps) {
         aria-busy={state.busy || undefined}
         onClick={() => setOpen((value) => !value)}
       >
+        <Icon name="export" />
         Export
-        <svg className="stroke" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M4 6l4 4 4-4" />
-        </svg>
+        <Icon name="chevron" />
         {state.busy ? <BusyBar fraction={state.fraction} /> : null}
       </button>
       {open ? (

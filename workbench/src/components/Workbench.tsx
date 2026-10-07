@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ExportFormat, JobId, JobSummary, Scene, SceneId, SceneLatest } from "../api/types.ts";
 import type { EditorApi, OpenRequest } from "../editor/CodeEditor.tsx";
 import { useNewestDiagnosis } from "../hooks/useDiagnosis.ts";
@@ -7,8 +7,8 @@ import { useSelection } from "../hooks/useSelection.ts";
 import { useShortcuts } from "../hooks/useShortcuts.ts";
 import { useTheme } from "../hooks/useTheme.ts";
 import { planAction, planExport, type StageAction } from "../model/actions.ts";
-import type { CodeTarget } from "../model/findings.ts";
-import { isActive, progressFraction } from "../model/jobs.ts";
+import { bySeverity, fromWorkspace, type CodeTarget } from "../model/findings.ts";
+import { isActive, progressFraction, stageActivity } from "../model/jobs.ts";
 import { PlaybackController } from "../stage/playback.ts";
 import type { Workspace } from "../store/reducer.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -50,6 +50,13 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
   const video = sceneLatest?.video ?? null;
   const { theme, next: nextTheme } = useTheme();
   const diagnosis = useNewestDiagnosis();
+  const shownFindings = useMemo(() => [...fromWorkspace(findings), ...(diagnosis?.findings ?? [])], [findings, diagnosis]);
+  const findingCount = useMemo(
+    () => bySeverity(shownFindings).reduce((count, group) => count + group.cards.length, 0),
+    [shownFindings],
+  );
+  const activity = scene ? stageActivity(jobs, scene.id) : null;
+  const selectedProfile = profiles.find((candidate) => candidate.name === profile);
 
   const [playback] = useState(() => new PlaybackController());
   const [view, setView] = useState<StageView>(() => firstView(sceneLatest));
@@ -263,6 +270,10 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
         <Stage
           scene={scene}
           latest={sceneLatest}
+          aspect={selectedProfile ? selectedProfile.width / selectedProfile.height : 16 / 9}
+          activity={activity}
+          onLogs={setLogsJob}
+          onDiagnose={diagnose}
           view={view}
           onView={setView}
           playback={playback}
@@ -277,12 +288,12 @@ export function Workbench({ workspace, reconnecting }: { workspace: Workspace; r
           tab={tab}
           onTab={setTab}
           active={region === "inspector"}
-          findingCount={findings.length + (diagnosis?.findings.length ?? 0)}
+          findingCount={findingCount}
           editor={{ request: openRequest, api: editor, onPreview: () => void run("preview") }}
         >
           <FindingsPane
-            findings={findings}
-            diagnosis={diagnosis}
+            findings={shownFindings}
+            diagnosed={diagnosis?.subject ?? null}
             doctor={workspace.doctor}
             selected={scene}
             onJump={(target) => reveal(target, true)}
