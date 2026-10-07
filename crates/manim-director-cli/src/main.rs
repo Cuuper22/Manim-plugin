@@ -2,7 +2,7 @@ mod args;
 mod output;
 mod serve;
 
-use args::{Cli, Command, EditArgs, SourceArgs, TargetArgs};
+use args::{Cli, Command, EditArgs, SourceArgs};
 use clap::Parser;
 use manim_director_core::{
     find_project, summary, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams,
@@ -157,75 +157,38 @@ async fn run(cli: Cli) -> Outcome {
             };
             let request = match command {
                 Command::Doctor => OperationRequest::Doctor(DoctorParams {}),
-                Command::Render(args) => {
-                    let TargetParts {
-                        scene,
-                        file,
-                        profile,
-                        fresh,
-                    } = paths.target(args.target)?;
-                    OperationRequest::Render(RenderParams {
-                        scene,
-                        file,
-                        profile,
-                        sections: args.sections,
-                        fresh,
-                    })
-                }
-                Command::Still(args) => {
-                    let TargetParts {
-                        scene,
-                        file,
-                        profile,
-                        fresh,
-                    } = paths.target(args.target)?;
-                    OperationRequest::Still(StillParams {
-                        scene,
-                        file,
-                        profile,
-                        fresh,
-                    })
-                }
-                Command::Frame(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::Frame(FrameParams {
-                        at_seconds: args.at_seconds,
-                        source,
-                        scene,
-                        profile,
-                    })
-                }
-                Command::ContactSheet(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::ContactSheet(ContactSheetParams {
-                        source,
-                        scene,
-                        profile,
-                        count: args.count,
-                        columns: args.columns,
-                    })
-                }
-                Command::Qa(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::Qa(QaParams {
-                        source,
-                        scene,
-                        profile,
-                        frames: args.frames,
-                    })
-                }
+                Command::Render(args) => OperationRequest::Render(RenderParams {
+                    file: paths.optional(args.target.file)?,
+                    scene: args.target.scene,
+                    profile: args.target.profile,
+                    sections: args.sections,
+                    fresh: args.target.fresh,
+                }),
+                Command::Still(args) => OperationRequest::Still(StillParams {
+                    file: paths.optional(args.target.file)?,
+                    scene: args.target.scene,
+                    profile: args.target.profile,
+                    fresh: args.target.fresh,
+                }),
+                Command::Frame(args) => OperationRequest::Frame(FrameParams {
+                    at_seconds: args.at_seconds,
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                }),
+                Command::ContactSheet(args) => OperationRequest::ContactSheet(ContactSheetParams {
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                    count: args.count,
+                    columns: args.columns,
+                }),
+                Command::Qa(args) => OperationRequest::Qa(QaParams {
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                    frames: args.frames,
+                }),
                 Command::Diagnose(args) => {
                     let text = match args.text_file {
                         Some(path) => Some(read_arg("text_file", &cwd.join(path))?),
@@ -247,7 +210,7 @@ async fn run(cli: Cli) -> Outcome {
                     path: paths.relative(&args.path)?,
                     shift_seconds: args.shift_seconds,
                     scale: args.scale,
-                    output: args.output.map(|path| paths.relative(&path)).transpose()?,
+                    output: paths.optional(args.output)?,
                 }),
                 Command::Ingest(args) => {
                     if args.ids.len() > args.paths.len() {
@@ -270,22 +233,15 @@ async fn run(cli: Cli) -> Outcome {
                         force: args.force,
                     })
                 }
-                Command::Export(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::Export(ExportParams {
-                        format: args.format,
-                        source,
-                        scene,
-                        profile,
-                        output: args.output.map(|path| paths.relative(&path)).transpose()?,
-                        gif_fps: args.gif_fps,
-                        gif_width: args.gif_width,
-                    })
-                }
+                Command::Export(args) => OperationRequest::Export(ExportParams {
+                    format: args.format,
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                    output: paths.optional(args.output)?,
+                    gif_fps: args.gif_fps,
+                    gif_width: args.gif_width,
+                }),
                 Command::Inspect => {
                     let scheduler = start_scheduler(&root, EngineMode::Cli).await?;
                     let summary = inspect(&scheduler).await;
@@ -295,7 +251,7 @@ async fn run(cli: Cli) -> Outcome {
                 }
                 Command::Edit(args) => return edit(paths, args, machine).await,
                 Command::Serve(args) => {
-                    serve::serve(&root, args.server, machine).await?;
+                    serve::serve(&root, args, machine).await?;
                     return Ok(ExitCode::SUCCESS);
                 }
                 Command::Open(args) => {
@@ -342,43 +298,21 @@ struct CliPaths<'a> {
     cwd: &'a Path,
 }
 
-struct SourceParts {
-    source: Option<SourceRef>,
-    scene: Option<String>,
-    profile: Option<String>,
-}
-
-struct TargetParts {
-    scene: Option<String>,
-    file: Option<String>,
-    profile: Option<String>,
-    fresh: bool,
-}
-
 impl CliPaths<'_> {
     fn relative(&self, path: &Path) -> Result<String, EngineError> {
         cli_project_path(self.root, self.cwd, path)
     }
 
-    fn target(&self, args: TargetArgs) -> Result<TargetParts, EngineError> {
-        Ok(TargetParts {
-            scene: args.scene,
-            file: args.file.map(|file| self.relative(&file)).transpose()?,
-            profile: args.profile,
-            fresh: args.fresh,
-        })
+    fn optional(&self, path: Option<PathBuf>) -> Result<Option<String>, EngineError> {
+        path.map(|path| self.relative(&path)).transpose()
     }
 
-    fn source(&self, args: SourceArgs) -> Result<SourceParts, EngineError> {
-        let source = match (args.job, args.path) {
+    /// `--job` or `--path`; neither means the latest render.
+    fn source(&self, args: &SourceArgs) -> Result<Option<SourceRef>, EngineError> {
+        Ok(match (args.job, &args.path) {
             (Some(id), _) => Some(SourceRef::JobId(id)),
-            (None, Some(path)) => Some(SourceRef::Path(self.relative(&path)?)),
+            (None, Some(path)) => Some(SourceRef::Path(self.relative(path)?)),
             (None, None) => None,
-        };
-        Ok(SourceParts {
-            source,
-            scene: args.scene,
-            profile: args.profile,
         })
     }
 }

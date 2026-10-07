@@ -119,10 +119,10 @@ impl Default for ContactSheetParams {
     }
 }
 
-fn default_sheet_count() -> u8 {
+pub fn default_sheet_count() -> u8 {
     6
 }
-fn default_sheet_columns() -> u8 {
+pub fn default_sheet_columns() -> u8 {
     3
 }
 
@@ -150,7 +150,7 @@ impl Default for QaParams {
     }
 }
 
-fn default_qa_frames() -> u8 {
+pub fn default_qa_frames() -> u8 {
     8
 }
 
@@ -178,10 +178,10 @@ pub struct ValidateMathParams {
     pub seed: Option<u64>,
 }
 
-fn default_samples() -> u32 {
+pub fn default_samples() -> u32 {
     200
 }
-fn default_tolerance() -> f64 {
+pub fn default_tolerance() -> f64 {
     1e-9
 }
 
@@ -197,7 +197,7 @@ pub struct CaptionsParams {
     pub output: Option<String>,
 }
 
-fn default_scale() -> f64 {
+pub fn default_scale() -> f64 {
     1.0
 }
 
@@ -257,7 +257,7 @@ impl Default for ExportParams {
     }
 }
 
-fn default_export_format() -> ExportFormat {
+pub fn default_export_format() -> ExportFormat {
     ExportFormat::Zip
 }
 
