@@ -1,0 +1,25 @@
+version: 1
+project:
+  name: {{name}}
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: TangentSlope
+theme: {{theme}}
+storyboard:
+  - id: curve
+    intent: introduce
+    audience_question: How steep is a curve at a single point?
+    takeaway: Steepness at a point needs a definition.
+  - id: secant
+    intent: explain
+    audience_question: What happens to the secant slope as h shrinks?
+    takeaway: Secant slopes approach the tangent slope, 2 at x = 1.
+  - id: limit
+    intent: prove
+    audience_question: What is the slope at every x?
+    takeaway: The difference quotient tends to 2x.
+  - id: derivative
+    intent: recap
+    audience_question: What do all those slopes form?
+    takeaway: A new function, the derivative f'(x) = 2x.

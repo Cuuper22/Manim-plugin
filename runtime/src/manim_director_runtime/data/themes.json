@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "themes": [
+    {
+      "name": "midnight",
+      "fonts": ["Inter", "Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
+      "colors": {
+        "background": "#101522",
+        "foreground": "#ECEFF5",
+        "primary": "#81ABFD",
+        "secondary": "#FCB835",
+        "accent": "#E7725B",
+        "muted": "#8C95A8",
+        "success": "#6AEEA6"
+      }
+    },
+    {
+      "name": "paper",
+      "fonts": ["Latin Modern Roman", "CMU Serif", "C059", "Century Schoolbook", "Georgia", "DejaVu Serif"],
+      "colors": {
+        "background": "#FBF9F4",
+        "foreground": "#1B2130",
+        "primary": "#154DB3",
+        "secondary": "#9F620E",
+        "accent": "#900C13",
+        "muted": "#646C79",
+        "success": "#25743F"
+      }
+    },
+    {
+      "name": "chalkboard",
+      "fonts": ["Inter", "Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
+      "colors": {
+        "background": "#1E2B27",
+        "foreground": "#F2F0E8",
+        "primary": "#8BB6E8",
+        "secondary": "#E8B45E",
+        "accent": "#F0907C",
+        "muted": "#9AA7A1",
+        "success": "#8DE8AE"
+      }
+    },
+    {
+      "name": "contrast",
+      "fonts": ["Inter", "Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
+      "colors": {
+        "background": "#000000",
+        "foreground": "#FFFFFF",
+        "primary": "#6FB4FF",
+        "secondary": "#FFB01F",
+        "accent": "#FF6A5C",
+        "muted": "#B0B0B0",
+        "success": "#6FE3A0"
+      }
+    }
+  ]
+}

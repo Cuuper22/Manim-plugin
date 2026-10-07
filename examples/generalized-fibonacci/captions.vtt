@@ -1,22 +1,36 @@
 WEBVTT
 
-00:00:00.000 --> 00:00:04.100
-Fibonacci is one point in a universe of two-step recurrences.
+hook
+00:00:00.000 --> 00:00:04.300
+Fibonacci is one member of a
+whole family of two-step rules.
 
-00:00:04.100 --> 00:00:09.600
-Two coefficients and two seeds can produce growth or oscillation.
+family
+00:00:04.300 --> 00:00:08.600
+Other coefficients and seeds give
+Lucas, Pell, even an oscillator.
 
-00:00:09.600 --> 00:00:15.800
-The plotted terms expose how rules and seeds shape each trajectory.
+data
+00:00:08.600 --> 00:00:12.900
+The recorded values show it:
+three sequences grow, one cycles.
 
-00:00:15.800 --> 00:00:20.500
-A companion matrix advances the entire two-number state.
+state-space
+00:00:12.900 --> 00:00:18.300
+Stack two neighbors into a state,
+and one matrix, C, moves it forward.
 
-00:00:20.500 --> 00:00:26.200
-Characteristic roots usually control the long-run behavior.
+roots
+00:00:18.300 --> 00:00:25.500
+The eigenvalues of C are its roots, and
+the larger one usually sets the growth.
 
-00:00:26.200 --> 00:00:30.700
-When the roots merge, a linear factor in n appears.
+edge-case
+00:00:25.500 --> 00:00:32.700
+When the two roots collide, the
+solution gains a factor linear in n.
 
-00:00:30.700 --> 00:00:34.900
-Coefficients choose the machine; seeds choose the start.
+recap
+00:00:32.700 --> 00:00:38.100
+Coefficients pick the rule, seeds
+the start, and roots the long run.

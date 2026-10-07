@@ -1,50 +1,28 @@
-from __future__ import annotations
+"""Entry point: `python -P -m manim_director_runtime bridge [--preload]`."""
 
-import argparse
-import json
-import sys
+import os
 
-from .protocol import handle_request, serve
+# Before anything can write to stdout: frames go to a private copy of fd 1, and fd 1
+# itself becomes stderr, so print(), Manim's console and C libraries never corrupt them.
+_PROTOCOL_FD = os.dup(1)
+os.dup2(2, 1)
+
+import argparse  # noqa: E402
+import sys  # noqa: E402
+
+from .protocol import run_bridge  # noqa: E402
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="manim-director-runtime", description="Manim Director JSONL runtime bridge")
-    subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("bridge", help="Read JSONL requests from standard input")
-    call_parser = subparsers.add_parser("call", help="Run one bridge method and print its JSON messages")
-    call_parser.add_argument("method")
-    call_parser.add_argument("--params", default="{}", help="JSON object passed as params")
-    ingest_parser = subparsers.add_parser("ingest", help="Copy and summarize local sources into a project manifest")
-    ingest_parser.add_argument("paths", nargs="+")
-    ingest_parser.add_argument("--project-root", default=".")
-    ingest_parser.add_argument("--destination-dir", default="sources")
-    ingest_parser.add_argument("--manifest", default="sources/manifest.json")
-    ingest_parser.add_argument("--summary-chars", type=int, default=2000)
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m manim_director_runtime")
+    commands = parser.add_subparsers(dest="command", required=True)
+    bridge = commands.add_parser("bridge", help="serve one request over the JSONL bridge")
+    bridge.add_argument(
+        "--preload", action="store_true", help="import Manim before signalling ready"
+    )
     args = parser.parse_args(argv)
-    if args.command in {None, "bridge"}:
-        return serve()
-    method = args.command
-    if args.command == "call":
-        method = args.method
-        try:
-            params = json.loads(args.params)
-        except json.JSONDecodeError as exc:
-            parser.error(f"--params is not valid JSON: {exc}")
-        if not isinstance(params, dict):
-            parser.error("--params must decode to a JSON object")
-    else:
-        params = {
-            "project_root": args.project_root, "paths": args.paths,
-            "destination_dir": args.destination_dir, "manifest": args.manifest,
-            "summary_chars": args.summary_chars,
-        }
-
-    def write(message: dict) -> None:
-        print(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
-
-    handle_request({"request_id": "cli", "method": method, "params": params}, write)
-    return 0
+    run_bridge(_PROTOCOL_FD, preload=args.preload, stdin=sys.stdin.buffer)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

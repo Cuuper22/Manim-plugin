@@ -1,323 +1,373 @@
+"""The `render` and `still` operations: Manim runs in-process inside the bridge worker.
+
+Cancellation needs no cooperation: the engine kills the worker's process group, which also
+takes down any LaTeX or encoder children Manim started.
+"""
+
 from __future__ import annotations
 
-import os
-import re
+import ast
+import configparser
+import importlib.util
+import json
 import shutil
-import time
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
-from .diagnostics import diagnose_text
-from .errors import DirectorError
-from .inspection import inspect_file
-from .util import Emit, confined_path, noop_emit, project_root, python_executable, run_command
+from . import timeline
+from .diagnostics import exception_findings
+from .errors import DirectorError, dependency_missing, io_error
+from .inspection import ParsedFile, scene_class_names
+from .jsonio import write_json
+from .model import ArtifactKind, RuntimeArtifact, SceneRef
+from .paths import ensure_dir, slug
+from .tasks import RenderSettings, RenderTask, StillTask
+
+if TYPE_CHECKING:
+    from .protocol import Context
+
+Stage = Literal["setup", "import", "construct", "write"]
+_TRACEBACK_CHARS = 16 * 1024
 
 
 @dataclass(frozen=True, slots=True)
-class RenderProfile:
+class RenderResult:
+    scene: SceneRef
+    duration_seconds: float
+    animations: int
+    artifacts: list[RuntimeArtifact]
+
+
+@dataclass(frozen=True, slots=True)
+class StillResult:
+    scene: SceneRef
+    artifacts: list[RuntimeArtifact]
+
+
+@dataclass(frozen=True, slots=True)
+class SceneTarget:
     name: str
-    quality: str
-    width: int
-    height: int
-    fps: int
+    path: Path
 
 
-PROFILES = {
-    "draft": RenderProfile("draft", "l", 854, 480, 15),
-    "preview": RenderProfile("preview", "m", 1280, 720, 30),
-    "production": RenderProfile("production", "h", 1920, 1080, 60),
-    "ultra": RenderProfile("ultra", "k", 3840, 2160, 60),
-}
+@dataclass(slots=True)
+class _Run:
+    """What a finished in-process render left behind."""
 
-FORMATS = {"mp4", "mov", "webm", "gif", "png"}
-RENDERERS = {"cairo", "opengl"}
-
-
-def _manim_prefix(params: Mapping[str, Any]) -> list[str]:
-    explicit = params.get("manim_executable")
-    if explicit:
-        if isinstance(explicit, (list, tuple)):
-            if not explicit or not all(isinstance(part, str) and part for part in explicit):
-                raise DirectorError("invalid_executable", "manim_executable list must contain non-empty strings")
-            return list(explicit)
-        return [str(explicit)]
-    executable = shutil.which("manim")
-    return [executable] if executable else [python_executable(), "-m", "manim"]
+    scene: Any
+    recorder: timeline.BeatRecorder
+    stage: Stage = "setup"
+    plays: int = 0
+    scene_seconds: float = 0.0
 
 
-def _profile(params: Mapping[str, Any], default: str = "preview") -> RenderProfile:
-    name = str(params.get("profile", default))
-    if name == "custom" or (name not in PROFILES and all(key in params for key in ("width", "height", "fps"))):
-        try:
-            width, height, fps = int(params["width"]), int(params["height"]), int(params["fps"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise DirectorError("invalid_profile", "Custom profile requires integer width, height, and fps") from exc
-        if not (16 <= width <= 16384 and 16 <= height <= 16384 and 1 <= fps <= 240):
-            raise DirectorError("invalid_profile", "Custom dimensions or fps are outside supported bounds")
-        return RenderProfile(name, "", width, height, fps)
-    try:
-        base = PROFILES[name]
-    except KeyError as exc:
-        raise DirectorError("invalid_profile", f"Unknown render profile: {name}", {"available": sorted(PROFILES) + ["custom"]}) from exc
-    width = int(params.get("width", base.width))
-    height = int(params.get("height", base.height))
-    fps = int(params.get("fps", base.fps))
-    if width != base.width or height != base.height or fps != base.fps:
-        return RenderProfile(name, "", width, height, fps)
-    return base
-
-
-def build_render_command(params: Mapping[str, Any], *, mode: str = "render") -> tuple[list[str], dict[str, Any]]:
-    root = project_root(params)
-    scene_file = confined_path(root, str(params.get("scene_file", params.get("path", "scenes/main.py"))), must_exist=True)
-    if scene_file.suffix != ".py":
-        raise DirectorError("invalid_scene_file", "Manim scene file must end in .py")
-    report = inspect_file(scene_file)
-    if not report["valid_python"]:
-        raise DirectorError("invalid_python", "Scene file contains a syntax error", report["syntax_error"] or {})
-    requested_scenes = params.get("scenes")
-    if requested_scenes is None:
-        requested_scenes = [params["scene"]] if params.get("scene") else []
-    if isinstance(requested_scenes, str):
-        requested_scenes = [requested_scenes]
-    requested_scenes = [str(x) for x in requested_scenes]
-    discovered = {scene["name"] for scene in report["scenes"]}
-    missing = sorted(set(requested_scenes) - discovered)
-    if missing:
-        raise DirectorError("scene_not_found", "Requested scene was not found", {"missing": missing, "available": sorted(discovered)})
-    if not requested_scenes and len(discovered) == 1:
-        requested_scenes = sorted(discovered)
-    if not requested_scenes and not bool(params.get("all_scenes", False)):
-        raise DirectorError("scene_required", "Specify a scene or set all_scenes=true", {"available": sorted(discovered)})
-
-    renderer = str(params.get("renderer", "cairo"))
-    if renderer not in RENDERERS:
-        raise DirectorError("invalid_renderer", f"Unsupported renderer: {renderer}", {"available": sorted(RENDERERS)})
-    transparent = bool(params.get("transparent", False))
-    fmt = str(params.get("format", "mov" if transparent else "mp4")).lower()
-    if fmt not in FORMATS:
-        raise DirectorError("invalid_format", f"Unsupported output format: {fmt}", {"available": sorted(FORMATS)})
-    if transparent and fmt in {"mp4", "gif"}:
-        raise DirectorError("alpha_unsupported", f"{fmt} does not preserve a full alpha channel; use mov or webm")
-    profile = _profile(params, "draft" if mode in {"preview", "still"} else "production")
-    media_dir = confined_path(root, str(params.get("media_dir", ".manim-director/media")))
-    media_dir.mkdir(parents=True, exist_ok=True)
-    output_name = str(params.get("output_name", requested_scenes[0] if len(requested_scenes) == 1 else scene_file.stem))
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", output_name):
-        raise DirectorError("invalid_output_name", "output_name may contain only letters, numbers, dot, dash, and underscore")
-    command = [*_manim_prefix(params), f"-q{profile.quality}"] if profile.quality else _manim_prefix(params)
-    command += ["--renderer", renderer, "--format", fmt, "--media_dir", str(media_dir)]
-    if len(requested_scenes) == 1 and not bool(params.get("all_scenes", False)):
-        command += ["--output_file", output_name]
-    if not profile.quality:
-        command += ["--resolution", f"{profile.width},{profile.height}", "--fps", str(profile.fps)]
-    if transparent:
-        command.append("--transparent")
-    if mode == "still":
-        command.append("--save_last_frame")
-    if mode == "section" or params.get("save_sections") or params.get("sections"):
-        command.append("--save_sections")
-    if bool(params.get("disable_caching", False)):
-        command.append("--disable_caching")
-    if bool(params.get("flush_cache", False)):
-        command.append("--flush_cache")
-    if bool(params.get("all_scenes", False)):
-        command.append("--write_all")
-    command.append(str(scene_file))
-    if not bool(params.get("all_scenes", False)):
-        command.extend(requested_scenes)
-    metadata = {
-        "project_root": root, "scene_file": scene_file,
-        "scenes": sorted(discovered) if bool(params.get("all_scenes", False)) else requested_scenes,
-        "renderer": renderer, "format": "png" if mode == "still" else fmt,
-        "transparent": transparent, "profile": profile, "media_dir": media_dir,
-        "output_name": output_name,
-    }
-    return command, metadata
-
-
-INTERMEDIATE_DIRECTORIES = {
-    "partial_movie_files", "partial_movie_file", "partial_files", "cache", "caches",
-    "cached_files", "temp", "tmp",
-}
-
-
-def _is_intermediate(path: Path, media_dir: Path) -> bool:
-    try:
-        parts = path.relative_to(media_dir).parts
-    except ValueError:
-        return True
-    lowered = {part.lower() for part in parts[:-1]}
-    return bool(lowered & INTERMEDIATE_DIRECTORIES) or path.name.startswith(".")
-
-
-def _outputs_since(media_dir: Path, started: float, extensions: set[str]) -> list[Path]:
-    files: list[Path] = []
-    if media_dir.exists():
-        for path in media_dir.rglob("*"):
-            try:
-                if (
-                    path.is_file()
-                    and path.suffix.lower() in extensions
-                    and path.stat().st_mtime >= started - 1.0
-                    and not _is_intermediate(path, media_dir)
-                ):
-                    files.append(path)
-            except OSError:
-                continue
-    return sorted(files, key=lambda p: p.as_posix())
-
-
-def _is_section_output(path: Path, media_dir: Path) -> bool:
-    try:
-        parts = [part.lower() for part in path.relative_to(media_dir).parts[:-1]]
-    except ValueError:
-        return False
-    return "sections" in parts or "section" in parts
-
-
-def _pick_preferred(candidates: list[Path]) -> Path:
-    """Prefer the newest candidate, with a stable path tie-breaker."""
-    return sorted(candidates, key=lambda path: (-path.stat().st_mtime_ns, path.as_posix()))[0]
-
-
-def _select_render_outputs(
-    candidates: list[Path], *, media_dir: Path, mode: str, output_name: str,
-    scenes: list[str], sections: Sequence[str] | None = None,
-) -> list[Path]:
-    """Select deliverables and never expose Manim's partial/cache segments."""
-
-    clean = [path for path in candidates if not _is_intermediate(path, media_dir)]
-    section_candidates = [path for path in clean if _is_section_output(path, media_dir)]
-    if sections:
-        normalized = [re.sub(r"\W+", "", str(name)).lower() for name in sections]
-        matched = [
-            path for path in section_candidates
-            if any(token in re.sub(r"\W+", "", path.stem).lower() for token in normalized)
-        ]
-        return sorted(matched, key=lambda path: path.as_posix())
-    if mode == "section":
-        return sorted(section_candidates, key=lambda path: path.as_posix())
-
-    finals = [path for path in clean if not _is_section_output(path, media_dir)]
-    expected_names = [Path(output_name).stem] if len(scenes) == 1 else list(scenes)
-    selected: list[Path] = []
-    for name in expected_names:
-        exact = [path for path in finals if path.stem == name]
-        if exact:
-            selected.append(_pick_preferred(exact))
-    if selected:
-        return selected
-    # Compatibility fallback for backends that decorate final filenames. Keep the
-    # result bounded to the requested scene count and prefer shallower paths.
-    decorated = [
-        path for path in finals
-        if any(re.sub(r"\W+", "", name).lower() in re.sub(r"\W+", "", path.stem).lower() for name in expected_names)
-    ]
-    fallback = decorated or finals
-    limit = max(1, len(expected_names))
-    return sorted(fallback, key=lambda path: (len(path.relative_to(media_dir).parts), path.as_posix()))[:limit]
-
-
-def render(params: Mapping[str, Any], emit: Emit = noop_emit, *, mode: str = "render") -> dict[str, Any]:
-    mutable = dict(params)
-    if mode == "preview":
-        mutable.setdefault("profile", "preview")
-    elif mode == "still":
-        mutable.setdefault("profile", "draft")
-        mutable["format"] = "png"
-    command, metadata = build_render_command(mutable, mode=mode)
-    started_epoch = time.time()
-    timeout = float(mutable.get("timeout", 1800))
-    result = run_command(command, cwd=metadata["project_root"], timeout=timeout, emit=emit)
-    if result.returncode != 0:
-        raise DirectorError(
-            "render_failed", f"Manim render failed with exit code {result.returncode}",
-            {"command": command, "diagnostics": diagnose_text(result.output), "tail": result.output[-12000:]},
-        )
-    suffixes = {".png"} if mode == "still" else {f".{metadata['format']}"}
-    candidates = _outputs_since(metadata["media_dir"], started_epoch, suffixes)
-    section_filter = mutable.get("sections")
-    if isinstance(section_filter, str):
-        section_filter = [section_filter]
-    outputs = _select_render_outputs(
-        candidates, media_dir=metadata["media_dir"], mode=mode,
-        output_name=metadata["output_name"], scenes=metadata["scenes"], sections=section_filter,
+def render(task: RenderTask, ctx: Context) -> RenderResult:
+    out_dir = ensure_dir(ctx.require_inside(task.out_dir, "out_dir"))
+    target = resolve_scene(task.scene, task.files, ctx)
+    s = task.settings
+    ctx.log("info", f"Rendering {target.name} at {s.width}x{s.height}@{s.fps} ({s.renderer})")
+    run = _run_manim(
+        target, s, task.media_dir, ctx, movie=True, sections=task.sections, fresh=task.fresh
     )
-    if not outputs:
-        if section_filter or mode == "section":
-            raise DirectorError(
-                "section_not_found", "Render completed but none of the requested section outputs were found",
-                {"requested": list(section_filter or []), "available_final_files": [path.name for path in candidates[:50]]},
-            )
-        raise DirectorError(
-            "render_output_missing", "Manim exited successfully but no requested media was produced",
-            {"media_dir": str(metadata["media_dir"]), "format": metadata["format"], "command": command},
+    writer = run.scene.renderer.file_writer
+    movie = Path(writer.gif_file_path if s.format == "gif" else writer.movie_file_path)
+    if run.plays == 0 or not movie.is_file():
+        message = (
+            f"{target.name} has no animations, so there is no video; add a wait or render a still."
         )
-    copied: list[Path] = []
-    if mutable.get("output"):
-        root: Path = metadata["project_root"]
-        destination = confined_path(root, str(mutable["output"]))
-        if len(outputs) == 1:
-            if destination.suffix.lower() != outputs[0].suffix.lower():
-                destination = destination.with_suffix(outputs[0].suffix)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(outputs[0], destination)
-            copied.append(destination)
-        else:
-            destination.mkdir(parents=True, exist_ok=True)
-            for source in outputs:
-                target = destination / source.name
-                shutil.copy2(source, target)
-                copied.append(target)
-    artifacts = copied or outputs
-    from .media import compact_media_summary, probe_media
+        raise _render_failed("write", target, ctx, message=message)
+    video = _move(movie, out_dir / f"{target.name}{movie.suffix}")
+    artifacts = [ctx.artifact(ArtifactKind.VIDEO, video)]
+    if task.sections:
+        artifacts += _collect_sections(writer, out_dir, ctx)
+    subtitles = movie.with_suffix(".srt")
+    if writer.subcaptions and subtitles.is_file():
+        srt = _move(subtitles, out_dir / f"{target.name}.srt")
+        artifacts.append(ctx.artifact(ArtifactKind.CAPTIONS, srt))
+    if run.recorder.attached:
+        path = out_dir / f"{target.name}.timeline.json"
+        write_json(path, run.recorder.timeline(target.name, run.scene_seconds))
+        artifacts.append(ctx.artifact(ArtifactKind.TIMELINE, path))
+    return RenderResult(
+        scene=SceneRef(target.name, ctx.relative(target.path)),
+        duration_seconds=run.scene_seconds,
+        animations=run.plays,
+        artifacts=artifacts,
+    )
 
-    probes = []
-    for path in artifacts:
+
+def still(task: StillTask, ctx: Context) -> StillResult:
+    out_dir = ensure_dir(ctx.require_inside(task.out_dir, "out_dir"))
+    target = resolve_scene(task.scene, task.files, ctx)
+    s = task.settings
+    ctx.log(
+        "info", f"Rendering the last frame of {target.name} at {s.width}x{s.height} ({s.renderer})"
+    )
+    run = _run_manim(target, s, task.media_dir, ctx, movie=False, sections=False, fresh=task.fresh)
+    image = Path(run.scene.renderer.file_writer.image_file_path)
+    if not image.is_file():
+        raise _render_failed(
+            "write", target, ctx, message=f"Manim wrote no image for {target.name}."
+        )
+    path = _move(image, out_dir / f"{target.name}.png")
+    return StillResult(
+        scene=SceneRef(target.name, ctx.relative(target.path)),
+        artifacts=[ctx.artifact(ArtifactKind.IMAGE, path)],
+    )
+
+
+def resolve_scene(scene: str | None, files: list[Path], ctx: Context) -> SceneTarget:
+    """Pick the scene class by AST alone, before any user code runs (contract §1.3 step 1)."""
+
+    parsed: list[ParsedFile] = []
+    broken: list[tuple[Path, SyntaxError]] = []
+    for path in files:
         try:
-            probes.append(compact_media_summary(probe_media(path)))
-        except DirectorError:
-            probes.append({"path": str(path), "probe": "unavailable"})
-    return {
-        "job_id": uuid.uuid4().hex,
-        "mode": mode,
-        "command": command,
-        "elapsed_seconds": round(result.elapsed_seconds, 4),
-        "profile": {"name": metadata["profile"].name, "width": metadata["profile"].width, "height": metadata["profile"].height, "fps": metadata["profile"].fps},
-        "renderer": metadata["renderer"], "format": metadata["format"],
-        "artifacts": [str(p) for p in artifacts], "media": probes,
-    }
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+        except SyntaxError as exc:
+            broken.append((path, exc))
+            continue
+        except OSError as exc:
+            raise io_error(path, exc) from exc
+        parsed.append(ParsedFile(path, [n for n in tree.body if isinstance(n, ast.ClassDef)]))
+    scene_names = scene_class_names(parsed)
+    scenes = [
+        (node.name, item.path)
+        for item in parsed
+        for node in item.classes
+        if node.name in scene_names
+    ]
+    available = sorted({name for name, _ in scenes})
+    if scene is not None:
+        defining = [
+            item.path for item in parsed if any(node.name == scene for node in item.classes)
+        ]
+        if len(defining) == 1:
+            return SceneTarget(scene, defining[0])
+        if len(defining) > 1:
+            paths = [ctx.relative(path) for path in defining]
+            raise DirectorError(
+                "scene_ambiguous",
+                f"{scene} is defined in {len(defining)} files; pass the file to render.",
+                {"scene": scene, "files": paths},
+            )
+    elif len(scenes) == 1 and not broken:
+        name, path = scenes[0]
+        return SceneTarget(name, path)
+    if broken:
+        # The wanted class may be in a file that does not parse: report the syntax error.
+        path, error = broken[0]
+        raise _render_failed("import", SceneTarget(scene or path.stem, path), ctx, error)
+    if scene is None:
+        raise DirectorError(
+            "scene_required",
+            f"Found {len(scenes)} scene classes; name the one to render.",
+            {"available": available},
+        )
+    raise DirectorError(
+        "scene_not_found",
+        f"No scene class named {scene} in the given files.",
+        {"scene": scene, "available": available},
+    )
 
 
-def preview(params: Mapping[str, Any], emit: Emit = noop_emit) -> dict[str, Any]:
-    result = render(params, emit, mode="preview")
-    if bool(params.get("contact_sheet", False)):
-        from .media import contact_sheet
+def _run_manim(
+    target: SceneTarget,
+    settings: RenderSettings,
+    media_dir: Path,
+    ctx: Context,
+    *,
+    movie: bool,
+    sections: bool,
+    fresh: bool,
+) -> _Run:
+    def apply_task_values() -> None:
+        _apply_settings(target, settings, media_dir, movie=movie, sections=sections, fresh=fresh)
 
-        artifact = Path(result["artifacts"][0])
-        if artifact.suffix.lower() in {".mp4", ".mov", ".webm", ".gif"}:
-            output = params.get("contact_sheet_output", f"output/{artifact.stem}-contact-sheet.png")
-            sheet = contact_sheet({
-                "project_root": str(result_path_root(params)), "source": str(artifact), "output": output,
-                "count": int(params.get("contact_sheet_frames", 6)), "columns": int(params.get("contact_sheet_columns", 3)),
-            }, emit)
-            result["contact_sheet"] = {
-                key: sheet[key] for key in ("path", "width", "height", "images", "columns", "rows") if key in sheet
-            }
-    return result
+    ctx.progress("import", 0, message=ctx.relative(target.path))
+    manim = _import_manim(target, ctx)
+    with manim.tempconfig({}), timeline.recording(ctx.project_root) as recorder:
+        try:
+            _digest_config_files(ctx.project_root, target.path.parent, settings)
+            apply_task_values()
+        except Exception as exc:  # a malformed manim.cfg is the project's error, like its code
+            raise _render_failed("setup", target, ctx, exc) from None
+        try:
+            module = _import_module(target.path, ctx.project_root)
+        except (Exception, SystemExit) as exc:
+            raise _render_failed("import", target, ctx, exc) from None
+        scene_class = getattr(module, target.name, None)
+        if not (isinstance(scene_class, type) and issubclass(scene_class, manim.Scene)):
+            raise DirectorError(
+                "scene_not_found",
+                f"{target.name} in {ctx.relative(target.path)} is not a Manim Scene subclass.",
+                {"scene": target.name, "reason": "not a Scene subclass"},
+            )
+        # Module-level `config.x = ...` behaves as under plain manim, but task values still win.
+        apply_task_values()
+        run = _Run(scene=None, recorder=recorder)
+        try:
+            run.scene = scene_class()
+            _instrument(run, ctx)
+            run.scene.render()
+        except (Exception, SystemExit) as exc:
+            raise _render_failed(run.stage, target, ctx, exc) from None
+    return run
 
 
-def still(params: Mapping[str, Any], emit: Emit = noop_emit) -> dict[str, Any]:
-    return render(params, emit, mode="still")
+def _import_manim(target: SceneTarget, ctx: Context) -> Any:
+    try:
+        import manim
+    except ModuleNotFoundError as exc:
+        if exc.name != "manim":
+            raise _render_failed("setup", target, ctx, exc) from None
+        hint = "Install Manim Community Edition: pip install 'manim>=0.21,<0.22'."
+        raise dependency_missing("manim", hint) from None
+    except Exception as exc:  # importing Manim reads manim.cfg from the project root
+        raise _render_failed("setup", target, ctx, exc) from None
+    return manim
 
 
-def section(params: Mapping[str, Any], emit: Emit = noop_emit) -> dict[str, Any]:
-    return render(params, emit, mode="section")
+def _digest_config_files(project_root: Path, scene_dir: Path, settings: RenderSettings) -> None:
+    """Manim defaults, then project and scene-directory manim.cfg, then the task's frame size."""
+
+    from manim import config
+    from manim._config.utils import config_file_paths
+
+    library, user, _cwd = config_file_paths()
+    parser = configparser.ConfigParser()
+    with library.open(encoding="utf-8") as handle:
+        parser.read_file(handle)
+    parser.read([user, *dict.fromkeys([project_root / "manim.cfg", scene_dir / "manim.cfg"])])
+    # Size goes through the parser so Manim derives frame_width from the task's aspect ratio.
+    parser["CLI"]["pixel_width"] = str(settings.width)
+    parser["CLI"]["pixel_height"] = str(settings.height)
+    parser["CLI"]["frame_rate"] = str(settings.fps)
+    config.digest_parser(parser)
 
 
-def result_path_root(params: Mapping[str, Any]) -> Path:
-    """Kept separate so composed operations use the same validated project root."""
-    return project_root(params)
+def _apply_settings(
+    target: SceneTarget,
+    settings: RenderSettings,
+    media_dir: Path,
+    *,
+    movie: bool,
+    sections: bool,
+    fresh: bool,
+) -> None:
+    from manim import config
+
+    config.input_file = target.path
+    config.output_file = target.name
+    config.media_dir = media_dir
+    config.pixel_width = settings.width
+    config.pixel_height = settings.height
+    config.frame_rate = settings.fps
+    config.renderer = settings.renderer
+    config.transparent = settings.transparent  # before format: both pick the movie extension
+    if movie:
+        config.format = settings.format
+    config.write_to_movie = movie
+    config.save_last_frame = not movie
+    config.save_sections = sections
+    config.disable_caching = fresh
+    config.preview = False
+    config.progress_bar = "none"
+
+
+def _import_module(path: Path, project_root: Path) -> Any:
+    for entry in reversed(dict.fromkeys([str(path.parent), str(project_root)])):
+        sys.path.insert(0, entry)
+    name = f"_manim_director_scene_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _instrument(run: _Run, ctx: Context) -> None:
+    """Track the render stage and report progress after every play and wait."""
+
+    scene = run.scene
+    renderer = scene.renderer
+    construct, play, finished = scene.construct, renderer.play, renderer.scene_finished
+
+    def construct_hook() -> None:
+        run.stage = "construct"
+        construct()
+
+    def play_hook(*args: Any, **kwargs: Any) -> None:
+        play(*args, **kwargs)
+        run.plays, run.scene_seconds = renderer.num_plays, float(renderer.time)
+        ctx.progress("animate", run.plays, scene_seconds=run.scene_seconds)
+
+    def finished_hook(*args: Any, **kwargs: Any) -> None:
+        run.stage = "write"
+        run.plays, run.scene_seconds = renderer.num_plays, float(renderer.time)
+        ctx.progress("encode", 0)
+        finished(*args, **kwargs)
+
+    scene.construct = construct_hook
+    renderer.play = play_hook
+    renderer.scene_finished = finished_hook
+
+
+def _collect_sections(writer: Any, out_dir: Path, ctx: Context) -> list[RuntimeArtifact]:
+    sections_dir = Path(writer.sections_output_dir)
+    index_path = sections_dir / f"{writer.output_name}.json"
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise io_error(index_path, exc) from exc
+    artifacts = []
+    for number, entry in enumerate(index, start=1):
+        source = sections_dir / entry["video"]
+        name = str(entry["name"])
+        destination = out_dir / "sections" / f"{number:04d}-{slug(name, 'section')}{source.suffix}"
+        artifacts.append(ctx.artifact(ArtifactKind.SECTION, _move(source, destination), label=name))
+    return artifacts
+
+
+def _move(source: Path, destination: Path) -> Path:
+    try:
+        ensure_dir(destination.parent)
+        shutil.move(source, destination)
+    except OSError as exc:
+        raise io_error(source, exc) from exc
+    return destination
+
+
+def _render_failed(
+    stage: Stage,
+    target: SceneTarget,
+    ctx: Context,
+    exc: BaseException | None = None,
+    *,
+    message: str | None = None,
+) -> DirectorError:
+    findings, trace = exception_findings(exc, ctx.project_root) if exc else ([], "")
+    if message is None:
+        assert exc is not None
+        subject = {
+            "import": f"Importing {ctx.relative(target.path)}",
+            "setup": f"Setting up {target.name}",
+            "construct": f"{target.name}.construct",
+            "write": f"Writing {target.name}",
+        }[stage]
+        detail = (str(exc).strip().splitlines() or [""])[0][:300].rstrip(".")
+        message = f"{subject} raised {type(exc).__name__}" + (f": {detail}" if detail else "") + "."
+    return DirectorError(
+        "render_failed",
+        message,
+        {
+            "stage": stage,
+            "exception": type(exc).__name__ if exc else None,
+            "findings": findings,
+            "traceback": trace[-_TRACEBACK_CHARS:],
+        },
+    )
