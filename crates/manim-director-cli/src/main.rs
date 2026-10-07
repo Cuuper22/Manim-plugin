@@ -14,7 +14,7 @@ use manim_director_core::{
 use manim_director_engine::{
     cli_project_path, current_revision, init_project, inspect, run_mcp, shutdown_signal,
     state_db_path, write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, SourceEdit,
-    SourceWrite, Store,
+    SourceWrite, Store, Submission,
 };
 use std::{
     collections::BTreeMap,
@@ -373,7 +373,10 @@ async fn submit_and_report(
     request: OperationRequest,
     machine: bool,
 ) -> Outcome {
-    let job = scheduler.submit(JobOrigin::Cli, request).await?.into_job();
+    let submission = scheduler.submit(JobOrigin::Cli, request).await?;
+    // A coalesced job belongs to the client that started it.
+    let mine = matches!(submission, Submission::Queued(_));
+    let job = submission.into_job();
     if job.status.is_terminal() {
         output::job(&job, machine);
         return Ok(exit_code(&job));
@@ -387,6 +390,13 @@ async fn submit_and_report(
         task.abort();
     }
     let Some(finished) = finished else {
+        if !mine {
+            let id = job.id;
+            let current = scheduler.store().blocking(move |store| store.get_job(id));
+            eprintln!("Stopped waiting; job {id} keeps running for the client that started it.");
+            output::job(&current.await?.unwrap_or(job), machine);
+            return Ok(ExitCode::from(EXIT_INTERRUPTED));
+        }
         scheduler.cancel(job.id).await?;
         let cancelled = tokio::select! {
             finished = scheduler.wait(job.id) => finished?,
