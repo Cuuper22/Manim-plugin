@@ -14,7 +14,6 @@ from .paths import atomic_target, slug
 from .protocol import Context
 from .tasks import InitTask
 from .templates import SCENE_TEMPLATES
-from .themes import get_theme
 
 _GITIGNORE_LINES = (".manim-director/", "__pycache__/")
 _MAIN_SCENE = "MainScene"
@@ -58,7 +57,7 @@ def _create(task: InitTask, ctx: Context) -> InitResult:
         "manim.cfg": "[CLI]\nmedia_dir = .manim-director/media\n",
         "requirements.txt": "manim>=0.21,<0.22\n",
         "README.md": _readme(name),
-        "scenes/main.py": _starter_scene(name, get_theme(theme)),
+        "scenes/main.py": _starter_scene(name),
     }
     if task.mode == "create":
         existing = sorted(path for path in files if (root / path).exists())
@@ -90,10 +89,9 @@ def _add_scene(task: InitTask, ctx: Context) -> InitResult:
         raise invalid_params(
             "scene_template", "unknown scene template", allowed=list(SCENE_TEMPLATES)
         )
-    scene_class, generate = entry
+    scene_class, source = entry
     source_dir = ctx.require_inside(task.source_dir, "source_dir")
     target = source_dir / f"{task.scene_template}.py"
-    source = generate(get_theme(catalog.default_theme()))
     try:
         source_dir.mkdir(parents=True, exist_ok=True)
         with target.open("w" if task.force else "x", encoding="utf-8") as handle:
@@ -192,45 +190,29 @@ from the environment where Manim Director is installed.
 """
 
 
-def _starter_scene(name: str, theme: dict[str, object]) -> str:
-    return f'''"""A compact starter that uses Manim Director's composition grammar."""
+def _starter_scene(name: str) -> str:
+    return f'''"""{name}: one idea, one beat at a time."""
+
 from manim import *
-from manim_director_runtime import Beat, DesignSystem, DirectedScene
+from manim_director_runtime import DirectedScene
 
 
 class {_MAIN_SCENE}(DirectedScene):
-    design = DesignSystem.from_mapping({{"theme": {dict(theme)!r}}})
+    symbols = {{"a": "primary", "b": "secondary"}}
 
     def construct(self):
-        title = self.styled_text({name!r}, role="title")
-        core = Circle(
-            radius=0.72,
-            color=self.design.color("primary"),
-            fill_color=self.design.color("primary"),
-            fill_opacity=0.16,
-            **self.design.stroke("primary", width=1.15),
-        )
-        echo = Circle(
-            radius=1.12,
-            color=self.design.color("secondary"),
-            stroke_opacity=0.55,
-            stroke_width=self.design.stroke_width * 0.7,
-        )
-        visual = VGroup(echo, core)
-        self.beat(
-            Beat(
-                intent="introduce",
-                audience_question="What single idea should the audience see first?",
-                takeaway="Build one visual relationship before adding detail.",
-                focus="visual",
-                visual_metaphor="A clear signal and its echo",
-                transition="reveal",
-            ),
-            title,
-            visual,
-            keys=("title", "visual"),
-            flow="column",
-        )
-        self.caption("One beat, one focus, one clean visual relationship.")
-        self.wait(1)
+        question = self.math(r"(a + b)^2 = ?")
+        with self.beat("question", transition="reveal"):
+            self.title({name!r})
+            self.place(question)
+            self.caption("What happens when a sum is squared?")
+
+        with self.beat("expand"):
+            self.derive(
+                r"(a + b)^2",
+                (r"= (a + b)(a + b)", "definition"),
+                (r"= a^2 + 2ab + b^2", "distribute and collect"),
+                replaces=question,
+            )
+        self.wait()
 '''

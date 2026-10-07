@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+
+Choice = TypeVar("Choice", bound=StrEnum)
 
 
 class DirectorError(Exception):
@@ -15,6 +18,25 @@ class DirectorError(Exception):
 
     def as_dict(self) -> dict[str, Any]:
         return {"code": self.code, "message": self.message, "data": self.data}
+
+
+class CompositionError(DirectorError):
+    """An authoring call that cannot be honored: layout, beats, themes or TeX terms."""
+
+    def __init__(self, message: str, **data: Any) -> None:
+        super().__init__("composition", message, data or None)
+
+
+def parse_choice(kind: type[Choice], value: object) -> Choice:
+    try:
+        return kind(value)
+    except ValueError:
+        choices = [member.value for member in kind]
+        raise CompositionError(
+            f"Unknown {kind.__name__.lower()} {value!r}; choose one of {', '.join(choices)}.",
+            value=str(value),
+            choices=choices,
+        ) from None
 
 
 def invalid_params(

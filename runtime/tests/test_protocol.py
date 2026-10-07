@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from conftest import RecordingWriter, request, run_bridge
+from conftest import SRC, RecordingWriter, request, run_bridge
 from manim_director_runtime import protocol
 from manim_director_runtime.protocol import MAX_REQUEST_BYTES, METHODS, handle_request
 
@@ -52,6 +55,17 @@ def test_ready_frame_comes_first_and_idle_eof_exits_quietly(project: Path) -> No
     assert all(color.startswith("#") and color == color.upper() for _, color in themes[0]["tokens"])
     assert ready["catalog"]["project_templates"] == ["explainer"]
     assert "equation_derivation" in ready["catalog"]["scene_templates"]
+
+
+def test_the_package_and_catalog_import_without_manim() -> None:
+    code = (
+        "import sys\n"
+        "from manim_director_runtime import Region, Theme, Transition, protocol, catalog\n"
+        "catalog.catalog()\n"
+        "assert 'manim' not in sys.modules\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    subprocess.run([sys.executable, "-c", code], env=env, check=True)
 
 
 def test_preload_reports_what_it_imported(project: Path) -> None:

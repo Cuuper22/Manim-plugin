@@ -1,411 +1,200 @@
+"""Scene templates that `init` can add to a project."""
+
 from __future__ import annotations
 
-import textwrap
-from collections.abc import Callable
-from typing import Any
+_EQUATION = r'''"""Odd numbers build perfect squares: first a picture, then a derivation."""
+
+from manim import *
+from manim_director_runtime import DirectedScene
 
 
-def _preamble(theme: dict[str, Any], description: str) -> str:
-    """Return the shared, public-API-only preamble for generated scenes."""
+class EquationDerivationScene(DirectedScene):
+    symbols = {"n": "primary", "k": "secondary"}
 
-    return textwrap.dedent(
-        f'''\
-        """{description}"""
-        from manim import *
-        from manim_director_runtime import Beat, DesignSystem, DirectedScene
-
-        THEME = {theme!r}
-        DESIGN = DesignSystem.from_mapping({{"theme": THEME}})
-        '''
-    )
-
-
-def _equation(theme: dict[str, Any]) -> str:
-    return _preamble(
-        theme, "A directed visual derivation of the sum of odd numbers."
-    ) + textwrap.dedent(
-        r"""
-
-
-        class EquationDerivationScene(DirectedScene):
-            design = DESIGN
-
-            def construct(self):
-                title = self.styled_text(
-                    "Odd numbers grow perfect squares", role="title", color_role="foreground"
+    def odd_layers(self, count):
+        """A count x count square built from L-shaped layers of 1, 3, 5, ... tiles."""
+        layers = VGroup()
+        for layer in range(count):
+            color = self.theme.primary if layer % 2 == 0 else self.theme.secondary
+            cells = [(layer, j) for j in range(layer + 1)] + [(i, layer) for i in range(layer)]
+            tiles = [
+                Square(0.42, stroke_width=0, fill_color=color, fill_opacity=0.9).move_to(
+                    RIGHT * 0.5 * i + DOWN * 0.5 * j
                 )
-                self.place(title, "header", key="title")
-                self.play(Write(title))
+                for i, j in cells
+            ]
+            layers.add(VGroup(*tiles))
+        return layers
 
-                rows = []
-                equations = (r"1=1^2", r"1+3=2^2", r"1+3+5=3^2", r"1+3+5+7=4^2")
-                for n, equation in enumerate(equations, start=1):
-                    tiles = VGroup(*[
-                        Square(
-                            side_length=.30,
-                            stroke_width=0,
-                            fill_color=THEME["primary"],
-                            fill_opacity=1,
-                        )
-                        for _ in range(2 * n - 1)
-                    ]).arrange(RIGHT, buff=.06)
-                    label = self.styled_math(equation, role="label", color_role="secondary")
-                    rows.append(VGroup(tiles, label).arrange(RIGHT, buff=.55))
-                pattern = VGroup(*rows).arrange(DOWN, buff=.28)
+    def construct(self):
+        square = self.odd_layers(4)
+        sums = self.math(r"1 + 3 + 5 + 7 = 4^2")
+        with self.beat("pattern", transition="reveal"):
+            self.title("Odd numbers build perfect squares")
+            self.place(square, sums, direction=RIGHT, buff=1.0)
+            self.caption("Each odd number wraps one more layer around the square.")
 
-                self.beat(
-                    Beat(
-                        intent="introduce",
-                        audience_question="What shape is hidden in the running sums?",
-                        takeaway="Each new odd row completes the next square.",
-                        focus="pattern",
-                        visual_metaphor="odd rows completing one square",
-                        transition="reveal",
-                        max_active=2,
-                    ),
-                    pattern,
-                    region="content",
-                    keys=("pattern",),
-                )
-                self.caption("Every step adds the next L-shaped odd layer.")
+        claim = self.math(r"\sum_{k=1}^{n} (2k-1) = n^2")
+        with self.beat("claim"):
+            self.place(claim)
 
-                claim = self.styled_math(
-                    r"\sum_{k=1}^n(2k-1)=n^2", role="hero", color_role="primary"
-                )
-                self.beat(
-                    Beat(
-                        intent="explain",
-                        audience_question="Can the picture be stated for every n?",
-                        takeaway="The geometric pattern is exactly a finite-sum identity.",
-                        focus="claim",
-                        visual_metaphor="odd rows completing one square",
-                        transition="continuation",
-                        max_active=2,
-                    ),
-                    claim,
-                    region="content",
-                    keys=("claim",),
-                )
-                self.focus(claim)
-                self.wait(.35)
-                self.release_focus()
+        with self.beat("proof"):
+            proof = self.derive(
+                r"\sum_{k=1}^{n} (2k-1)",
+                (r"= 2\sum_{k=1}^{n} k - \sum_{k=1}^{n} 1", "split the sum"),
+                (r"= n(n+1) - n", "sum of the first n integers"),
+                (r"= n^2", "simplify"),
+                replaces=claim,
+            )
+            self.caption("The picture predicted it; the algebra proves it.")
+        self.highlight(proof.lines[-1], "n^2", box=True)
+        self.wait()
+'''
 
-                first = self.styled_math(
-                    r"\sum_{k=1}^n(2k-1)=2\sum_{k=1}^n k-\sum_{k=1}^n1",
-                    role="math",
-                    color_role="foreground",
-                )
-                second = self.styled_math(
-                    r"=n(n+1)-n=n^2", role="math", color_role="secondary"
-                )
-                self.beat(
-                    Beat(
-                        intent="prove",
-                        audience_question="Why must the identity hold?",
-                        takeaway="The arithmetic-series formula collapses the sum to n squared.",
-                        focus="result",
-                        visual_metaphor="odd rows completing one square",
-                        transition="continuation",
-                        max_active=2,
-                    ),
-                    first,
-                    second,
-                    region="content",
-                    flow="column",
-                    keys=("derivation", "result"),
-                )
-                self.play(Indicate(second, color=THEME["accent"]))
-                self.caption("The picture predicts the algebra; the algebra proves it.")
-                self.wait(.7)
-        """
-    ).lstrip("\n")
+_FUNCTION = r'''"""The derivative of sine, seen as the slope of a moving tangent."""
+
+from manim import *
+from manim_director_runtime import DirectedScene
 
 
-def _function(theme: dict[str, Any]) -> str:
-    return _preamble(theme, "A directed exploration of sine and its derivative.") + textwrap.dedent(
-        r"""
+class FunctionExplorerScene(DirectedScene):
+    def construct(self):
+        axes = Axes(
+            x_range=[-TAU, TAU, PI / 2],
+            y_range=[-1.5, 1.5, 0.5],
+            x_length=11,
+            y_length=4,
+            tips=False,
+            axis_config={"color": self.theme.muted},
+        )
+        sine = axes.plot(np.sin, color=self.theme.primary)
+        graph = VGroup(axes, sine)
+        with self.beat("curve", transition="reveal"):
+            self.title("The derivative is a moving slope")
+            self.place(graph)
 
-
-        class FunctionExplorerScene(DirectedScene):
-            design = DESIGN
-
-            def construct(self):
-                title = self.styled_text(
-                    "The derivative is a moving slope", role="title", color_role="foreground"
-                )
-                self.place(title, "header", key="title")
-                self.play(Write(title))
-
-                axes = Axes(
-                    x_range=[-TAU, TAU, PI / 2],
-                    y_range=[-1.5, 1.5, .5],
-                    x_length=10.8,
-                    y_length=4.7,
-                    tips=False,
-                    axis_config={"color": THEME["muted"]},
-                )
-                sine = axes.plot(
-                    lambda x: np.sin(x), x_range=[-TAU, TAU], color=THEME["primary"]
-                )
-                plot = VGroup(axes, sine)
-                sine_label = self.styled_math(
-                    r"f(x)=\sin x", role="label", color_role="primary"
-                )
-                plot_with_label = VGroup(plot, sine_label).arrange(DOWN, buff=.24)
-                self.beat(
-                    Beat(
-                        intent="introduce",
-                        audience_question="How does sine's slope change as we travel along it?",
-                        takeaway="A tangent turns continuously while its contact point moves.",
-                        focus="plot",
-                        visual_metaphor="walking along a curve with a local ruler",
-                        transition="reveal",
-                        max_active=3,
-                    ),
-                    plot_with_label,
-                    region="content",
-                    keys=("plot",),
-                )
-
-                tracker = ValueTracker(-TAU)
-                dot = always_redraw(lambda: Dot(
-                    axes.c2p(tracker.get_value(), np.sin(tracker.get_value())),
-                    color=THEME["accent"],
-                    radius=.075,
-                ))
-                tangent = always_redraw(lambda: axes.get_secant_slope_group(
-                    tracker.get_value(),
+        with self.beat("slope", keep=[graph]):
+            x = ValueTracker(-TAU)
+            dot = always_redraw(
+                lambda: Dot(axes.i2gp(x.get_value(), sine), color=self.theme.accent)
+            )
+            tangent = always_redraw(
+                lambda: axes.get_secant_slope_group(
+                    x.get_value(),
                     sine,
-                    dx=.035,
-                    secant_line_color=THEME["accent"],
-                    secant_line_length=2.8,
-                ))
-                self.add(dot, tangent)
-                self.focus(dot, tangent)
-                self.play(tracker.animate.set_value(TAU), run_time=4, rate_func=linear)
-                self.release_focus()
-                self.caption("The tangent is horizontal exactly at sine's peaks and valleys.")
-                self.remove(dot, tangent)
-
-                cosine = axes.plot(
-                    lambda x: np.cos(x), x_range=[-TAU, TAU], color=THEME["secondary"]
+                    dx=0.01,
+                    secant_line_color=self.theme.accent,
+                    secant_line_length=2.6,
                 )
-                cosine_label = self.styled_math(
-                    r"f'(x)=\cos x", role="label", color_role="secondary"
-                )
-                complete_plot = VGroup(axes.copy(), sine.copy(), cosine)
-                self.beat(
-                    Beat(
-                        intent="reveal",
-                        audience_question="What single graph records all those tangent slopes?",
-                        takeaway="Cosine is the slope record of sine.",
-                        focus="cosine",
-                        visual_metaphor="walking along a curve with a local ruler",
-                        transition="reveal",
-                        max_active=3,
-                    ),
-                    complete_plot,
-                    cosine_label,
-                    region="content",
-                    flow="column",
-                    keys=("cosine", "cosine-label"),
-                )
-                self.focus(complete_plot)
-                self.caption("Blue is height; gold is the rate at which that height changes.")
-                self.wait(.8)
-        """
-    ).lstrip("\n")
+            )
+            self.caption("Slide along the curve and watch the tangent turn.")
+            self.add(tangent, dot)
+            self.play(x.animate.set_value(TAU), run_time=5, rate_func=linear)
+
+        with self.beat("derivative", keep=[graph]):
+            cosine = axes.plot(np.cos, color=self.theme.secondary)
+            self.play(Create(cosine))
+            self.caption("The slope of sine traces out cosine.")
+        self.wait()
+'''
+
+_GEOMETRY = r'''"""Why a^2 + b^2 = c^2: an altitude splits a right triangle into similar copies."""
+
+from manim import *
+from manim_director_runtime import DirectedScene, Region
 
 
-def _geometry(theme: dict[str, Any]) -> str:
-    return _preamble(theme, "A directed right-triangle similarity proof.") + textwrap.dedent(
-        r"""
+class GeometryProofScene(DirectedScene):
+    symbols = {"a": "primary", "b": "secondary", "c": "accent"}
+
+    def construct(self):
+        A, B, C = np.array([-3.0, -1.5, 0]), np.array([3.0, -1.5, 0]), np.array([-3.0, 1.5, 0])
+        triangle = Polygon(A, B, C, color=self.theme.foreground, stroke_width=3)
+        labels = VGroup(
+            self.math("a").next_to(Line(A, C), LEFT),
+            self.math("b").next_to(Line(A, B), DOWN),
+            self.math("c").move_to((B + C) / 2 + 0.35 * UR),
+        )
+        figure = VGroup(triangle, RightAngle(Line(A, B), Line(A, C), length=0.3), labels)
+        with self.beat("triangle", transition="reveal"):
+            self.title("One altitude, two similar copies")
+            self.place(figure, region=Region.LEFT)
+
+        with self.beat("split", keep=[figure]):
+            A, B, C = triangle.get_vertices()
+            hypotenuse = (B - C) / np.linalg.norm(B - C)
+            foot = C + np.dot(A - C, hypotenuse) * hypotenuse
+            shade = {"stroke_width": 0, "fill_opacity": 0.3}
+            pieces = VGroup(
+                Polygon(A, C, foot, fill_color=self.theme.primary, **shade),
+                Polygon(A, foot, B, fill_color=self.theme.secondary, **shade),
+                DashedLine(A, foot, color=self.theme.muted),
+            )
+            self.play(FadeIn(pieces))
+            self.caption("Both pieces have the same angles as the whole triangle.")
+
+        with self.beat("proof", keep=[figure, pieces]):
+            proof = self.derive(
+                (r"a^2 = c\,x", "left piece ~ whole"),
+                (r"b^2 = c\,(c - x)", "right piece ~ whole"),
+                (r"a^2 + b^2 = c^2", "add"),
+                region=Region.RIGHT,
+            )
+        self.highlight(proof.lines[-1], "c^2", box=True)
+        self.wait()
+'''
+
+_ALGORITHM = r'''"""Breadth-first search expands from its source in rings."""
+
+from manim import *
+from manim_director_runtime import DirectedScene, Region
 
 
-        class GeometryProofScene(DirectedScene):
-            design = DESIGN
+class AlgorithmWalkthroughScene(DirectedScene):
+    def construct(self):
+        edges = [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5)]
+        layout = {
+            0: UP * 2,
+            1: LEFT * 1.6,
+            2: RIGHT * 1.6,
+            3: LEFT * 2.6 + DOWN * 2,
+            4: LEFT * 0.6 + DOWN * 2,
+            5: RIGHT * 1.6 + DOWN * 2,
+        }
+        graph = Graph(
+            list(range(6)),
+            edges,
+            layout=layout,
+            labels=True,
+            vertex_config={
+                "fill_color": self.theme.background,
+                "stroke_color": self.theme.muted,
+                "stroke_width": 3,
+                "radius": 0.3,
+            },
+            edge_config={"stroke_color": self.theme.muted},
+        )
+        queue = self.text("queue: 0", "body", color=self.theme.secondary)
+        with self.beat("graph", transition="reveal"):
+            self.title("Breadth-first search expands in rings")
+            self.place(graph, region=Region.LEFT)
+            self.place(queue, region=Region.RIGHT)
 
-            def construct(self):
-                title = self.styled_text(
-                    "One altitude reveals three copies", role="title", color_role="foreground"
-                )
-                self.place(title, "header", key="title")
-                self.play(Write(title))
+        with self.beat("search", keep=[graph, queue]):
+            states = ["1, 2", "2, 3, 4", "3, 4, 5", "4, 5", "5", "(empty)"]
+            for vertex, state in enumerate(states):
+                following = self.text(f"queue: {state}", "body", color=self.theme.secondary)
+                self.place(following, region=Region.RIGHT, replaces=queue)
+                self.play(graph[vertex].animate.set_stroke(self.theme.primary, width=5))
+                queue = following
+            self.caption("The first visit to a vertex always uses the fewest edges.")
+        self.wait()
+'''
 
-                a = np.array([-3.0, -2.0, 0.0])
-                b = np.array([3.0, -2.0, 0.0])
-                c = np.array([-3.0, 2.0, 0.0])
-                foot = np.array([-15 / 13, 10 / 13, 0.0])
-                triangle = Polygon(
-                    a,
-                    b,
-                    c,
-                    color=THEME["primary"],
-                    fill_color=THEME["primary"],
-                    fill_opacity=.10,
-                    stroke_width=THEME["stroke_width"],
-                )
-                right_angle = RightAngle(
-                    Line(a, b), Line(a, c), length=.34, color=THEME["secondary"]
-                )
-                labels = VGroup(
-                    self.styled_math("a", role="label").move_to((a + c) / 2 + LEFT * .32),
-                    self.styled_math("b", role="label").move_to((a + b) / 2 + DOWN * .32),
-                    self.styled_math("c", role="label", color_role="accent").move_to(
-                        (b + c) / 2 + UR * .28
-                    ),
-                )
-                diagram = VGroup(triangle, right_angle, labels)
-                altitude = DashedLine(a, foot, color=THEME["accent"], dash_length=.12)
-                left_copy = Polygon(a, c, foot, color=THEME["secondary"], fill_opacity=.12)
-                right_copy = Polygon(a, foot, b, color=THEME["primary"], fill_opacity=.12)
-                similar_triangles = VGroup(
-                    triangle.copy(),
-                    right_angle.copy(),
-                    labels.copy(),
-                    altitude,
-                    left_copy,
-                    right_copy,
-                )
-                self.beat(
-                    Beat(
-                        intent="introduce",
-                        audience_question="What structure is hiding inside a right triangle?",
-                        takeaway="The side labels define one geometric object to keep tracking.",
-                        focus="triangle",
-                        visual_metaphor="one shape containing scaled copies of itself",
-                        transition="reveal",
-                        max_active=2,
-                    ),
-                    diagram,
-                    region="content",
-                    keys=("triangle",),
-                )
-
-                claim = self.styled_math(
-                    r"a^2+b^2=c^2", role="hero", color_role="secondary"
-                )
-                self.beat(
-                    Beat(
-                        intent="reveal",
-                        audience_question="Why draw the altitude to the hypotenuse?",
-                        takeaway="It splits the original into two triangles with the same angles.",
-                        focus="similar-triangles",
-                        visual_metaphor="one shape containing scaled copies of itself",
-                        transition="reveal",
-                        max_active=2,
-                    ),
-                    similar_triangles,
-                    claim,
-                    region="content",
-                    flow="row",
-                    keys=("similar-triangles", "claim"),
-                )
-                self.caption("Same angles means the corresponding side ratios agree.")
-                self.wait(.45)
-
-                relation = self.styled_math(
-                    r"a^2=c\,x,\qquad b^2=c\,(c-x)", role="math", color_role="foreground"
-                )
-                conclusion = self.styled_math(
-                    r"a^2+b^2=c[x+(c-x)]=c^2", role="math", color_role="secondary"
-                )
-                self.beat(
-                    Beat(
-                        intent="prove",
-                        audience_question="How do the two similarities recover the whole triangle?",
-                        takeaway="The two projected pieces add back to the hypotenuse.",
-                        focus="conclusion",
-                        visual_metaphor="one shape containing scaled copies of itself",
-                        transition="continuation",
-                        max_active=2,
-                    ),
-                    relation,
-                    conclusion,
-                    region="content",
-                    flow="column",
-                    keys=("relation", "conclusion"),
-                )
-                self.play(Indicate(conclusion, color=THEME["accent"]))
-                self.wait(.7)
-        """
-    ).lstrip("\n")
-
-
-def _algorithm(theme: dict[str, Any]) -> str:
-    return _preamble(theme, "A directed breadth-first-search walkthrough.") + textwrap.dedent(
-        r"""
-
-
-        class AlgorithmWalkthroughScene(DirectedScene):
-            design = DESIGN
-
-            def construct(self):
-                title = self.styled_text(
-                    "Breadth-first search expands in rings", role="title", color_role="foreground"
-                )
-                self.place(title, "header", key="title")
-                self.play(Write(title))
-
-                vertices = [0, 1, 2, 3, 4, 5]
-                edges = [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5)]
-                graph = Graph(
-                    vertices,
-                    edges,
-                    layout={
-                        0: UP * 2,
-                        1: LEFT * 2,
-                        2: RIGHT * 2,
-                        3: LEFT * 3 + DOWN * 2,
-                        4: LEFT + DOWN * 2,
-                        5: RIGHT * 2 + DOWN * 2,
-                    },
-                    vertex_config={"color": THEME["muted"]},
-                    edge_config={"color": THEME["muted"]},
-                )
-                queue = self.styled_text("queue  [0]", role="body", color_role="secondary")
-                queue_panel = self.panel(queue, stroke_role="secondary")
-                self.beat(
-                    Beat(
-                        intent="introduce",
-                        audience_question="How can a search avoid diving down the wrong branch?",
-                        takeaway="The queue preserves a whole frontier at the same distance.",
-                        focus="graph",
-                        visual_metaphor="ripples expanding from a source",
-                        transition="reveal",
-                        max_active=3,
-                    ),
-                    graph,
-                    region="left",
-                    keys=("graph",),
-                )
-                self.place(queue_panel, "right", key="queue")
-                self.play(FadeIn(queue_panel))
-
-                order = [0, 1, 2, 3, 4, 5]
-                queue_states = ["[1, 2]", "[2, 3, 4]", "[3, 4, 5]", "[4, 5]", "[5]", "[]"]
-                for vertex, state in zip(order, queue_states):
-                    next_queue = self.styled_text(
-                        f"queue  {state}", role="body", color_role="secondary"
-                    )
-                    next_panel = self.panel(next_queue, stroke_role="secondary")
-                    next_panel.move_to(queue_panel)
-                    self.play(
-                        graph[vertex].animate.set_color(THEME["primary"]),
-                        ReplacementTransform(queue_panel, next_panel),
-                        run_time=.5,
-                    )
-                    queue_panel = next_panel
-                self.caption("A first visit therefore always uses a shortest number of edges.")
-                self.wait(.8)
-        """
-    ).lstrip("\n")
-
-
-# Scene template name -> (scene class, source generator taking a theme mapping).
-SCENE_TEMPLATES: dict[str, tuple[str, Callable[[dict[str, Any]], str]]] = {
-    "equation_derivation": ("EquationDerivationScene", _equation),
-    "function_explorer": ("FunctionExplorerScene", _function),
-    "geometry_proof": ("GeometryProofScene", _geometry),
-    "algorithm_walkthrough": ("AlgorithmWalkthroughScene", _algorithm),
+# Scene template name -> (scene class, source).
+SCENE_TEMPLATES: dict[str, tuple[str, str]] = {
+    "equation_derivation": ("EquationDerivationScene", _EQUATION),
+    "function_explorer": ("FunctionExplorerScene", _FUNCTION),
+    "geometry_proof": ("GeometryProofScene", _GEOMETRY),
+    "algorithm_walkthrough": ("AlgorithmWalkthroughScene", _ALGORITHM),
 }

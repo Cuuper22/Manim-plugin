@@ -44,6 +44,12 @@ def _fixed(text: str) -> Callable[[re.Match[str]], str]:
 
 _RULES = (
     _Rule(
+        "composition",
+        re.compile(r"CompositionError: (?P<message>.+)"),
+        "A DirectedScene call at this line cannot be honored as written; the message says why.",
+        _group("message"),
+    ),
+    _Rule(
         "python_syntax",
         re.compile(r"(?:SyntaxError|IndentationError|TabError): (?P<message>.+)"),
         "Fix the syntax error before rendering.",

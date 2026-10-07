@@ -21,23 +21,16 @@ SETTINGS = {
 }
 
 DIRECTED = """from manim import *
-from manim_director_runtime import Beat, DirectedScene
-
-
-def beat(focus):
-    return Beat(intent="explain", audience_question="Which shape?", takeaway="This one.",
-                focus=focus, visual_metaphor="shapes")
+from manim_director_runtime import DirectedScene
 
 
 class Shapes(DirectedScene):
     def construct(self):
         print("this must not reach the protocol stream")
-        self.next_section("circle")
-        self.beat(beat("circle"), Circle(), keys=("circle",), run_time=0.3)
-        self.wait(0.2)
-        self.next_section("square")
-        self.beat(beat("square"), Square(), keys=("square",), run_time=0.3)
-        self.wait(0.2)
+        with self.beat("circle", run_time=0.3, hold=0.2):
+            self.place(Circle())
+        with self.beat("square", run_time=0.3, hold=0.2):
+            self.place(Square())
 """
 
 
@@ -98,8 +91,8 @@ def test_render_moves_video_sections_and_beat_timeline_into_out_dir(project: Pat
     timeline = json.loads((project / out / "Shapes.timeline.json").read_text())
     assert timeline["version"] == 1 and timeline["scene"] == "Shapes"
     assert [(b["id"], b["file"], b["line"]) for b in timeline["beats"]] == [
-        ("beat-1", "scenes/main.py", 14),
-        ("beat-2", "scenes/main.py", 17),
+        ("circle", "scenes/main.py", 8),
+        ("square", "scenes/main.py", 10),
     ]
     assert timeline["beats"][0]["start_seconds"] == 0.0
     assert timeline["beats"][1]["end_seconds"] == pytest.approx(timeline["duration_seconds"])
@@ -166,6 +159,24 @@ def test_latex_errors_point_at_the_tex_call(project: Path) -> None:
     assert (finding["code"], finding["message"]) == ("latex_error", "Undefined control sequence.")
     assert "\\phii" in finding["hint"]
     assert finding["location"] == {"file": "scenes/main.py", "line": 5, "column": None}
+
+
+@requires_manim
+def test_authoring_errors_point_at_the_scene_line(project: Path) -> None:
+    source = (
+        "from manim import *\nfrom manim_director_runtime import DirectedScene\n\n"
+        "class Crowded(DirectedScene):\n    def construct(self):\n"
+        "        self.place(Rectangle(width=100, height=1))\n"
+    )
+    frames, _ = run_bridge(
+        project, render_request(project, "Crowded", [write_scene(project, source)])
+    )
+    error = frames[-1]["error"]
+    assert (error["code"], error["data"]["stage"]) == ("render_failed", "construct")
+    finding = error["data"]["findings"][0]
+    assert finding["code"] == "composition"
+    assert finding["message"].startswith("Rectangle needs 0.13x to fit the content region")
+    assert finding["location"] == {"file": "scenes/main.py", "line": 6, "column": None}
 
 
 @requires_manim

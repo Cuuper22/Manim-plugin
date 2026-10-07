@@ -20,12 +20,7 @@ render:
   width: 640
   height: 360
   fps: 15
-theme:
-  preset: midnight
-  background: "#090D1A"
-  foreground: "#FFFFFF"
-  accent: "#64D8FF"
-  font: Sans
+theme: midnight
 safe_area:
   top: 0.05
   right: 0.05

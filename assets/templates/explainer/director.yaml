@@ -30,35 +30,12 @@ render:
   width: 1920
   height: 1080
   fps: 60
-theme:
-  preset: midnight
-  background: "#0B1020"
-  foreground: "#F7F8FC"
-  accent: "#FF6188"
-  font: DejaVu Sans
+theme: midnight
 direction:
-  composition:
-    density: spacious
-    max_active: 4
-    caption_lane: true
-  typography:
-    scale:
-      hero: 64
-      title: 44
-      section: 36
-      body: 30
-      math: 48
-      label: 24
-      caption: 25
-      micro: 18
-  motion:
-    continuation: morph
-    contrast: lateral
-    reveal: draw
-    chapter: reset
-  narrative:
-    audience: Curious adults comfortable with basic algebra
-    principle: one-idea-per-beat
+  symbols:
+    a_{n+2}: accent
+    a_{n+1}: secondary
+    a_n: primary
 safe_area:
   top: 0.05
   right: 0.05
