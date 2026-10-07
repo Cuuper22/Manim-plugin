@@ -224,6 +224,13 @@ fn stale_or_missing_revisions_conflict() {
 fn concurrent_writers_from_one_revision_cannot_both_win() {
     let project = Arc::new(Project::new());
     project.file("notes.txt", b"base\n");
+    // Half the writers name the file through a symlink; both names share a lock.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("notes.txt", project.root.join("alias.txt")).unwrap();
+    let names = match cfg!(unix) {
+        true => ["notes.txt", "alias.txt"],
+        false => ["notes.txt"; 2],
+    };
     let base = project.revision("notes.txt");
     let writers = 8;
     let barrier = Arc::new(Barrier::new(writers));
@@ -232,7 +239,8 @@ fn concurrent_writers_from_one_revision_cannot_both_win() {
             let (project, barrier, base) = (project.clone(), barrier.clone(), base.clone());
             std::thread::spawn(move || {
                 barrier.wait();
-                project.write("notes.txt", base, replace_all(&format!("writer {index}\n")))
+                let edit = replace_all(&format!("writer {index}\n"));
+                project.write(names[index % 2], base, edit)
             })
         })
         .collect();

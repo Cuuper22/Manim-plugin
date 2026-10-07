@@ -254,7 +254,8 @@ pub fn write_source(
     }
     validate(python, path, &next)?;
 
-    let _lock = lock(root, path)?;
+    // Keyed by the resolved file, so a symlink and its target share one lock.
+    let _lock = lock(root, &relative_posix(root, &target))?;
     let on_disk = disk_revision(&target)?;
     if on_disk != previous_revision {
         return Err(conflict(write, on_disk));
