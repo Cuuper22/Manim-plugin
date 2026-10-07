@@ -153,6 +153,45 @@ def test_qa_on_images(project: Path, ctx) -> None:
     assert not (project / "unused").exists()
 
 
+def strokes(draw, xs, top: int, bottom: int, fill: str = "#F7F8FC") -> None:
+    """Thin vertical bars: as sparse as text or a formula."""
+
+    for x in xs:
+        draw.rectangle((x, top, x + 1, bottom), fill=fill)
+
+
+@pytest.mark.parametrize(
+    ("name", "paint", "codes"),
+    [
+        ("clipped_left", lambda d: strokes(d, range(0, 40, 4), 80, 100), ["safe_area"]),
+        ("title_at_top", lambda d: strokes(d, range(100, 220, 6), 1, 12), ["safe_area"]),
+        ("centred", lambda d: strokes(d, range(100, 220, 6), 80, 100), []),
+        # Rec.601 luma rated this 2.1:1; the WCAG ratio of pure red on black is 5.25:1.
+        ("red", lambda d: strokes(d, range(100, 220, 6), 80, 100, "#FF0000"), []),
+        (
+            "soft_fill",  # a large translucent-looking fill must not outvote the text on it
+            lambda d: (
+                d.rectangle((40, 30, 200, 150), fill="#1F2738"),
+                strokes(d, range(220, 280, 6), 80, 100),
+            ),
+            [],
+        ),
+    ],
+)
+def test_qa_judges_safe_area_and_contrast_by_the_content(
+    project: Path, ctx, name, paint, codes
+) -> None:
+    from PIL import Image, ImageDraw
+
+    path = project / f"{name}.png"
+    image = Image.new("RGB", (320, 180), "#0B1020" if name != "red" else "#000000")
+    paint(ImageDraw.Draw(image))
+    image.save(path)
+    task = QaTask(path, "image", 1, SAFE_AREA_DEFAULT, None, project / "unused")
+    result = as_json(qa(task, ctx))
+    assert [f["code"] for f in result["findings"]] == codes, result["findings"]
+
+
 def test_qa_rejects_an_unreadable_image(project: Path, ctx) -> None:
     from manim_director_runtime.errors import DirectorError
 

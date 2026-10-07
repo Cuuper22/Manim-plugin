@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -21,7 +22,8 @@ if TYPE_CHECKING:
 
 _FOREGROUND_DELTA = 16  # grey-level difference from the background that counts as content
 _MIN_CONTRAST = 3.0  # WCAG AA for large text; video text and formulas are large text
-_MAX_UNSAFE_FRACTION = 0.012
+_MAX_UNSAFE_SHARE = 0.02  # of the content: sparse text clipped by the frame is still caught
+_MAX_UNSAFE_FRACTION = 0.012  # of the frame
 _MAX_EDGE_ACTIVITY = 0.2
 
 
@@ -89,7 +91,7 @@ def qa(task: QaTask, ctx: Context) -> QaResult:
 
 def measure(image: Image, safe_area: SafeArea) -> FrameMetrics:
     from PIL import Image as PILImage
-    from PIL import ImageChops, ImageStat
+    from PIL import ImageChops, ImageFilter, ImageStat
 
     width, height = image.size
     grey = image.convert("L")
@@ -103,8 +105,13 @@ def measure(image: Image, safe_area: SafeArea) -> FrameMetrics:
     foreground = delta.point(lambda value: 255 if value > _FOREGROUND_DELTA else 0)
     area = width * height
     content = foreground.histogram()[255]
-    background_grey = PILImage.new("RGB", (1, 1), background).convert("L").getpixel((0, 0))
-    foreground_grey = _median_level(grey.histogram(mask=foreground)) if content else background_grey
+    # Legibility is about text and strokes: an opening (erode, then dilate, by box blurs)
+    # finds the large flat regions, such as soft fills, that would outvote them.
+    box = ImageFilter.BoxBlur(max(2, round(min(width, height) / 120)))
+    core = foreground.filter(box).point(lambda value: 255 if value > 254 else 0)
+    detail = ImageChops.subtract(foreground, core.filter(box).point(lambda v: 255 if v else 0))
+    mask = detail if detail.histogram()[255] else foreground
+    ink = [_median_level(band.histogram(mask=mask)) for band in image.split()]
 
     band = max(1, round(min(width, height) * 0.012))
     edges = [
@@ -130,7 +137,7 @@ def measure(image: Image, safe_area: SafeArea) -> FrameMetrics:
     return FrameMetrics(
         mean_luminance=round(stat.mean[0], 3),
         luminance_stddev=round(stat.stddev[0], 3),
-        contrast_ratio=round(_contrast(foreground_grey, background_grey), 3),
+        contrast_ratio=round(contrast_ratio(ink, background) if content else 1.0, 3),
         foreground_fraction=round(content / area, 6),
         unsafe_fraction=round(unsafe / area, 6),
         edge_activity=round(edge_pixels / max(1, edge_area), 6),
@@ -160,12 +167,18 @@ def _findings(frame: QaFrame, beats: Timeline | None) -> list[Finding]:
                 "Use the theme foreground or primary colors; small text needs at least 4.5:1.",
             )
         )
-    if m.unsafe_fraction > _MAX_UNSAFE_FRACTION or m.edge_activity > _MAX_EDGE_ACTIVITY:
+    share = m.unsafe_fraction / m.foreground_fraction if m.foreground_fraction else 0.0
+    if (
+        share > _MAX_UNSAFE_SHARE
+        or m.unsafe_fraction > _MAX_UNSAFE_FRACTION
+        or m.edge_activity > _MAX_EDGE_ACTIVITY
+    ):
+        where = "reaches the frame edge" if m.edge_activity else "extends outside the safe area"
         checks.append(
             (
                 "safe_area",
                 Severity.WARNING,
-                f"Content extends outside the safe area ({m.unsafe_fraction:.1%} of the frame).",
+                f"Content {where}: {share:.0%} of it lies outside the safe area.",
                 "Scale or move content inward; the margins come from safe_area in director.yaml.",
             )
         )
@@ -195,12 +208,13 @@ def _median_level(histogram: list[int]) -> int:
     return len(histogram) - 1
 
 
-def _contrast(first: float, second: float) -> float:
-    """WCAG contrast ratio of two grey levels (0-255)."""
+def contrast_ratio(first: Sequence[float], second: Sequence[float]) -> float:
+    """WCAG 2 contrast ratio of two sRGB colors (channels 0-255)."""
 
-    def luminance(level: float) -> float:
-        c = level / 255
-        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    def luminance(rgb: Sequence[float]) -> float:
+        srgb = [c / 255 for c in rgb]
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in srgb]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
     high, low = sorted((luminance(first), luminance(second)), reverse=True)
     return (high + 0.05) / (low + 0.05)
