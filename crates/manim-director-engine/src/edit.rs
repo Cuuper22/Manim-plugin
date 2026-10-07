@@ -8,8 +8,8 @@ use crate::{
 };
 use chrono::Utc;
 use manim_director_core::{
-    files, path_rule_violation, DirectorSpec, DiscoverResult, EngineError, Resource, SpecError,
-    SPEC_FILE,
+    files, path_rule_violation, relative_posix, DirectorSpec, DiscoverResult, EngineError,
+    Resource, SpecError, SPEC_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -24,9 +24,9 @@ use uuid::Uuid;
 
 /// Where previous versions are kept as manual recovery (pruned to 20 per file).
 pub const UNDO_DIR: &str = ".manim-director/undo";
-const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 const DEFAULT_PAGE_LINES: u64 = 400;
-const MAX_PAGE_LINES: u64 = 2000;
+pub(crate) const MAX_PAGE_LINES: u64 = 2000;
 const SYNTAX_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Prints `{message, line, column}` for the first syntax error, nothing when
@@ -285,7 +285,8 @@ pub fn write_source(
 
 /// The filesystem path a source path names: the lexical rules, the extension
 /// allowlist, then confinement of the deepest existing ancestor, all before
-/// anything is created.
+/// anything is created. A symlink is followed only to a path that passes the
+/// same rules, so it cannot reach engine state or `.git`.
 fn source_path(root: &Path, path: &str) -> Result<PathBuf, EngineError> {
     let invalid = |reason| EngineError::InvalidPath {
         path: path.to_owned(),
@@ -303,7 +304,11 @@ fn source_path(root: &Path, path: &str) -> Result<PathBuf, EngineError> {
     }
     let target =
         resolve_existing_prefix(root, &root.join(path)).ok_or(invalid("outside_project"))?;
-    if target.is_dir() {
+    let resolved = relative_posix(root, &target);
+    if let Some(reason) = path_rule_violation(&resolved, false) {
+        return Err(invalid(reason));
+    }
+    if target.is_dir() || !files::has_extension(&resolved, files::EDITABLE) {
         return Err(invalid("denied"));
     }
     Ok(target)

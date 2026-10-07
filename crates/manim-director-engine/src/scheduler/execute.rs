@@ -327,8 +327,8 @@ impl Inner {
                         Err(error) => tracing::warn!(%id, %error, "could not re-hash the inputs"),
                     }
                 }
-                if let (false, Some(out_dir)) = (kept, task.out_dir()) {
-                    if let Err(error) = artifacts::remove_out_dir(&root, out_dir) {
+                if !kept && task.out_dir().is_some() {
+                    if let Err(error) = artifacts::remove_out_dir(&root, id) {
                         tracing::warn!(%id, %error, "could not remove the job's artifact directory");
                     }
                 }

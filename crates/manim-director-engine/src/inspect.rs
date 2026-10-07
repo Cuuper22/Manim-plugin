@@ -1,6 +1,6 @@
 //! The compact project summary shown by CLI and MCP `inspect`.
 
-use crate::{latest, Scheduler};
+use crate::{latest, workspace::project_theme, Scheduler};
 use manim_director_core::{
     ArtifactKind, DirectorSpec, EngineError, Finding, JobRecord, JobStatus, Operation, Severity,
     Timestamp,
@@ -132,12 +132,18 @@ pub async fn inspect(scheduler: &Scheduler) -> Result<Inspect, EngineError> {
     .await
     .map_err(EngineError::internal)?
     .map_err(EngineError::internal)?;
+    // After discover, whose worker has reported the runtime's catalog.
+    let catalog = scheduler
+        .runtime()
+        .borrow()
+        .as_ref()
+        .map(|identity| identity.catalog.clone());
     Ok(Inspect {
         name: spec.project.name.clone(),
         root,
         main_scene: spec.engine.main_scene.clone(),
         default_profile: spec.render.profile.clone(),
-        theme: spec.theme_name().map(str::to_owned),
+        theme: project_theme(&spec, catalog.as_ref()),
         profiles: spec
             .profiles()
             .iter()

@@ -9,40 +9,71 @@ mod tools;
 use crate::Scheduler;
 use anyhow::Result;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
+    sync::mpsc,
+};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 pub async fn run_mcp(scheduler: Scheduler) -> Result<()> {
-    let served = serve_stdio(&scheduler).await;
+    let served = serve(&scheduler, tokio::io::stdin(), tokio::io::stdout()).await;
     scheduler.shutdown().await;
     served
 }
 
-async fn serve_stdio(scheduler: &Scheduler) -> Result<()> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut stdout = tokio::io::stdout();
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
+/// Answers every message on its own task: a job tool waiting for its job
+/// must not hold up `job_status`, a cancel or another tool. Once the input
+/// ends, the answers still in flight are written before returning.
+async fn serve(
+    scheduler: &Scheduler,
+    input: impl AsyncRead + Unpin,
+    mut output: impl AsyncWrite + Unpin,
+) -> Result<()> {
+    let (sender, mut outbox) = mpsc::unbounded_channel::<Value>();
+    // Dropped at the end of input, so `outbox` closes after the last answer.
+    let mut sender = Some(sender);
+    let mut lines = BufReader::new(input).lines();
+    loop {
+        tokio::select! {
+            line = lines.next_line(), if sender.is_some() => match (line?, &sender) {
+                (Some(line), Some(responses)) => dispatch(scheduler, responses, &line),
+                _ => sender = None,
+            },
+            response = outbox.recv() => {
+                let Some(response) = response else {
+                    return Ok(());
+                };
+                let mut line = serde_json::to_vec(&response)?;
+                line.push(b'\n');
+                output.write_all(&line).await?;
+                output.flush().await?;
+            }
         }
-        let response = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle(scheduler, message).await,
-            Err(error) => Some(rpc_error(
+    }
+}
+
+fn dispatch(scheduler: &Scheduler, responses: &mpsc::UnboundedSender<Value>, line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+    let message = match serde_json::from_str::<Value>(line) {
+        Ok(message) => message,
+        Err(error) => {
+            let _ = responses.send(rpc_error(
                 Value::Null,
                 -32700,
                 &format!("parse error: {error}"),
-            )),
-        };
-        if let Some(response) = response {
-            stdout
-                .write_all(serde_json::to_string(&response)?.as_bytes())
-                .await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+            ));
+            return;
         }
-    }
-    Ok(())
+    };
+    let (scheduler, responses) = (scheduler.clone(), responses.clone());
+    tokio::spawn(async move {
+        if let Some(response) = handle(&scheduler, message).await {
+            let _ = responses.send(response);
+        }
+    });
 }
 
 /// Answers one JSON-RPC message; notifications (no `id`) get no answer.

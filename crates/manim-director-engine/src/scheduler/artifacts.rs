@@ -7,7 +7,7 @@ use crate::{
 };
 use manim_director_core::{
     files, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat, MediaInfo,
-    OperationResult, Task, Timeline,
+    OperationResult, Task, Timeline, ARTIFACTS_DIR,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -19,6 +19,7 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
+use uuid::Uuid;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -38,17 +39,25 @@ pub fn intact(root: &Path, result: &OperationResult) -> bool {
     })
 }
 
-/// Creates `<root>/.manim-director/artifacts/<job>` after checking that the
-/// state directories are real directories, never symlinks.
+/// `<root>/.manim-director/artifacts/<job>`, the one place a job's files live.
+pub fn job_dir(root: &Path, id: Uuid) -> PathBuf {
+    root.join(ARTIFACTS_DIR).join(id.to_string())
+}
+
+/// Creates a job's out_dir after checking that the state directories are
+/// real directories, never symlinks.
 pub fn create_out_dir(root: &Path, out_dir: &Path) -> io::Result<()> {
     ensure_state_dirs(root, true)?;
     fs::create_dir_all(out_dir)
 }
 
-/// Deletes a job's out_dir without following symlinks.
-pub fn remove_out_dir(root: &Path, out_dir: &Path) -> io::Result<()> {
+/// Deletes a job's out_dir without following symlinks. The directory comes
+/// from the id, never from a stored task: a database copied along with its
+/// project still names the original project's directories.
+pub fn remove_out_dir(root: &Path, id: Uuid) -> io::Result<()> {
     ensure_state_dirs(root, false)?;
-    match fs::symlink_metadata(out_dir) {
+    let out_dir = job_dir(root, id);
+    match fs::symlink_metadata(&out_dir) {
         Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(out_dir),
         Ok(_) => fs::remove_file(out_dir),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -132,9 +141,12 @@ pub fn validate(expect: &Expectations<'_>, result: &mut OperationResult) -> Resu
     let root = expect.root;
     let allowed = allowed_kinds(expect.task);
     let location = Location::of(expect.task);
-    let effective_fps = match result {
-        OperationResult::Export(export) => export.effective_fps,
-        _ => None,
+    let transcode = match result {
+        OperationResult::Export(export) => Transcode {
+            transcoded: export.transcoded,
+            effective_fps: export.effective_fps,
+        },
+        _ => Transcode::default(),
     };
     if matches!(expect.task, Task::Render(_)) {
         let videos = result
@@ -198,7 +210,7 @@ pub fn validate(expect: &Expectations<'_>, result: &mut OperationResult) -> Resu
         artifact.media = inspect(&path, artifact)?;
         artifact.bytes = bytes;
         total = total.saturating_add(bytes);
-        let mismatches = contract(expect, artifact, effective_fps);
+        let mismatches = contract(expect, artifact, transcode);
         if !mismatches.is_empty() {
             return Err(invalid(
                 Some(&artifact.path),
@@ -327,12 +339,15 @@ fn starts_with(path: &Path, signature: &[u8]) -> bool {
         && head == signature
 }
 
-/// Per-operation media contract for one artifact.
-fn contract(
-    expect: &Expectations<'_>,
-    artifact: &Artifact,
+/// What a media export reports about its output.
+#[derive(Debug, Clone, Copy, Default)]
+struct Transcode {
+    transcoded: bool,
     effective_fps: Option<f64>,
-) -> Vec<Mismatch> {
+}
+
+/// Per-operation media contract for one artifact.
+fn contract(expect: &Expectations<'_>, artifact: &Artifact, transcode: Transcode) -> Vec<Mismatch> {
     let Some(media) = &artifact.media else {
         return Vec::new();
     };
@@ -376,6 +391,9 @@ fn contract(
         (Task::Export(ExportTask::Media(export)), ArtifactKind::Video) => {
             if let Some(source) = expect.source {
                 match export.format {
+                    // A gif source is delivered byte for byte; gif settings
+                    // shape only a transcode.
+                    MediaExportFormat::Gif if !transcode.transcoded => {}
                     MediaExportFormat::Gif => {
                         let width = export
                             .gif
@@ -387,7 +405,7 @@ fn contract(
                                 actual: json!(media.width),
                             });
                         }
-                        if let Some(fps) = effective_fps {
+                        if let Some(fps) = transcode.effective_fps {
                             check_fps(&mut mismatches, media, fps);
                         }
                     }
@@ -685,7 +703,7 @@ mod tests {
             duration_seconds: Some(1.0),
             has_alpha: false,
         });
-        let fields: Vec<_> = contract(&expect, &video, None)
+        let fields: Vec<_> = contract(&expect, &video, Transcode::default())
             .iter()
             .map(|mismatch| mismatch.field)
             .collect();
@@ -699,7 +717,52 @@ mod tests {
             duration_seconds: None,
             has_alpha: true,
         });
-        assert!(contract(&expect, &video, None).is_empty());
+        assert!(contract(&expect, &video, Transcode::default()).is_empty());
+    }
+
+    #[test]
+    fn gif_settings_constrain_only_a_transcoded_export() {
+        let task = Task::Export(ExportTask::Media(manim_director_core::MediaExportTask {
+            format: MediaExportFormat::Gif,
+            output: "/p/output/A.gif".into(),
+            source: "/p/a.gif".into(),
+            alpha: false,
+            gif: Some(manim_director_core::GifSettings {
+                fps: 15,
+                width: 960,
+            }),
+        }));
+        let source = MediaInfo {
+            container: "gif".into(),
+            codec: Some("gif".into()),
+            width: 1280,
+            height: 720,
+            fps: Some(30.0),
+            duration_seconds: Some(1.0),
+            has_alpha: false,
+        };
+        let expect = Expectations {
+            root: Path::new("/p"),
+            task: &task,
+            source: Some(&source),
+            budget_bytes: u64::MAX,
+        };
+        let mut gif = artifact(ArtifactKind::Video, "output/A.gif");
+        gif.media = Some(source.clone());
+        let copied = Transcode {
+            transcoded: false,
+            effective_fps: None,
+        };
+        assert!(contract(&expect, &gif, copied).is_empty());
+        let transcoded = Transcode {
+            transcoded: true,
+            effective_fps: Some(100.0 / 7.0),
+        };
+        let fields: Vec<_> = contract(&expect, &gif, transcoded)
+            .iter()
+            .map(|mismatch| mismatch.field)
+            .collect();
+        assert_eq!(fields, ["width", "fps"]);
     }
 
     #[test]
@@ -788,10 +851,11 @@ mod tests {
     fn out_dirs_refuse_symlinked_state_directories() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
-        let out_dir = root.join(ARTIFACTS_DIR).join("job");
+        let id = Uuid::new_v4();
+        let out_dir = job_dir(&root, id);
         create_out_dir(&root, &out_dir).unwrap();
         std::fs::write(out_dir.join("a.png"), "x").unwrap();
-        remove_out_dir(&root, &out_dir).unwrap();
+        remove_out_dir(&root, id).unwrap();
         assert!(!out_dir.exists());
         #[cfg(unix)]
         {
@@ -799,7 +863,7 @@ mod tests {
             std::fs::remove_dir(root.join(ARTIFACTS_DIR)).unwrap();
             std::os::unix::fs::symlink(elsewhere.path(), root.join(ARTIFACTS_DIR)).unwrap();
             assert!(create_out_dir(&root, &out_dir).is_err());
-            assert!(remove_out_dir(&root, &out_dir).is_err());
+            assert!(remove_out_dir(&root, id).is_err());
         }
     }
 

@@ -840,6 +840,60 @@ async fn jobs_of_a_vanished_engine_fail_as_engine_lost_and_are_published() {
 }
 
 #[tokio::test]
+async fn reaping_a_copied_projects_jobs_never_touches_the_original_artifacts() {
+    let original = Project::new("");
+    let copy = Project::new("");
+    let store = Store::open(copy.root.join(".manim-director/state.db")).unwrap();
+    let id = Uuid::new_v4();
+    let foreign_dir = artifacts::job_dir(&original.root, id);
+    let task = manim_director_core::Task::Frame(manim_director_core::FrameTask {
+        video: original.root.join("clip.mp4"),
+        at_seconds: 0.0,
+        out_dir: foreign_dir.clone(),
+    });
+    let request = OperationRequest::Frame(FrameParams {
+        at_seconds: 0.0,
+        source: None,
+        scene: None,
+        profile: None,
+    });
+    store
+        .insert_job(&crate::NewJob {
+            id,
+            origin: JobOrigin::Cli,
+            owner: Uuid::new_v4(),
+            request: &request,
+            task: &task,
+            limits: manim_director_core::Limits {
+                timeout_seconds: 60,
+                memory_mb: None,
+            },
+            fingerprint: None,
+            source_job_id: None,
+            scene_class: None,
+            scene_file: None,
+            scene_revision: None,
+            profile: None,
+        })
+        .unwrap();
+    for dir in [&foreign_dir, &artifacts::job_dir(&copy.root, id)] {
+        artifacts::create_out_dir(dir.ancestors().nth(3).unwrap(), dir).unwrap();
+        fs::write(dir.join("frame.png"), "x").unwrap();
+    }
+
+    let engine = copy.engine(EngineMode::Mcp, stub("stub"), 1, 8).await;
+    assert_eq!(
+        error_code(&engine.store().get_job(id).unwrap().unwrap()),
+        "engine_lost"
+    );
+    assert!(
+        foreign_dir.join("frame.png").is_file(),
+        "the original keeps its files"
+    );
+    assert!(!artifacts::job_dir(&copy.root, id).exists());
+}
+
+#[tokio::test]
 async fn a_full_queue_is_a_typed_error_that_leaks_no_handle_and_frees_on_cancel() {
     let project = Project::new("");
     let scheduler = project.scheduler("stub", 1, 2).await;

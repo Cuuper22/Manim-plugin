@@ -320,6 +320,17 @@ fn paths_are_rejected_before_anything_is_created() {
                 ..
             })
         ));
+        project.file(".git/config.md", b"[core]\n");
+        std::os::unix::fs::symlink(".git", project.root.join("vcs")).unwrap();
+        assert_eq!(invalid("vcs/config.md"), "hidden");
+        assert_eq!(invalid("vcs/hooks/new.md"), "hidden");
+        project.file("tool.sh", b"echo\n");
+        std::os::unix::fs::symlink("tool.sh", project.root.join("tool.md")).unwrap();
+        assert_eq!(invalid("tool.md"), "denied");
+        assert_eq!(
+            fs::read(project.root.join(".git/config.md")).unwrap(),
+            b"[core]\n"
+        );
     }
 }
 

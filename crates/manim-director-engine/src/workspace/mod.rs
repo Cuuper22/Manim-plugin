@@ -11,7 +11,7 @@ mod scenes;
 
 pub use artifacts::{content_type, file_version};
 pub use jobs::{job_detail, job_summary, JobDetail, JobView};
-pub use project::{SpecSnapshot, SpecTracker};
+pub use project::{project_theme, SpecSnapshot, SpecTracker};
 pub use scenes::SceneIndex;
 
 use crate::{JobFilter, Store};

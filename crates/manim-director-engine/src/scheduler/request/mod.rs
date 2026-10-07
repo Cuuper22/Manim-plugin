@@ -12,12 +12,12 @@ pub use paths::cli_project_path;
 pub(crate) use paths::{project_path, PathUse};
 pub(crate) use source::SelectedSource;
 
-use crate::{cache, Store};
+use crate::{cache, scheduler::artifacts, Store};
 use manim_director_core::{
     files, python_sources, relative_posix, Budget, CaptionsTask, ContactSheetTask, DiagnoseTask,
     DirectorSpec, DoctorTask, EngineError, FrameTask, Limits, LogStream, MediaFormat, Operation,
     OperationRequest, QaTask, RenderTask, SceneSpec, StillTask, Task, ValidateMathTask,
-    ARTIFACTS_DIR, MAX_PYTHON_SOURCES,
+    MAX_PYTHON_SOURCES,
 };
 use serde_json::Value;
 use source::Consumer;
@@ -167,7 +167,7 @@ pub(crate) fn resolve(
     job_id: Uuid,
     request: &OperationRequest,
 ) -> Result<ResolvedJob, EngineError> {
-    let out_dir = ctx.root.join(ARTIFACTS_DIR).join(job_id.to_string());
+    let out_dir = artifacts::job_dir(ctx.root, job_id);
     let spec = ctx.valid_spec();
     Ok(match request {
         OperationRequest::Init(_) | OperationRequest::Discover(_) => {

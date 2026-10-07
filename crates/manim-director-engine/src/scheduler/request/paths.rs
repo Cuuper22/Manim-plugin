@@ -53,7 +53,10 @@ pub(crate) fn project_path(
             extensions,
         } => {
             let denied = [root.join(".manim-director"), root.join(media_dir)];
-            if denied.iter().any(|dir| resolved.starts_with(dir)) || resolved.is_dir() {
+            let under_denied = denied
+                .iter()
+                .any(|dir| dir != root && resolved.starts_with(dir));
+            if under_denied || resolved.is_dir() {
                 return Err(EngineError::invalid(field, "denied"));
             }
             require_extension(field, &resolved, extensions)?;
@@ -199,6 +202,11 @@ mod tests {
             project_path(&root, "output", "output/new/film.zip", output(&["zip"])).unwrap(),
             root.join("output/new/film.zip")
         );
+        let media_at_root = PathUse::Output {
+            media_dir: ".",
+            extensions: &["zip"],
+        };
+        project_path(&root, "output", "film.zip", media_at_root).unwrap();
         for (value, expected) in [
             ("media/a.srt", "denied"),
             ("captions", "denied"),

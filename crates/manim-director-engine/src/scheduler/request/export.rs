@@ -171,11 +171,12 @@ fn project_entries(root: &Path, spec: &DirectorSpec) -> Vec<ExportEntry> {
             paths.insert(path);
         }
     }
-    let excluded = [
-        root.join(".manim-director"),
-        root.join(&project.output_dir),
-        root.join(&project.media_dir),
-    ];
+    // An output or media dir of "." would exclude the whole project.
+    let excluded: Vec<PathBuf> = [".manim-director", &project.output_dir, &project.media_dir]
+        .into_iter()
+        .map(|dir| root.join(dir))
+        .filter(|dir| dir != root)
+        .collect();
     paths
         .into_iter()
         .filter(|path| !excluded.iter().any(|dir| path.starts_with(dir)))
@@ -321,6 +322,20 @@ mod tests {
                 "scenes/main.py",
                 "sources/paper.pdf"
             ]
+        );
+        fs::write(
+            root.join("director.yaml"),
+            "version: 1\nproject:\n  name: Demo\n  output_dir: .\n",
+        )
+        .unwrap();
+        let spec = DirectorSpec::load(&root).unwrap();
+        let archive: Vec<_> = project_entries(&root, &spec)
+            .into_iter()
+            .map(|entry| entry.archive_path)
+            .collect();
+        assert!(
+            archive.contains(&"scenes/main.py".to_owned()),
+            "{archive:?}"
         );
     }
 }

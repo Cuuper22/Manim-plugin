@@ -26,6 +26,10 @@ pub struct InitTask {
     pub seed: Option<u32>,
     /// Set iff `mode` is `add_scene`.
     pub source_dir: Option<PathBuf>,
+    /// `add_scene` only: overwrite an existing scene file. (Create mode says
+    /// the same with `overwrite`.)
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

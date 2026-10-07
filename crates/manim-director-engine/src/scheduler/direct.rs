@@ -197,6 +197,7 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
                 theme: None,
                 seed: None,
                 source_dir: Some(root.join(&spec.project.source_dir)),
+                force: params.force,
             }
         }
         None => {
@@ -224,6 +225,7 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
                 theme: params.theme.clone(),
                 seed: params.seed,
                 source_dir: None,
+                force: false,
             }
         }
     };
@@ -280,6 +282,27 @@ mod tests {
             project_entries(root).unwrap(),
             [".manim-director", "notes.txt"]
         );
+    }
+
+    #[test]
+    fn force_reaches_the_runtime_as_overwrite_or_as_the_add_scene_flag() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let forced = |scene_template: Option<&str>| InitParams {
+            scene_template: scene_template.map(str::to_owned),
+            force: true,
+            ..InitParams::default()
+        };
+        let (_, created) = preflight(root, &forced(None)).unwrap();
+        assert_eq!((created.mode, created.force), (InitMode::Overwrite, false));
+        fs::write(
+            root.join("director.yaml"),
+            "version: 1\nproject:\n  name: Demo\n",
+        )
+        .unwrap();
+        let (root, added) = preflight(root, &forced(Some("graph"))).unwrap();
+        assert_eq!((added.mode, added.force), (InitMode::AddScene, true));
+        assert_eq!(added.source_dir, Some(root.join("scenes")));
     }
 
     #[tokio::test]

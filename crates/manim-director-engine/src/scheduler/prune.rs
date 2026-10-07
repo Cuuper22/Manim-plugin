@@ -6,7 +6,7 @@ use super::{artifacts, latest};
 use crate::{JobLinks, Store, UNDO_DIR};
 use anyhow::Result;
 use chrono::{TimeDelta, Utc};
-use manim_director_core::{Timestamp, ARTIFACTS_DIR};
+use manim_director_core::Timestamp;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -97,8 +97,7 @@ fn prune_jobs(store: &Store, root: &Path, keep: usize, cutoff: Timestamp) -> Res
         .collect();
     let deleted = store.delete_jobs(&doomed)?;
     for id in &doomed {
-        let out_dir = root.join(ARTIFACTS_DIR).join(id.to_string());
-        if let Err(error) = artifacts::remove_out_dir(root, &out_dir) {
+        if let Err(error) = artifacts::remove_out_dir(root, *id) {
             tracing::warn!(%id, %error, "could not remove a pruned job's artifacts");
         }
     }
@@ -178,7 +177,7 @@ mod tests {
     use manim_director_core::{
         Artifact, ArtifactKind, ErrorBody, JobOrigin, JobStatus, Limits, MediaFormat, Operation,
         OperationRequest, OperationResult, RenderParams, RenderResult, RenderSettings, RenderTask,
-        Renderer, SceneRef, Task,
+        Renderer, SceneRef, Task, ARTIFACTS_DIR,
     };
 
     fn finished(store: &Store, root: &Path, status: JobStatus) -> Uuid {

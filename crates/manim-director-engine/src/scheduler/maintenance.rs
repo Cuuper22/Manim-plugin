@@ -103,11 +103,9 @@ impl Inner {
 
 /// Deletes the artifact directories of jobs another engine abandoned.
 pub(super) fn remove_out_dirs(root: &Path, jobs: &[JobRecord]) {
-    for job in jobs {
-        if let Some(out_dir) = job.task.out_dir() {
-            if let Err(error) = artifacts::remove_out_dir(root, out_dir) {
-                tracing::warn!(id = %job.id, %error, "could not remove an abandoned job's artifacts");
-            }
+    for job in jobs.iter().filter(|job| job.task.out_dir().is_some()) {
+        if let Err(error) = artifacts::remove_out_dir(root, job.id) {
+            tracing::warn!(id = %job.id, %error, "could not remove an abandoned job's artifacts");
         }
     }
 }

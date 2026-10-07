@@ -5,7 +5,7 @@ use manim_director_core::{
     DiscoveredScene, DoctorParams, ErrorBody, ExportFormat, ExportParams, ExportTask, FrameParams,
     JobOrigin, JobStatus, LogLevel, MediaInfo, OperationResult, QaParams, RenderParams,
     RenderResult, Resource, SceneRef, SourceKind, SourceRef, StillParams, StillResult,
-    ValidateMathParams,
+    ValidateMathParams, ARTIFACTS_DIR,
 };
 use std::fs;
 

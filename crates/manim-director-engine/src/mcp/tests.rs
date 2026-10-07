@@ -111,6 +111,10 @@ async fn inspect_counts_the_scenes_discovery_finds() {
     assert_eq!(scenes.len(), 2);
     assert_eq!(scenes[1]["scene_id"], "scenes/main.py#Proof");
     assert!(text(&result).starts_with("Demo: 2 scenes"));
+    assert_eq!(
+        result["structuredContent"]["theme"], "midnight",
+        "no theme in director.yaml: the runtime's default theme"
+    );
 
     let refused = call(&scheduler, "inspect", json!({"deep": true})).await;
     assert_eq!(refused["isError"], true);
@@ -227,4 +231,43 @@ async fn job_status_cancels_and_pages_events() {
             .unwrap()
             > cursor.as_str().unwrap().parse::<i64>().unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_waiting_job_tool_does_not_hold_up_other_messages() {
+    let directory = tempfile::tempdir().unwrap();
+    let scheduler = scheduler(directory.path()).await;
+    let (mut client, server_input) = tokio::io::duplex(64 * 1024);
+    let (server_output, client_output) = tokio::io::duplex(64 * 1024);
+    let served = tokio::spawn({
+        let scheduler = scheduler.clone();
+        async move { serve(&scheduler, server_input, server_output).await }
+    });
+    let slow = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "submit",
+        "arguments": {"operation": "diagnose", "text": "sleep", "wait_seconds": 3}}});
+    let ping = json!({"jsonrpc": "2.0", "id": 2, "method": "ping"});
+    for message in [slow, ping] {
+        client
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+    drop(client);
+    let mut answers = BufReader::new(client_output).lines();
+    let first: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        first["id"], 2,
+        "the ping is answered while the job tool waits"
+    );
+    let second: Value = serde_json::from_str(&answers.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(
+        second["id"], 1,
+        "an answer in flight at end of input is still written"
+    );
+    assert_eq!(
+        second["result"]["structuredContent"]["job"]["status"],
+        "running"
+    );
+    served.await.unwrap().unwrap();
+    scheduler.shutdown().await;
 }

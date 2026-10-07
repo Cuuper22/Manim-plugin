@@ -7,6 +7,7 @@ use super::{
     workbench::Workbench,
 };
 use crate::{
+    edit::{MAX_PAGE_LINES, MAX_SOURCE_BYTES},
     workspace::{self, SceneIndex, Section, Sections, SpecSnapshot, SpecTracker, ViewInputs},
     Scheduler,
 };
@@ -28,8 +29,6 @@ use uuid::Uuid;
 
 pub const REQUEST_BODY_BYTES: usize = 256 * 1024;
 pub const SOURCE_BODY_BYTES: usize = 3 * 1024 * 1024;
-const SOURCE_FILE_BYTES: usize = 2 * 1024 * 1024;
-const SOURCE_PAGE_LINES: usize = 2000;
 
 #[derive(Clone)]
 pub struct AppState(Arc<Shared>);
@@ -194,8 +193,8 @@ impl Shared {
             limits: EngineLimits {
                 request_body_bytes: REQUEST_BODY_BYTES,
                 source_body_bytes: SOURCE_BODY_BYTES,
-                source_file_bytes: SOURCE_FILE_BYTES,
-                source_page_lines: SOURCE_PAGE_LINES,
+                source_file_bytes: MAX_SOURCE_BYTES,
+                source_page_lines: MAX_PAGE_LINES,
             },
         }
     }
@@ -214,6 +213,6 @@ pub struct EngineInfo {
 pub struct EngineLimits {
     pub request_body_bytes: usize,
     pub source_body_bytes: usize,
-    pub source_file_bytes: usize,
-    pub source_page_lines: usize,
+    pub source_file_bytes: u64,
+    pub source_page_lines: u64,
 }
