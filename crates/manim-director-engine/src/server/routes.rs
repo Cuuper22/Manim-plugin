@@ -23,6 +23,7 @@ use manim_director_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::{ops::RangeInclusive, str::FromStr};
 
 const JOBS_IN_STATE: usize = 50;
 
@@ -117,15 +118,7 @@ pub async fn list_jobs(
     ApiQuery(query): ApiQuery<JobsQuery>,
 ) -> ApiResult<Json<JobPage>> {
     let limit = bounded("limit", query.limit.as_deref(), 1..=200, 50)?;
-    let before = query
-        .before
-        .as_deref()
-        .map(|before| {
-            before
-                .parse::<i64>()
-                .map_err(|_| EngineError::invalid("before", "not a job sequence"))
-        })
-        .transpose()?;
+    let before = number("before", query.before.as_deref(), "not a job sequence")?;
     let root = state.root().to_path_buf();
     let page = state
         .scheduler
@@ -203,15 +196,7 @@ pub async fn job_logs(
     ApiQuery(query): ApiQuery<LogsQuery>,
 ) -> ApiResult<Json<LogPage>> {
     let limit = bounded("limit", query.limit.as_deref(), 1..=500, 200)?;
-    let after = query
-        .after
-        .as_deref()
-        .map(|after| {
-            after
-                .parse::<i64>()
-                .map_err(|_| EngineError::invalid("after", "not a log cursor"))
-        })
-        .transpose()?;
+    let after = number("after", query.after.as_deref(), "not a log cursor")?;
     let page = state
         .scheduler
         .store()
@@ -241,17 +226,12 @@ pub async fn source_page(
     State(state): State<AppState>,
     ApiQuery(query): ApiQuery<SourceQuery>,
 ) -> ApiResult<Json<SourcePage>> {
-    let line = |field, value: Option<&str>| {
-        value
-            .map(|value| {
-                value
-                    .parse::<u64>()
-                    .map_err(|_| EngineError::invalid(field, "not a line number"))
-            })
-            .transpose()
-    };
-    let start = line("start_line", query.start_line.as_deref())?;
-    let end = line("end_line", query.end_line.as_deref())?;
+    let start = number(
+        "start_line",
+        query.start_line.as_deref(),
+        "not a line number",
+    )?;
+    let end = number("end_line", query.end_line.as_deref(), "not a line number")?;
     let root = state.root().to_path_buf();
     let page = tokio::task::spawn_blocking(move || read_source(&root, &query.path, start, end))
         .await
@@ -295,23 +275,31 @@ async fn summarize(state: &AppState, job: JobRecord) -> Result<JobView, EngineEr
         .map_err(EngineError::internal)
 }
 
+/// An optional numeric query param; one that does not parse is `reason`.
+fn number<T: FromStr>(
+    field: &str,
+    value: Option<&str>,
+    reason: &str,
+) -> Result<Option<T>, EngineError> {
+    value
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|_| EngineError::invalid(field, reason))
+        })
+        .transpose()
+}
+
 fn bounded(
     field: &str,
     value: Option<&str>,
-    range: std::ops::RangeInclusive<u32>,
+    range: RangeInclusive<u32>,
     default: u32,
 ) -> Result<u32, EngineError> {
-    let Some(value) = value else {
-        return Ok(default);
-    };
-    value
-        .parse::<u32>()
-        .ok()
-        .filter(|value| range.contains(value))
-        .ok_or_else(|| {
-            EngineError::invalid(
-                field,
-                format!("must be between {} and {}", range.start(), range.end()),
-            )
-        })
+    let reason = format!("must be between {} and {}", range.start(), range.end());
+    match number(field, value, &reason)? {
+        None => Ok(default),
+        Some(value) if range.contains(&value) => Ok(value),
+        Some(_) => Err(EngineError::invalid(field, reason)),
+    }
 }
