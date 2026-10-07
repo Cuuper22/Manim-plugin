@@ -102,7 +102,19 @@ def plan(
 
 
 def describe(mobject: Mobject) -> str:
-    text = repr(mobject)
+    """How errors name an object: helper-built math by the TeX the author wrote (its
+    tex_string carries the injected color specials), anything else by its repr."""
+
+    lines = getattr(mobject, "lines", None)  # a Derivation
+    if lines and hasattr(lines[0], "authored_tex"):
+        return f"the derivation from {_clip(repr(lines[0].authored_tex))} ({len(lines)} steps)"
+    source = getattr(mobject, "authored_tex", None)
+    if source is not None:
+        return f"{type(mobject).__name__}({_clip(repr(source))})"
+    return _clip(repr(mobject))
+
+
+def _clip(text: str) -> str:
     return text if len(text) <= 60 else text[:57] + "..."
 
 

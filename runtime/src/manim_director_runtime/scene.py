@@ -7,8 +7,8 @@ objects simply enter at the next animation, so arbitrary Manim code mixes in fre
 from __future__ import annotations
 
 import inspect
+import re
 import sys
-import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -101,10 +101,12 @@ class Directed:
             self._restore_defaults()
 
     def tear_down(self) -> None:
+        self._require_entered()
         self._flush(instant=True)
         super().tear_down()  # type: ignore[misc]
 
     def play(self, *args: Any, **kwargs: Any) -> None:
+        self._require_entered()
         self._flush(introduced=motion.introduced(args))
         super().play(*args, **kwargs)  # type: ignore[misc]
         self._unwrap(args)
@@ -120,7 +122,7 @@ class Directed:
         self._beat: Beat | None = None
         self._beats_entered = 0
         self._tags = 0
-        self._sources: weakref.WeakKeyDictionary[Mobject, str] = weakref.WeakKeyDictionary()
+        self._unentered: Beat | None = None
         if config.renderer == RendererType.OPENGL:
             self.renderer.background_color = self.theme.background
         else:
@@ -150,7 +152,7 @@ class Directed:
         pieces = [colorize(s, self._symbol_colors, math_only=True) for s in strings]
         options = {"font_size": style.font_size, "color": self.theme.color(style.color)}
         mobject = Tex(*pieces, **{**options, **kwargs})
-        self._sources[mobject] = mobject.arg_separator.join(strings)
+        mobject.authored_tex = mobject.arg_separator.join(strings)  # copies keep it
         return mobject
 
     def math(self, *strings: str, **kwargs: Any) -> MathTex:
@@ -163,7 +165,7 @@ class Directed:
         options = {"font_size": MATH_FONT_SIZE, "color": self.theme.foreground}
         mobject = MathTex(*pieces, **{**options, **kwargs})
         source = strings[0] if len(strings) == 1 else mobject.arg_separator.join(strings)
-        self._sources[mobject] = source
+        mobject.authored_tex = source
         return mobject
 
     def title(self, text: str, **kwargs: Any) -> Text:
@@ -229,6 +231,7 @@ class Directed:
             if replaces is None:
                 self._stage.entering += [m for m in new if m not in self._stage.entering]
             mobject.scale(layout.scale).move_to(center)
+            _require_held(mobject)
             for member in mobject.get_family()[1:]:  # the group now owns their placement
                 self._stage.placed.pop(id(member), None)
             self._stage.place(mobject, area_name)
@@ -270,7 +273,7 @@ class Directed:
         if hold < 0 or (run_time is not None and run_time < 0):
             raise CompositionError("A beat's hold and run_time cannot be negative.")
         caller = sys._getframe(1)
-        return Beat(
+        self._unentered = Beat(
             id=id,
             transition=parse_choice(Transition, transition),
             focus=focus,
@@ -284,6 +287,7 @@ class Directed:
             file=caller.f_code.co_filename,
             line=caller.f_lineno,
         )
+        return self._unentered
 
     def focus(self, *mobjects: Mobject, run_time: float | None = None) -> None:
         """Dim everything on stage except `mobjects` (title and caption stay lit)."""
@@ -299,8 +303,10 @@ class Directed:
         for top in self.mobjects:
             if self._stage.region_of(top) in LANES or self._backstage(top):
                 continue
+            # A tag stays lit with the equation it belongs to.
+            lit = spared | {id(m) for m in top.get_family()} if self._of(top, spared) else spared
             _, base = self._stage.dimmed.get(id(top), (top, motion.opacities(top)))
-            animation = motion.dim(top, base, spared)
+            animation = motion.dim(top, base, lit)
             if animation is not None:
                 self._stage.dimmed[id(top)] = (top, base)
             elif self._stage.dimmed.pop(id(top), None):
@@ -425,7 +431,7 @@ class Directed:
             raise CompositionError(
                 f"term() looks inside MathTex or Tex; {describe(mobject)} is neither."
             )
-        source = self._sources.get(mobject, mobject.tex_string)
+        source = getattr(mobject, "authored_tex", mobject.tex_string)
         return term_glyphs(mobject, source, tex, occurrence)
 
     def highlight(
@@ -488,7 +494,18 @@ class Directed:
 
     # Internals ------------------------------------------------------------------------------
 
+    def _require_entered(self) -> None:
+        beat, self._unentered = self._unentered, None
+        if beat is not None:
+            raise CompositionError(
+                f"self.beat({beat.id!r}) was called but never entered: beats are context "
+                f"managers, so write `with self.beat({beat.id!r}):` and indent the beat's code.",
+                beat=beat.id,
+            )
+
     def _enter_beat(self, beat: Beat) -> None:
+        if beat is self._unentered:
+            self._unentered = None
         if self._beat is not None:
             raise CompositionError(
                 f"Beat {beat.id or 'unnamed'!r} starts inside beat {self._beat.id!r}; beats do "
@@ -508,7 +525,8 @@ class Directed:
             and (chapter or self._stage.region_of(m) not in LANES)
         ]
         beat.carried = {id(leaf) for m in beat.keep for leaf in m.get_family()}
-        self.next_section(beat.id)
+        # Manim names section files after the section: no path separators in them.
+        self.next_section(re.sub(r'[\\/:*?"<>|]', "-", beat.id))
         recorder = timeline.active()
         if recorder is not None:
             beat.record = recorder.enter(beat.id, beat.file, beat.line, self.renderer.time)
@@ -635,6 +653,12 @@ class Directed:
     def _carry(self, mobject: Mobject) -> None:
         if self._beat is not None and not self._beat.transitioned:
             self._beat.carried.update(id(leaf) for leaf in mobject.get_family())
+
+    def _of(self, mobject: Mobject, ids: set[int]) -> bool:
+        """Whether `mobject` is attached (as a tag) to one of `ids`."""
+
+        parent = self._stage.attached.get(id(mobject))
+        return parent is not None and (id(parent) in ids or self._of(parent, ids))
 
     def _carried(self, mobject: Mobject, beat: Beat) -> bool:
         """Carried as a whole; a group carried only in part leaves its other parts behind."""
@@ -786,7 +810,28 @@ def _hold_on_screen(mobject: Mobject, frame: Mobject) -> None:
         m.scale(width * zoom / m.width).move_to(frame.get_center() + offset * zoom)
 
     follow(mobject)
+    follow.director = True  # type: ignore[attr-defined]
     mobject.add_updater(follow)
+
+
+def _require_held(mobject: Mobject) -> None:
+    """A placement only lasts if the mobject's own updaters leave it there; always_redraw
+    rebuilds its mobject where its function draws it, every frame."""
+
+    family = mobject.get_family()
+    updaters = [u for m in family for u in m.updaters]
+    if not updaters or any(getattr(u, "director", False) for u in updaters):
+        return
+    center, width = mobject.get_center().copy(), mobject.width
+    mobject.update(0)
+    if not (
+        np.allclose(center, mobject.get_center(), atol=1e-6) and np.isclose(width, mobject.width)
+    ):
+        raise CompositionError(
+            f"{describe(mobject)} positions itself every frame (always_redraw or an updater), "
+            "so place() cannot move it: place the objects it is drawn from, or position it "
+            "inside its redraw function."
+        )
 
 
 def _fade_in(mobject: Mobject | None) -> list[Animation]:

@@ -296,3 +296,15 @@ def test_concurrent_renders_share_a_cold_tex_cache(project: Path) -> None:
     with ThreadPoolExecutor(3) as pool:
         results = list(pool.map(still, ["RaceA", "RaceB", "RaceC"]))
     assert [frame["type"] for frame in results] == ["result"] * 3, results
+
+
+@requires_manim
+def test_beat_ids_with_path_separators_render_sections(project: Path) -> None:
+    source = DIRECTED.replace('"circle"', '"proof/step-1"').replace('"square"', '"proof/step-2"')
+    scene = write_scene(project, source)
+    frames, _ = run_bridge(project, render_request(project, "Shapes", [scene], sections=True))
+    sections = [a for a in frames[-1]["result"]["artifacts"] if a["kind"] == "section"]
+    assert [a["path"].rsplit("/", 1)[-1] for a in sections] == [
+        "0001-proof-step-1.mp4",
+        "0002-proof-step-2.mp4",
+    ]

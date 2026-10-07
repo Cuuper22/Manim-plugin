@@ -361,6 +361,21 @@ def test_beat_misuse_fails_with_a_clear_message(render: Render) -> None:
     with pytest.raises(CompositionError, match="never reached the stage"):
         render(Unseen)
 
+    class Bare(DirectedScene):  # the call style of v1
+        def construct(self):
+            self.beat("hook")
+            self.wait()
+
+    with pytest.raises(CompositionError, match="write `with self.beat\\('hook'\\):`"):
+        render(Bare)
+
+    class Redrawn(DirectedScene):
+        def construct(self):
+            self.place(always_redraw(lambda: Circle()), region=Region.LEFT)
+
+    with pytest.raises(CompositionError, match="positions itself every frame"):
+        render(Redrawn)
+
 
 def test_run_time_zero_lands_on_the_end_state_instantly(render: Render) -> None:
     seen: dict[str, Any] = {}
@@ -541,8 +556,15 @@ def test_terms_and_highlights_find_sub_expressions(render: Render) -> None:
             with pytest.raises(CompositionError, match="looks inside MathTex or Tex"):
                 self.term(Square(), "x")
 
+            ghost = eq.copy()  # a copy keeps the authored source, not the painted TeX
+            seen["copy"] = len(self.term(ghost, "x^2"))
+            with pytest.raises(CompositionError) as raised:
+                self.place(self.math(r"x^2 + " * 40 + "x"))
+            seen["named"] = str(raised.value).startswith("MathTex('x^2 + x^2")
+
     render(Terms)
     assert seen["counts"] == [3, 2, 1, 6]
+    assert seen["copy"] == 2 and seen["named"]
     assert seen["manim color"] == {YELLOW.to_hex()}
     assert seen["highlighted"] == {MIDNIGHT.accent}
     assert seen["box"] == 2
@@ -562,9 +584,13 @@ def test_tags_number_equations_at_the_right_edge(render: Render) -> None:
             seen["labels"] = [tag.tex_string for tag in tags]
             seen["edge"] = all(tag.get_right()[0] == pytest.approx(right) for tag in tags)
             seen["rows"] = tags[0].get_y() == pytest.approx(first.get_y())
+            self.focus(first)  # its tag stays lit with it
+            seen["lit"] = [tag.family_members_with_points()[0].get_fill_opacity() for tag in tags]
 
     render(Tags)
+    lit = seen.pop("lit")
     assert seen == {"labels": ["(1)", r"(\star)"], "edge": True, "rows": True}
+    assert lit[0] == 1.0 and lit[1] < 1.0
 
 
 def test_a_still_shows_the_theme_and_the_content(render: Render, tmp_path: Path) -> None:
@@ -658,7 +684,7 @@ def test_beats_leave_cameras_zoom_displays_and_trackers_alone(render: Render) ->
     class Machinery(DirectedMovingCameraScene):
         def construct(self):
             frame, tracker = self.camera.frame, ValueTracker(1.0)
-            readout = always_redraw(lambda: DecimalNumber(tracker.get_value()))
+            readout = DecimalNumber(1.0).add_updater(lambda d: d.set_value(tracker.get_value()))
             self.add(tracker)
             with self.beat("pan"):
                 self.place(readout)
