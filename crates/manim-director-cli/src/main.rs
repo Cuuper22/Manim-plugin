@@ -139,7 +139,15 @@ async fn run(cli: Cli) -> Outcome {
             std::process::exit(0)
         }
         command => {
-            let root = find_project(&project).map_err(EngineError::from)?;
+            let scratch;
+            let root = match find_project(&project) {
+                Ok(root) => root,
+                Err(_) if needs_no_project(&command) => {
+                    scratch = Scratch::new()?;
+                    scratch.0.clone()
+                }
+                Err(error) => return Err(EngineError::from(error).into()),
+            };
             let paths = CliPaths {
                 root: &root,
                 cwd: &cwd,
@@ -295,6 +303,33 @@ async fn run(cli: Cli) -> Outcome {
             };
             submit_and_wait(&root, request, machine).await
         }
+    }
+}
+
+/// Doctor, validate-math and the diagnosis of a given text run anywhere.
+fn needs_no_project(command: &Command) -> bool {
+    match command {
+        Command::Doctor | Command::ValidateMath(_) => true,
+        Command::Diagnose(args) => args.job.is_none(),
+        _ => false,
+    }
+}
+
+/// A throwaway root for a command run outside any project, so its job leaves
+/// no engine state behind in the directory it was run from.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("manim-director-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&path)?;
+        Ok(Self(path.canonicalize()?))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
