@@ -4,11 +4,19 @@ use manim_director_core::{ErrorBody, PROTOCOL_VERSION};
 use serde_json::json;
 use std::{path::Path, process::ExitStatus};
 
+/// The message ends with the last line Python printed, which usually names
+/// the cause ("No module named manim_director_runtime").
 pub(super) fn runtime_unavailable(python: &Path, detail: &str, stderr_tail: &str) -> ErrorBody {
+    let said = stderr_tail
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(|line| format!(" It printed: {}", truncate(line, 300)))
+        .unwrap_or_default();
     ErrorBody::new(
         "runtime_unavailable",
         format!(
-            "The Python runtime at {} is unavailable: {detail}.",
+            "The Python runtime at {} is unavailable: {detail}.{said}",
             python.display()
         ),
         Some(json!({"python": python, "stderr_tail": stderr_tail})),

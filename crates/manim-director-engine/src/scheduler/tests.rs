@@ -219,6 +219,12 @@ async fn bridge_violations_fail_jobs_with_engine_codes() {
         .as_str()
         .unwrap()
         .contains("unknown option"));
+    // The message itself says why, for readers that never see `data`.
+    let message = &job.error.as_ref().unwrap().message;
+    assert!(
+        message.ends_with("It printed: usage: unknown option --preload"),
+        "{message}"
+    );
 
     let outdated = project.scheduler("stub_protocol_1", 1, 8).await;
     let job = run(&outdated, OperationRequest::Doctor(DoctorParams {})).await;
@@ -238,6 +244,8 @@ async fn bridge_violations_fail_jobs_with_engine_codes() {
         .await;
     let job = run(&missing, OperationRequest::Doctor(DoctorParams {})).await;
     assert_eq!(error_code(&job), "runtime_unavailable");
+    let message = &job.error.as_ref().unwrap().message;
+    assert!(!message.contains("It printed"), "{message}");
 }
 
 #[tokio::test]
