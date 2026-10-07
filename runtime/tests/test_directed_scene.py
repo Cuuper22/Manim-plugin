@@ -24,6 +24,7 @@ from manim import (  # noqa: E402
     RIGHT,
     YELLOW,
     Circle,
+    Create,
     DecimalNumber,
     Dot,
     FadeIn,
@@ -563,6 +564,37 @@ def test_three_d_scenes_keep_placed_objects_in_screen_space(render: Render) -> N
     (title,) = [m for m in scene.mobjects if isinstance(m, Text)]
     assert title in scene.renderer.camera.fixed_in_frame_mobjects
     assert inside(title, scene.region("header"))
+
+
+@requires_latex
+def test_three_d_derivations_and_highlights_stay_in_screen_space(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Tilted(DirectedThreeDScene):
+        def construct(self):
+            camera = self.renderer.camera
+            self.set_camera_orientation(phi=60 * DEGREES, theta=30 * DEGREES)
+            axes = ThreeDAxes()
+            world = {id(m) for m in axes.get_family()}
+            projected: set[int] = set()
+            project = camera.transform_points_pre_display
+
+            def record(mobject, points):
+                if mobject not in camera.fixed_in_frame_mobjects:
+                    projected.add(id(mobject))
+                return project(mobject, points)
+
+            with self.beat("world"):
+                self.play(Create(axes))
+            camera.transform_points_pre_display = record
+            with self.beat("algebra"):  # axes leave, still as 3D world objects
+                steps = self.derive(r"z = x^2 + y^2", r"z = r^2")
+                self.highlight(steps.lines[-1], "r^2", box=True)
+            seen["overlays projected"] = projected - world
+            seen["axes pinned"] = axes in camera.fixed_in_frame_mobjects
+
+    render(Tilted)
+    assert seen == {"overlays projected": set(), "axes pinned": False}
 
 
 def test_moving_camera_scenes_keep_title_and_caption_on_screen(render: Render) -> None:

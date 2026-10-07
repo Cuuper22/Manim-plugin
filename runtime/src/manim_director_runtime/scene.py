@@ -18,6 +18,7 @@ from manim import (
     DOWN,
     LEFT,
     Animation,
+    AnimationGroup,
     AnnotationDot,
     AnnularSector,
     Annulus,
@@ -431,6 +432,8 @@ class Directed:
                 fill_opacity=0.16,
             ).move_to(glyphs)
             backdrop.set_z_index(mobject.z_index - 1)
+            if self._pinned(mobject):
+                self._pin(backdrop)
             animations.append(FadeIn(backdrop))
         self._flush()
         self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
@@ -694,6 +697,9 @@ class Directed:
     def _pin(self, mobject: Mobject) -> None:
         """Hook for scenes whose camera moves: hold what should stay put on screen."""
 
+    def _pinned(self, mobject: Mobject) -> bool:
+        return False
+
 
 class DirectedScene(Directed, Scene):
     pass
@@ -715,6 +721,33 @@ class DirectedThreeDScene(Directed, ThreeDScene):
             mobject.fix_in_frame()
         else:
             self.renderer.camera.add_fixed_in_frame_mobjects(mobject)
+
+    def _pinned(self, mobject: Mobject) -> bool:
+        if config.renderer == RendererType.OPENGL:
+            return bool(getattr(mobject, "is_fixed_in_frame", False))
+        return mobject in self.renderer.camera.fixed_in_frame_mobjects
+
+    def begin_animations(self) -> None:
+        """Transforms of overlays (derive steps, morphs) draw copies that Manim makes in
+        begin(); pin those too, or the camera projects them into the 3D world. World objects
+        stay as they are."""
+
+        super().begin_animations()
+        pending = [(animation, False) for animation in self.animations or []]
+        while pending:
+            animation, overlay = pending.pop()
+            target = getattr(animation, "to_add", None)
+            target = target or getattr(animation, "target_mobject", None)
+            # A plain group's own mobject gathers all its members, overlays and world alike.
+            group = isinstance(animation, AnimationGroup)
+            ends = [target] if group else [animation.mobject, target]
+            overlay = overlay or any(
+                self._pinned(m) for end in ends if end is not None for m in end.get_family()
+            )
+            if overlay:
+                self._pin(animation.mobject)
+            if group:  # members may have put their own mobjects on stage (FadeIn)
+                pending += [(member, overlay) for member in animation.animations]
 
 
 def _hold_on_screen(mobject: Mobject, frame: Mobject) -> None:
