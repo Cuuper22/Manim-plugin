@@ -125,6 +125,33 @@ async fn inspect_counts_the_scenes_discovery_finds() {
 }
 
 #[tokio::test]
+async fn inspect_agrees_with_the_workbench_on_order_and_findings() {
+    let directory = tempfile::tempdir().unwrap();
+    let scheduler = scheduler(directory.path()).await;
+    fs::write(
+        scheduler.root().join("director.yaml"),
+        "version: 1\nproject:\n  name: Demo\ntheme: nonexistent\nscenes:\n  - {id: Proof, file: scenes/main.py}\n",
+    )
+    .unwrap();
+    let result = call(&scheduler, "inspect", json!({})).await;
+    let structured = &result["structuredContent"];
+    let scenes: Vec<_> = structured["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|scene| scene["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(scenes, ["Proof", "Intro"], "declared scenes first");
+    let codes: Vec<_> = structured["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"unknown_theme"), "{codes:?}");
+}
+
+#[tokio::test]
 async fn job_tools_wait_for_the_result_and_failures_are_error_results() {
     let directory = tempfile::tempdir().unwrap();
     let scheduler = scheduler(directory.path()).await;
