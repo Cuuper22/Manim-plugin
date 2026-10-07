@@ -21,9 +21,10 @@ import release_integrity  # noqa: E402
 
 class VersionAndChecksumTests(unittest.TestCase):
     def test_repository_versions_match_release_tag(self) -> None:
-        self.assertEqual(release_integrity.validate_versions(tag="v1.1.0"), "1.1.0")
+        version = release_integrity.validate_versions()
+        self.assertEqual(release_integrity.validate_versions(tag=f"v{version}"), version)
         with self.assertRaisesRegex(ValueError, "must exactly equal"):
-            release_integrity.validate_versions(tag="1.1.0")
+            release_integrity.validate_versions(tag=version)
 
     def test_component_drift_is_rejected(self) -> None:
         versions = {"plugin": "1.1.0", "workbench": "1.1.1"}
@@ -63,8 +64,9 @@ class VersionAndChecksumTests(unittest.TestCase):
     def test_manifest_covers_exact_release_matrix_in_sorted_order(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             directory = Path(raw_tmp)
+            version = release_integrity.validate_versions()
             names = {
-                f"manim-director-v1.1.0-{target}.{extension}"
+                f"manim-director-v{version}-{target}.{extension}"
                 for target, extension in release_integrity.RELEASE_TARGETS.items()
             }
             for name in names:
