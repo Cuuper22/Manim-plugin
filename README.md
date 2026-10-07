@@ -161,7 +161,8 @@ The plugin adds the `manim-director` skill and an MCP server with ten tools: `in
 `frame`, `diagnose`, `captions`, `ingest`, `export`) and `job_status`. A job tool waits for its job
 (20 seconds by default, up to 50), then answers with its verdict (a failed step, the QA status),
 up to five `file:line` findings and the absolute paths of the images and videos it made. Logs and
-media stay on disk; the agent opens the PNGs it needs.
+media stay on disk; the agent opens the PNGs it needs. The server works on the project at or above
+the directory the session starts in, so start your agent inside the project.
 
 Ask for what you want to see:
 

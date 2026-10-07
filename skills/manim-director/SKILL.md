@@ -20,6 +20,10 @@ engine renders, inspects and checks.
    - `director.yaml is missing`: call `init` with a `template` (`explainer`, `derivation`,
      `geometry`, `graph`, `vertical_short`), or ask where the project should live. To add a scene to
      an existing project, call `init` with only `scene_template`.
+   - `project_not_empty` from `init`: the directory holds the user's files. Do not pass `force`
+     unless the user agrees: it overwrites `README.md`, `manim.cfg` and `scenes/main.py` without
+     a copy. Otherwise create the project in a new directory with the CLI (`manim-director init
+     <dir>`) and work there with `--project`.
    - No MCP tools at all, or only a `setup` tool: the engine is not installed. In Claude Code,
      `setup` prints the exact command. Otherwise give the user
      `python3 <this skill's directory>/../../scripts/install.py --with-manim` (Python 3.11+; it
