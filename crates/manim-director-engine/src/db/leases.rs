@@ -12,7 +12,7 @@ use uuid::Uuid;
 /// A lease whose heartbeat is older than this is stale.
 pub const LEASE_STALE_MILLIS: i64 = 10_000;
 
-/// How an engine process runs; long-lived modes also reap and prune.
+/// How an engine process runs; long-lived modes also prune history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineMode {
     Serve,

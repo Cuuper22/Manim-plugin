@@ -860,6 +860,43 @@ async fn jobs_of_a_vanished_engine_fail_as_engine_lost_and_are_published() {
 }
 
 #[tokio::test]
+async fn a_one_off_engine_takes_a_scene_over_from_an_engine_that_died_holding_it() {
+    let project = Project::new("");
+    let store = Store::open(project.root.join(".manim-director/state.db")).unwrap();
+    let (dead, held) = (Uuid::new_v4(), Uuid::new_v4());
+    // Fresh when the next command starts, stale soon after: a SIGKILL.
+    let heartbeat = now_millis() - crate::LEASE_STALE_MILLIS + 2_000;
+    store.renew_lease(dead, EngineMode::Cli, heartbeat).unwrap();
+    crate::db::testing::queued_job(&store, held, dead);
+    store.set_running(held).unwrap();
+    assert!(store.try_lock_scene("SlowScene", held, dead).unwrap());
+
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let render = OperationRequest::Render(RenderParams {
+        scene: Some("SlowScene".into()),
+        fresh: true,
+        ..Default::default()
+    });
+    let job = scheduler
+        .submit(JobOrigin::Cli, render)
+        .await
+        .unwrap()
+        .into_job();
+    let started = Instant::now();
+    while stub_records(&project, "stub-requests.txt").is_empty() {
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "still locked out"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let lost = store.get_job(held).unwrap().unwrap();
+    assert_eq!(error_code(&lost), "engine_lost");
+    scheduler.cancel(job.id).await.unwrap();
+    scheduler.wait(job.id).await.unwrap();
+}
+
+#[tokio::test]
 async fn reaping_a_copied_projects_jobs_never_touches_the_original_artifacts() {
     let original = Project::new("");
     let copy = Project::new("");

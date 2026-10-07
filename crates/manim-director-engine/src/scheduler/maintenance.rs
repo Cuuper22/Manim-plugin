@@ -1,7 +1,8 @@
 //! Background upkeep (OPS §1.8). Every engine heartbeats its lease and polls
-//! cross-process cancel requests each second; long-lived engines also reap
-//! stale leases every two seconds and prune history at start and every ten
-//! minutes. Both loops end when the scheduler shuts down or is dropped.
+//! cross-process cancel requests each second and reaps stale leases every
+//! two seconds, so even a one-off command never waits on a dead engine's job
+//! or scene lock; long-lived engines also prune history at start and every
+//! ten minutes. Both loops end when the scheduler shuts down or is dropped.
 
 use super::{artifacts, prune, Inner};
 use crate::{now_millis, LEASE_STALE_MILLIS};
@@ -35,8 +36,7 @@ pub(super) fn spawn(inner: &Arc<Inner>) {
                 break;
             };
             let settled = thaw.settled(now_millis());
-            let reap = inner.mode.is_long_lived() && tick % REAP_EVERY_TICKS == 0;
-            inner.upkeep(settled && reap).await;
+            inner.upkeep(settled && tick % REAP_EVERY_TICKS == 0).await;
         }
     });
     if !inner.mode.is_long_lived() {
