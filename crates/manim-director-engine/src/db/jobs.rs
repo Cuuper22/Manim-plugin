@@ -407,6 +407,23 @@ impl Store {
         Ok(pairs)
     }
 
+    /// Every `(scene_class, scene_file, profile)` some render succeeded at.
+    pub fn render_profiles(&self) -> Result<Vec<(String, String, String)>> {
+        let conn = self.conn.lock();
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT scene_class, scene_file, profile FROM jobs
+             WHERE operation = ?1 AND status = ?2 AND scene_class IS NOT NULL
+               AND scene_file IS NOT NULL AND profile IS NOT NULL",
+        )?;
+        let triples = statement
+            .query_map(
+                params![Operation::Render.as_str(), JobStatus::Succeeded.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(triples)
+    }
+
     pub fn job_links(&self) -> Result<Vec<JobLinks>> {
         let conn = self.conn.lock();
         let mut statement = conn.prepare("SELECT id, cached_from, source_job_id FROM jobs")?;

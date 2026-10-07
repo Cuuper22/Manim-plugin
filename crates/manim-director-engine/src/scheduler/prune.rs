@@ -56,8 +56,9 @@ pub fn prune(store: &Store, root: &Path, policy: PrunePolicy) -> Result<Pruned> 
     })
 }
 
-/// Deletes candidates except what views still show: every scene's `latest`
-/// jobs, and (transitively) every job a kept job was cached from or read.
+/// Deletes candidates except what views and default sources still show:
+/// every scene's `latest` jobs and newest render per profile, and
+/// (transitively) every job a kept job was cached from or read.
 fn prune_jobs(store: &Store, root: &Path, keep: usize, cutoff: Timestamp) -> Result<usize> {
     let candidates = store.prune_candidates(keep, cutoff)?;
     if candidates.is_empty() {
@@ -79,6 +80,11 @@ fn prune_jobs(store: &Store, root: &Path, keep: usize, cutoff: Timestamp) -> Res
                 .flatten()
                 .map(|job| job.id),
         );
+    }
+    // Export, QA and frames pick a scene's newest render per profile.
+    for (class, file, profile) in store.render_profiles()? {
+        let found = latest::latest_render(store, root, Some(&class), Some(&file), Some(&profile))?;
+        kept.extend(found.map(|job| job.id));
     }
     let mut frontier: Vec<Uuid> = kept.iter().copied().collect();
     while let Some(id) = frontier.pop() {
@@ -229,7 +235,7 @@ mod tests {
         assert!(root.join(ARTIFACTS_DIR).join(recent.to_string()).exists());
     }
 
-    fn render(store: &Store, root: &Path, cached_from: Option<Uuid>) -> Uuid {
+    fn render(store: &Store, root: &Path, profile: &str, cached_from: Option<Uuid>) -> Uuid {
         let id = Uuid::new_v4();
         let out_dir = root.join(ARTIFACTS_DIR).join(id.to_string());
         let request = OperationRequest::Render(RenderParams::default());
@@ -237,7 +243,7 @@ mod tests {
             scene: Some("Intro".into()),
             files: vec![],
             settings: RenderSettings {
-                profile: "draft".into(),
+                profile: profile.into(),
                 width: 854,
                 height: 480,
                 fps: 15,
@@ -282,7 +288,7 @@ mod tests {
             scene_class: Some("Intro"),
             scene_file: Some("scenes/main.py"),
             scene_revision: None,
-            profile: Some("draft"),
+            profile: Some(profile),
         };
         match cached_from {
             Some(origin) => {
@@ -304,8 +310,8 @@ mod tests {
     #[test]
     fn a_scenes_latest_render_and_its_cache_origin_survive() {
         let (_dir, root, store) = project();
-        let original = render(&store, &root, None);
-        let cached = render(&store, &root, Some(original));
+        let original = render(&store, &root, "draft", None);
+        let cached = render(&store, &root, "draft", Some(original));
         for _ in 0..3 {
             finished(&store, &root, JobStatus::Failed);
         }
@@ -320,6 +326,25 @@ mod tests {
             "the job a kept cache hit came from is kept"
         );
         assert!(root.join(ARTIFACTS_DIR).join(original.to_string()).is_dir());
+    }
+
+    #[test]
+    fn a_scenes_newest_render_at_each_profile_survives() {
+        let (_dir, root, store) = project();
+        let production = render(&store, &root, "production", None);
+        let draft = render(&store, &root, "draft", None);
+        for _ in 0..3 {
+            finished(&store, &root, JobStatus::Failed);
+        }
+        let policy = PrunePolicy {
+            keep_jobs: 1,
+            keep_days: 30,
+        };
+        assert_eq!(prune(&store, &root, policy).unwrap().jobs, 2);
+        for id in [production, draft] {
+            assert!(store.get_job(id).unwrap().is_some());
+            assert!(root.join(ARTIFACTS_DIR).join(id.to_string()).is_dir());
+        }
     }
 
     #[test]
