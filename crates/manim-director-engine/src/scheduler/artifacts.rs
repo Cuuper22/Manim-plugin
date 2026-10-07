@@ -6,8 +6,8 @@ use crate::{
     process::wait_bounded,
 };
 use manim_director_core::{
-    files, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat, MediaFormat,
-    MediaInfo, OperationResult, Task, Timeline, ARTIFACTS_DIR,
+    files, named_enum, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat,
+    MediaFormat, MediaInfo, OperationResult, Task, Timeline, ARTIFACTS_DIR,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -78,28 +78,15 @@ pub struct Expectations<'a> {
     pub budget_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Check {
-    Location,
-    Missing,
-    Empty,
-    Signature,
-    Probe,
-    Contract,
-    Parse,
-}
-
-impl Check {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Location => "location",
-            Self::Missing => "missing",
-            Self::Empty => "empty",
-            Self::Signature => "signature",
-            Self::Probe => "probe",
-            Self::Contract => "contract",
-            Self::Parse => "parse",
-        }
+named_enum! {
+    pub enum Check {
+        Location = "location",
+        Missing = "missing",
+        Empty = "empty",
+        Signature = "signature",
+        Probe = "probe",
+        Contract = "contract",
+        Parse = "parse",
     }
 }
 
@@ -124,7 +111,7 @@ fn invalid(path: Option<&str>, check: Check, detail: &str, mismatches: Vec<Misma
     );
     ErrorBody::new(
         "artifact_invalid",
-        format!("{subject} failed the {} check: {detail}.", check.as_str()),
+        format!("{subject} failed the {check} check: {detail}."),
         Some(json!({
             "path": path,
             "check": check.as_str(),

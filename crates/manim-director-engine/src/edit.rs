@@ -8,8 +8,8 @@ use crate::{
 };
 use chrono::Utc;
 use manim_director_core::{
-    files, path_rule_violation, relative_posix, DirectorSpec, DiscoverResult, EngineError,
-    Resource, SpecError, SPEC_FILE,
+    files, named_enum, path_rule_violation, relative_posix, DirectorSpec, DiscoverResult,
+    EngineError, Resource, SpecError, SPEC_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -44,18 +44,18 @@ except (SyntaxError, ValueError) as error:
                       'column': getattr(error, 'offset', None)}))
 ";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceLanguage {
-    Python,
-    Json,
-    Yaml,
-    Toml,
-    Markdown,
-    Latex,
-    Typst,
-    Captions,
-    Text,
+named_enum! {
+    pub enum SourceLanguage {
+        Python = "python",
+        Json = "json",
+        Yaml = "yaml",
+        Toml = "toml",
+        Markdown = "markdown",
+        Latex = "latex",
+        Typst = "typst",
+        Captions = "captions",
+        Text = "text",
+    }
 }
 
 impl SourceLanguage {
@@ -70,20 +70,6 @@ impl SourceLanguage {
             Some("typ") => Self::Typst,
             Some("vtt" | "srt") => Self::Captions,
             _ => Self::Text,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Python => "python",
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-            Self::Toml => "toml",
-            Self::Markdown => "markdown",
-            Self::Latex => "latex",
-            Self::Typst => "typst",
-            Self::Captions => "captions",
-            Self::Text => "text",
         }
     }
 }

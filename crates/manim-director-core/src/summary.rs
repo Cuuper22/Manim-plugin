@@ -2,7 +2,7 @@
 //! content, so a reader learns what a result concludes and not only that the
 //! job succeeded.
 
-use crate::{ErrorBody, Finding, MathPair, OperationResult, QaStatus, Severity};
+use crate::{ErrorBody, Finding, MathPair, OperationResult};
 
 /// What `result` concludes, one line each.
 pub fn verdict(result: &OperationResult) -> Vec<String> {
@@ -14,14 +14,7 @@ pub fn verdict(result: &OperationResult) -> Vec<String> {
             "{} ({}): {:.1} s, {} animations",
             render.scene.name, render.scene.file, render.duration_seconds, render.animations
         )],
-        OperationResult::Qa(qa) => vec![format!(
-            "qa: {}",
-            match qa.status {
-                QaStatus::Pass => "pass",
-                QaStatus::Warn => "warn",
-                QaStatus::Fail => "fail",
-            }
-        )],
+        OperationResult::Qa(qa) => vec![format!("qa: {}", qa.status)],
         OperationResult::ValidateMath(math) => {
             let overall = match math.valid {
                 Some(true) => "every step is equivalent",
@@ -67,17 +60,15 @@ pub fn error_findings(error: &ErrorBody) -> Vec<Finding> {
 
 /// `warning scenes/main.py:46: message`, then its hint, if any.
 pub fn finding_lines(finding: &Finding) -> Vec<String> {
-    let severity = match finding.severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-        Severity::Info => "info",
-    };
     let location = finding
         .location
         .as_ref()
         .map(|location| format!("{}:{}: ", location.file, location.line))
         .unwrap_or_default();
-    let mut lines = vec![format!("{severity} {location}{}", finding.message)];
+    let mut lines = vec![format!(
+        "{} {location}{}",
+        finding.severity, finding.message
+    )];
     lines.extend(finding.hint.as_ref().map(|hint| format!("  hint: {hint}")));
     lines
 }

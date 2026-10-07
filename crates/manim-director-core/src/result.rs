@@ -1,7 +1,7 @@
 //! Operation results. Runtime fields arrive over the bridge; fields marked
 //! (engine) are filled by the engine after the runtime returns.
 
-use crate::{task::InitMode, ExportFormat, Operation, Renderer};
+use crate::{names::named_enum, task::InitMode, ExportFormat, Operation, Renderer};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -49,12 +49,13 @@ pub struct MediaInfo {
     pub has_alpha: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Severity {
-    Error,
-    Warning,
-    Info,
+named_enum! {
+    /// Ordered most severe first.
+    pub enum Severity {
+        Error = "error",
+        Warning = "warning",
+        Info = "info",
+    }
 }
 
 /// 1-based; `file` is project-relative, or absolute outside the project.
@@ -256,12 +257,12 @@ pub struct SheetFrame {
     pub beat: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QaStatus {
-    Pass,
-    Warn,
-    Fail,
+named_enum! {
+    pub enum QaStatus {
+        Pass = "pass",
+        Warn = "warn",
+        Fail = "fail",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

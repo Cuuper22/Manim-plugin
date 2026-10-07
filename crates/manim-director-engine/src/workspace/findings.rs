@@ -10,8 +10,8 @@ use super::{
 use crate::{confine, JobFilter, Store};
 use anyhow::Result;
 use manim_director_core::{
-    Catalog, ErrorBody, Finding, JobRecord, JobStatus, Operation, OperationResult, Severity,
-    SourceLocation, ThemeSetting, SPEC_FILE,
+    named_enum, Catalog, ErrorBody, Finding, JobRecord, JobStatus, Operation, OperationResult,
+    Severity, SourceLocation, ThemeSetting, SPEC_FILE,
 };
 use serde::Serialize;
 use std::{collections::BTreeMap, path::Path};
@@ -19,25 +19,13 @@ use uuid::Uuid;
 
 const MAX_FINDINGS: usize = 200;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FindingSource {
-    Spec,
-    Index,
-    Render,
-    Qa,
-    Doctor,
-}
-
-impl FindingSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Spec => "spec",
-            Self::Index => "index",
-            Self::Render => "render",
-            Self::Qa => "qa",
-            Self::Doctor => "doctor",
-        }
+named_enum! {
+    pub enum FindingSource {
+        Spec = "spec",
+        Index = "index",
+        Render = "render",
+        Qa = "qa",
+        Doctor = "doctor",
     }
 }
 
@@ -236,15 +224,11 @@ fn from_error_code(code: &str, error: &ErrorBody) -> Finding {
 }
 
 /// Errors, warnings, info; then by file and line, location-less last.
-fn order_key(finding: &Finding) -> (u8, bool, &str, u32) {
-    let rank = match finding.severity {
-        Severity::Error => 0,
-        Severity::Warning => 1,
-        Severity::Info => 2,
-    };
+fn order_key(finding: &Finding) -> (Severity, bool, &str, u32) {
+    let severity = finding.severity;
     match &finding.location {
-        Some(location) => (rank, false, location.file.as_str(), location.line),
-        None => (rank, true, "", 0),
+        Some(location) => (severity, false, location.file.as_str(), location.line),
+        None => (severity, true, "", 0),
     }
 }
 
@@ -288,7 +272,7 @@ impl Collector<'_> {
             });
             self.views.push(FindingView {
                 finding,
-                id: format!("{}:{key}:{n}", source.as_str()),
+                id: format!("{source}:{key}:{n}"),
                 source,
                 scene_id: scene_id.clone(),
                 job_id,
