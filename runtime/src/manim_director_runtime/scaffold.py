@@ -20,8 +20,6 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import yaml
-
 from .errors import DirectorError, invalid_params, io_error
 from .inspection import DIRECTOR_SCENE_BASES
 from .model import ArtifactKind, RuntimeArtifact, SceneRef
@@ -189,6 +187,8 @@ def _fill(path: str, text: str, values: dict[str, str | int]) -> str:
 
 
 def _yaml_scalar(value: str | int) -> str:
+    import yaml  # here, not at import: the bridge must start without PyYAML for doctor to say so
+
     plain = str(value)
     try:
         round_trips = yaml.safe_load(plain) == value

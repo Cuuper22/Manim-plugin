@@ -63,6 +63,7 @@ def test_the_package_and_catalog_import_without_manim() -> None:
         "from manim_director_runtime import Region, Theme, Transition, protocol, catalog\n"
         "catalog.catalog()\n"
         "assert 'manim' not in sys.modules\n"
+        "assert 'yaml' not in sys.modules  # doctor must run to report PyYAML missing\n"
     )
     env = {**os.environ, "PYTHONPATH": str(SRC)}
     subprocess.run([sys.executable, "-c", code], env=env, check=True)
