@@ -30,6 +30,8 @@ export interface Workspace extends WorkspaceSections {
 export interface Toast {
   id: number;
   message: string;
+  /** `info`: why something cannot be done yet, not an error. */
+  tone: "danger" | "info";
 }
 
 export interface WorkbenchState {
@@ -60,6 +62,7 @@ export type StoreAction =
   | { type: "action_succeeded"; key: string }
   /** `toast`: the message to show, unless the caller shows the failure itself. */
   | { type: "action_failed"; key: string; toast: string | null }
+  | { type: "hinted"; message: string }
   | { type: "toast_dismissed"; id: number };
 
 export const initialState: WorkbenchState = {
@@ -106,8 +109,10 @@ export function reduce(state: WorkbenchState, action: StoreAction): WorkbenchSta
       return withoutPending(state, action.key);
     case "action_failed": {
       const failed = withoutPending(state, action.key);
-      return action.toast === null ? failed : withToast(failed, action.toast);
+      return action.toast === null ? failed : withToast(failed, action.toast, "danger");
     }
+    case "hinted":
+      return withToast(state, action.message, "info");
     case "toast_dismissed":
       return { ...state, toasts: state.toasts.filter((toast) => toast.id !== action.id) };
   }
@@ -175,8 +180,10 @@ function withoutPending(state: WorkbenchState, key: string): WorkbenchState {
   return { ...state, pending };
 }
 
-function withToast(state: WorkbenchState, message: string): WorkbenchState {
-  const toast = { id: state.nextToastId, message };
+/** A message already on screen is not shown twice. */
+function withToast(state: WorkbenchState, message: string, tone: Toast["tone"]): WorkbenchState {
+  if (state.toasts.some((toast) => toast.message === message)) return state;
+  const toast = { id: state.nextToastId, message, tone };
   return { ...state, toasts: [...state.toasts, toast].slice(-MAX_TOASTS), nextToastId: state.nextToastId + 1 };
 }
 

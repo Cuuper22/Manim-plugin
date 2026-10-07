@@ -106,17 +106,21 @@ test("the job list keeps the newest and pages from the oldest kept", () => {
   assert.equal(state.jobsNextBefore, "2");
 });
 
-test("actions are pending until they end; failures toast unless told not to", () => {
+test("actions are pending until they end; failures toast unless told not to, and hints say why not", () => {
   let state = run({ type: "action_started", key: "render" }, { type: "action_started", key: "save" });
   assert.deepEqual([...state.pending], ["render", "save"]);
 
   state = reduce(state, { type: "action_failed", key: "render", toast: "The queue is full." });
   state = reduce(state, { type: "action_failed", key: "save", toast: null });
   assert.deepEqual([...state.pending], []);
-  assert.deepEqual(state.toasts, [{ id: 1, message: "The queue is full." }]);
+  assert.deepEqual(state.toasts, [{ id: 1, message: "The queue is full.", tone: "danger" }]);
+
+  state = reduce(state, { type: "hinted", message: "QA: Needs a render first." });
+  assert.deepEqual(state.toasts[1], { id: 2, message: "QA: Needs a render first.", tone: "info" });
+  assert.equal(reduce(state, { type: "hinted", message: "QA: Needs a render first." }), state, "shown once");
 
   state = reduce(state, { type: "toast_dismissed", id: 1 });
-  assert.deepEqual(state.toasts, []);
+  assert.deepEqual(state.toasts.map((toast) => toast.id), [2]);
 });
 
 test("an unchanged connection status keeps the state object", () => {

@@ -23,7 +23,7 @@ function ToastItem({ toast }: { toast: Toast }) {
     return () => clearTimeout(timer);
   }, [store, toast.id]);
   return (
-    <div className="card toast" data-tone="danger" role="alert">
+    <div className="card toast" data-tone={toast.tone === "danger" ? "danger" : undefined} role="alert">
       <p>{toast.message}</p>
       <button type="button" className="quiet small icon" aria-label="Dismiss" onClick={() => store.dismissToast(toast.id)}>
         <Icon name="close" />

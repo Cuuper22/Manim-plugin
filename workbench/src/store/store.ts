@@ -106,6 +106,11 @@ export class WorkbenchStore {
     if (outcome.ok) this.#dispatch({ type: "older_jobs", page: outcome.value });
   }
 
+  /** Says why something cannot be done yet, e.g. a disabled action that was pressed. */
+  hint(message: string): void {
+    this.#dispatch({ type: "hinted", message });
+  }
+
   dismissToast(id: number): void {
     this.#dispatch({ type: "toast_dismissed", id });
   }
