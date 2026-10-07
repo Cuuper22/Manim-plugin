@@ -161,7 +161,7 @@ class Context:
         if not is_within(Path(os.path.realpath(path)), root):
             raise DirectorError(
                 "invalid_params",
-                f"Invalid task field {field}: {path} is outside the project.",
+                f"Invalid {field}: {path} is outside the project.",
                 {"field": field, "reason": "outside_project"},
             )
         return path

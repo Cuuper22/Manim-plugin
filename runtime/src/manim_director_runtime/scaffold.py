@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 DEFAULT_TEMPLATE = "explainer"
 SCENE_FILE = "scenes/main.py"
+SPEC_FILE = "director.yaml"
 _SHARED = "_shared"
 _FILLED_SUFFIXES = frozenset({".yaml", ".md"})
 _GITIGNORE_LINES = (".manim-director/", "__pycache__/")
@@ -98,11 +99,7 @@ def _create(task: InitTask, ctx: Context) -> InitResult:
     if task.mode == "create":
         existing = sorted(path for path in sources if (root / path).exists())
         if existing:
-            raise DirectorError(
-                "project_not_empty",
-                f"{len(existing)} template file(s) already exist; pass force to overwrite them.",
-                {"paths": existing},
-            )
+            raise _occupied(existing)
     written = [
         _write(root / path, _fill(path, source.read_text(encoding="utf-8"), values))
         for path, source in sources.items()
@@ -138,10 +135,12 @@ def _add_scene(task: InitTask, ctx: Context) -> InitResult:
             with target.open("x", encoding="utf-8") as handle:
                 handle.write(source)
     except FileExistsError:
+        existing = ctx.relative(target)
         raise DirectorError(
             "project_not_empty",
-            f"{ctx.relative(target)} already exists; pass force to overwrite it.",
-            {"paths": [ctx.relative(target)]},
+            f"{existing} already exists; force (--force) would replace it with the template's "
+            "scene, and keeps no copy.",
+            {"paths": [existing]},
         ) from None
     except OSError as exc:
         raise io_error(target, exc) from exc
@@ -156,6 +155,22 @@ def _add_scene(task: InitTask, ctx: Context) -> InitResult:
         scene=SceneRef(name=scene_class(source), file=ctx.relative(target)),
         artifacts=[ctx.artifact(ArtifactKind.FILE, target)],
     )
+
+
+def _occupied(existing: list[str]) -> DirectorError:
+    """Name what force would replace and, in a project, how to add a scene instead."""
+
+    replaced = f"force (--force) would replace {_listing(existing)}, and keeps no copy."
+    if SPEC_FILE in existing:
+        add = "add a scene with scene_template (--scene-template)"
+        message = f"This directory is already a project; {add}. {replaced}"
+    else:
+        message = f"This directory already has files the template writes; {replaced}"
+    return DirectorError("project_not_empty", message, {"paths": existing})
+
+
+def _listing(items: list[str]) -> str:
+    return f"{', '.join(items[:-1])} and {items[-1]}" if len(items) > 1 else items[0]
 
 
 def _unknown(field: str, value: str, allowed: list[str]) -> DirectorError:

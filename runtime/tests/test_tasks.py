@@ -136,6 +136,19 @@ def test_doctor_task_takes_no_fields() -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"project_root": "."}, "Invalid project_root: unknown field."),
+        ([], "Invalid parameters: must be an object."),
+    ],
+)
+def test_messages_name_the_parameter_plainly(raw: object, message: str) -> None:
+    with pytest.raises(DirectorError) as raised:
+        parse("doctor", raw)
+    assert raised.value.message == message
+
+
+@pytest.mark.parametrize(
     ("method", "patch", "field", "reason"),
     [
         (

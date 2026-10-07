@@ -173,6 +173,7 @@ def test_invalid_params_name_the_dotted_field(project: Path, writer: RecordingWr
     error = writer.frames[0]["error"]
     assert error["code"] == "invalid_params"
     assert error["data"] == {"field": "settings.width", "reason": "must be an integer"}
+    assert error["message"] == "Invalid settings.width: must be an integer."
 
 
 # A stand-in engine: starts a worker (as its own group's leader when argv[4] is "True", as the
@@ -256,6 +257,7 @@ def test_require_inside_follows_symlinks_to_where_they_lead(project: Path, ctx) 
         with pytest.raises(DirectorError) as raised:
             ctx.require_inside(project / path, "output")
         assert raised.value.data == {"field": "output", "reason": "outside_project"}
+    assert raised.value.message == f"Invalid output: {project / path} is outside the project."
 
 
 def test_progress_is_coalesced_and_the_last_state_is_flushed(ctx, writer: RecordingWriter) -> None:

@@ -45,8 +45,8 @@ def invalid_params(
     data: dict[str, Any] = {"field": field, "reason": reason}
     if allowed is not None:
         data["allowed"] = allowed
-    where = f" {field}" if field else ""
-    return DirectorError("invalid_params", f"Invalid task field{where}: {reason}.", data)
+    # The engine's own wording, so a message reads the same whichever side refused it.
+    return DirectorError("invalid_params", f"Invalid {field or 'parameters'}: {reason}.", data)
 
 
 def io_error(path: Path, error: OSError) -> DirectorError:
