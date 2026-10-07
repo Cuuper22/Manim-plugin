@@ -151,6 +151,15 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     await page.keyboard.press("Control+s");
     await page.getByRole("heading", { name: "Not connected to the engine" }).waitFor();
     assert.equal(await page.locator(".workbench").isVisible(), false);
+    // The command names the project's path, which may be long: it scrolls in its box, and Copy stays in view.
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const fits = await page.evaluate(() => {
+        const copy = document.querySelector(".command button")!.getBoundingClientRect();
+        return document.documentElement.scrollWidth <= innerWidth && copy.right <= innerWidth;
+      });
+      assert.equal(fits, true, `the not-connected screen fits ${width} px`);
+    }
     await page.unroute("**/api/**");
     await page.locator(".workbench").waitFor({ timeout: STEP_MS });
     outage = false;

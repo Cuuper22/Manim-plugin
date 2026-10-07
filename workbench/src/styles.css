@@ -1052,6 +1052,8 @@ kbd {
 
 .screen {
   display: grid;
+  /* A long command scrolls inside its box instead of widening the card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   width: min(560px, calc(100vw - 2 * var(--space-4)));
   margin: 14vh auto 0;
