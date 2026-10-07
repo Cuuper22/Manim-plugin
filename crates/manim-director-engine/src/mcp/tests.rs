@@ -99,6 +99,13 @@ async fn the_server_lists_exactly_the_ten_catalog_tools_and_no_resources() {
     )
     .await
     .is_none());
+    for (invalid, id) in [(json!([1, 2]), Value::Null), (json!({"id": 9}), json!(9))] {
+        let answer = handle(&scheduler, invalid).await.unwrap();
+        assert_eq!(
+            (&answer["error"]["code"], &answer["id"]),
+            (&json!(-32600), &id)
+        );
+    }
 }
 
 #[tokio::test]

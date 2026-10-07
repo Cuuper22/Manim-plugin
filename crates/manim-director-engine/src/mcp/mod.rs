@@ -83,11 +83,17 @@ fn dispatch(scheduler: &Scheduler, responses: &mpsc::UnboundedSender<Value>, lin
 
 /// Answers one JSON-RPC message; notifications (no `id`) get no answer.
 async fn handle(scheduler: &Scheduler, message: Value) -> Option<Value> {
+    if !message.is_object() {
+        return Some(rpc_error(
+            Value::Null,
+            -32600,
+            "invalid request: not an object",
+        ));
+    }
     let id = message.get("id").cloned()?;
-    let method = message
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Some(rpc_error(id, -32600, "invalid request: no method"));
+    };
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
     let result = match method {
         "initialize" => json!({
