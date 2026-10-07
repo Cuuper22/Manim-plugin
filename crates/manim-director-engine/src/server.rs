@@ -1,6 +1,6 @@
 use crate::{
-    apply_source_mutation, confine, latest_render, parse_params, read_source, Scheduler,
-    SourceMutation, SourceReadQuery, Submission,
+    confine, latest_render, parse_params, read_source, write_source, Scheduler, SourcePage,
+    SourceWrite, SourceWriteResult, Submission,
 };
 use anyhow::Result;
 use axum::{
@@ -51,11 +51,13 @@ pub struct ServeConfig {
 }
 
 pub async fn serve(config: ServeConfig, scheduler: Scheduler) -> Result<()> {
-    let state = ApiState { scheduler };
+    let state = ApiState {
+        scheduler: scheduler.clone(),
+    };
     let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/state", get(project_state))
-        .route("/api/state/source", get(source_read).put(source_write))
+        .route("/api/source", get(source_read).put(source_write))
         .route("/api/renders", post(create_render))
         .route("/api/renders/{id}", get(get_job))
         .route("/api/renders/{id}/cancel", post(cancel_job))
@@ -77,10 +79,11 @@ pub async fn serve(config: ServeConfig, scheduler: Scheduler) -> Result<()> {
     };
     let listener = TcpListener::bind(config.address).await?;
     tracing::info!(address = %listener.local_addr()?, "Manim Director server ready");
-    axum::serve(listener, app)
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    Ok(())
+        .await;
+    scheduler.shutdown().await;
+    Ok(served?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,22 +146,40 @@ fn not_found_file(path: &str) -> ApiError {
     .into()
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceQuery {
+    path: String,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+}
+
 async fn source_read(
     State(state): State<ApiState>,
-    Query(query): Query<SourceReadQuery>,
-) -> ApiResult<Json<crate::SourceView>> {
-    let source = read_source(state.root(), &query)
-        .map_err(|error| EngineError::invalid("path", error.to_string()))?;
-    Ok(Json(source))
+    Query(query): Query<SourceQuery>,
+) -> ApiResult<Json<SourcePage>> {
+    let root = state.root().to_path_buf();
+    let page = tokio::task::spawn_blocking(move || {
+        read_source(&root, &query.path, query.start_line, query.end_line)
+    })
+    .await
+    .map_err(EngineError::internal)??;
+    Ok(Json(page))
 }
 
 async fn source_write(
     State(state): State<ApiState>,
-    Json(mutation): Json<SourceMutation>,
-) -> ApiResult<Json<crate::SourceMutationResult>> {
-    let result = apply_source_mutation(state.root(), mutation)
-        .await
-        .map_err(|error| EngineError::invalid("source", error.to_string()))?;
+    Json(write): Json<SourceWrite>,
+) -> ApiResult<Json<SourceWriteResult>> {
+    let root = state.root().to_path_buf();
+    let python = state.scheduler.python().to_path_buf();
+    let store = state.scheduler.store().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let index = store.newest_discover().map_err(EngineError::internal)?;
+        write_source(&root, &python, &write, index.as_ref())
+    })
+    .await
+    .map_err(EngineError::internal)??;
     Ok(Json(result))
 }
 
@@ -321,7 +342,8 @@ async fn get_job(
     let job = state
         .scheduler
         .store()
-        .get_job(id)
+        .blocking(move |store| store.get_job(id))
+        .await
         .map_err(EngineError::internal)?
         .ok_or_else(|| EngineError::job_not_found(id))?;
     Ok(Json(job))
@@ -331,7 +353,7 @@ async fn cancel_job(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<Uuid>,
 ) -> ApiResult<Json<JobRecord>> {
-    Ok(Json(state.scheduler.cancel(id)?))
+    Ok(Json(state.scheduler.cancel(id).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,7 +370,8 @@ async fn logs(
     let page = state
         .scheduler
         .store()
-        .logs(query.job_id, query.cursor, query.limit.unwrap_or(100))
+        .blocking(move |store| store.logs(query.job_id, query.cursor, query.limit.unwrap_or(100)))
+        .await
         .map_err(EngineError::internal)?;
     Ok(Json(page))
 }

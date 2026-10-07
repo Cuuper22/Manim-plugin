@@ -623,27 +623,35 @@ pub fn check_project_path(
     value: &str,
     allow_artifacts: bool,
 ) -> Result<(), EngineError> {
+    match path_rule_violation(value, allow_artifacts) {
+        Some(reason) => Err(EngineError::invalid(field, reason)),
+        None => Ok(()),
+    }
+}
+
+/// The lexical rule `value` breaks: `absolute`, `traversal` or `hidden`.
+pub fn path_rule_violation(value: &str, allow_artifacts: bool) -> Option<&'static str> {
     if value.is_empty()
         || value.len() > 1024
         || value.starts_with('/')
         || value.contains(['\\', '\0', ':'])
     {
-        return Err(EngineError::invalid(field, "absolute"));
+        return Some("absolute");
     }
     if value
         .split('/')
         .any(|segment| matches!(segment, "" | "." | ".."))
     {
-        return Err(EngineError::invalid(field, "traversal"));
+        return Some("traversal");
     }
     let visible = match value.strip_prefix(ARTIFACTS_DIR) {
         Some(rest) if allow_artifacts && rest.starts_with('/') => &rest[1..],
         _ => value,
     };
-    if visible.split('/').any(|segment| segment.starts_with('.')) {
-        return Err(EngineError::invalid(field, "hidden"));
-    }
-    Ok(())
+    visible
+        .split('/')
+        .any(|segment| segment.starts_with('.'))
+        .then_some("hidden")
 }
 
 #[cfg(test)]

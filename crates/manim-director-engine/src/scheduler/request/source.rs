@@ -42,7 +42,7 @@ pub(crate) fn select(
             let spec = ctx.spec()?;
             let lookup = SceneLookup::new(spec, scene);
             let file = lookup.spec_file().and_then(|(_, file)| {
-                artifacts::confine(ctx.root, file)
+                crate::confine(ctx.root, file)
                     .ok()
                     .map(|path| relative(ctx.root, &path))
             });

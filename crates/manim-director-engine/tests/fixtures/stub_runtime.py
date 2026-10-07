@@ -68,6 +68,9 @@ def diagnose(task, root, rid):
         raise StubError("render_failed", "Scene raised NameError.", {"stage": "construct"})
     if text == "unknown-code":
         raise StubError("exploded", "Something odd.", None)
+    if text == "chatty":
+        for index in range(500):
+            print(f"chatter {index}", file=sys.stderr)
     print("a print from user code")
     send({"type": "progress", "request_id": rid, "phase": "analyze", "current": 1, "total": 1,
           "scene_seconds": None, "message": None})

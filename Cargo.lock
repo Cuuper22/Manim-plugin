@@ -678,6 +678,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

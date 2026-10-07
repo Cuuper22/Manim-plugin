@@ -3,11 +3,11 @@
 
 use super::*;
 use manim_director_core::{
-    ArtifactKind, CaptionsParams, DiagnoseParams, DoctorParams, FrameParams, InitParams,
+    ArtifactKind, CaptionsParams, DiagnoseParams, DoctorParams, FrameParams, InitParams, LogStream,
     RenderParams, ARTIFACTS_DIR,
 };
 use serde_json::Value;
-use std::fs;
+use std::{fs, time::Instant};
 
 const STUB: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -47,17 +47,32 @@ impl Project {
         }
     }
 
-    fn scheduler(&self, module: &str, workers: usize, queue_capacity: usize) -> Scheduler {
-        let store = Arc::new(Store::open(self.root.join(".manim-director/state.db")).unwrap());
-        Scheduler::start(
+    async fn scheduler(&self, module: &str, workers: usize, queue_capacity: usize) -> Scheduler {
+        self.engine(EngineMode::Cli, stub(module), workers, queue_capacity)
+            .await
+    }
+
+    async fn engine(
+        &self,
+        mode: EngineMode,
+        bridge: BridgeConfig,
+        workers: usize,
+        queue_capacity: usize,
+    ) -> Scheduler {
+        Scheduler::open(
             &self.root,
-            store,
             SchedulerConfig {
+                mode,
                 workers,
                 queue_capacity,
-                bridge: stub(module),
+                bridge,
+                prune: PrunePolicy {
+                    keep_jobs: 500,
+                    keep_days: 30,
+                },
             },
         )
+        .await
         .unwrap()
     }
 }
@@ -115,7 +130,7 @@ fn ffmpeg_available() -> bool {
 #[tokio::test]
 async fn a_job_streams_progress_and_logs_into_a_typed_result() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 2, 8);
+    let scheduler = project.scheduler("stub", 2, 8).await;
     let mut events = scheduler.subscribe();
     let job = run(&scheduler, diagnose("hello")).await;
     assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
@@ -155,7 +170,7 @@ async fn a_job_streams_progress_and_logs_into_a_typed_result() {
 #[tokio::test]
 async fn runtime_error_frames_fail_jobs_with_contract_codes() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 2, 8);
+    let scheduler = project.scheduler("stub", 2, 8).await;
     let failed = run(&scheduler, diagnose("error")).await;
     assert_eq!(failed.status, JobStatus::Failed);
     assert_eq!(error_code(&failed), "render_failed");
@@ -169,7 +184,7 @@ async fn runtime_error_frames_fail_jobs_with_contract_codes() {
 #[tokio::test]
 async fn bridge_violations_fail_jobs_with_engine_codes() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 4, 8);
+    let scheduler = project.scheduler("stub", 4, 8).await;
     let crashed = run(&scheduler, diagnose("crash")).await;
     assert_eq!(error_code(&crashed), "runtime_crashed");
     assert_eq!(error_data(&crashed)["exit_code"], 3);
@@ -183,7 +198,7 @@ async fn bridge_violations_fail_jobs_with_engine_codes() {
         assert_eq!(error_code(&job), "runtime_protocol", "{text}");
     }
 
-    let silent = project.scheduler("stub_without_ready", 1, 8);
+    let silent = project.scheduler("stub_without_ready", 1, 8).await;
     let job = run(&silent, OperationRequest::Doctor(DoctorParams {})).await;
     assert_eq!(error_code(&job), "runtime_unavailable");
     assert!(error_data(&job)["stderr_tail"]
@@ -191,25 +206,22 @@ async fn bridge_violations_fail_jobs_with_engine_codes() {
         .unwrap()
         .contains("unknown option"));
 
-    let outdated = project.scheduler("stub_protocol_1", 1, 8);
+    let outdated = project.scheduler("stub_protocol_1", 1, 8).await;
     let job = run(&outdated, OperationRequest::Doctor(DoctorParams {})).await;
     assert_eq!(error_code(&job), "runtime_protocol");
     assert_eq!(error_data(&job)["got"], 1);
 
-    let store = Arc::new(Store::open(project.root.join(".manim-director/state.db")).unwrap());
-    let missing = Scheduler::start(
-        &project.root,
-        store,
-        SchedulerConfig {
-            workers: 1,
-            queue_capacity: 1,
-            bridge: BridgeConfig {
+    let missing = project
+        .engine(
+            EngineMode::Cli,
+            BridgeConfig {
                 python: "/nonexistent/python3".into(),
                 module: "stub".into(),
             },
-        },
-    )
-    .unwrap();
+            1,
+            1,
+        )
+        .await;
     let job = run(&missing, OperationRequest::Doctor(DoctorParams {})).await;
     assert_eq!(error_code(&job), "runtime_unavailable");
 }
@@ -217,7 +229,7 @@ async fn bridge_violations_fail_jobs_with_engine_codes() {
 #[tokio::test]
 async fn cancelling_a_running_job_kills_it_and_finishes_once() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 1, 8);
+    let scheduler = project.scheduler("stub", 1, 8).await;
     let mut events = scheduler.subscribe();
     let job = scheduler
         .submit(JobOrigin::Cli, diagnose("sleep"))
@@ -226,7 +238,7 @@ async fn cancelling_a_running_job_kills_it_and_finishes_once() {
         .into_job();
     wait_until_running(&scheduler, job.id).await;
     let started = Instant::now();
-    scheduler.cancel(job.id).unwrap();
+    scheduler.cancel(job.id).await.unwrap();
     let finished = scheduler.wait(job.id).await.unwrap();
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(finished.status, JobStatus::Cancelled);
@@ -241,7 +253,7 @@ async fn cancelling_a_running_job_kills_it_and_finishes_once() {
     }
     assert_eq!(finishes, 1);
     assert_eq!(
-        scheduler.cancel(job.id).unwrap().status,
+        scheduler.cancel(job.id).await.unwrap().status,
         JobStatus::Cancelled
     );
 }
@@ -249,7 +261,7 @@ async fn cancelling_a_running_job_kills_it_and_finishes_once() {
 #[tokio::test]
 async fn queued_jobs_cancel_without_running_and_a_full_queue_creates_no_row() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 1, 1);
+    let scheduler = project.scheduler("stub", 1, 1).await;
     let mut events = scheduler.subscribe();
     let busy = scheduler
         .submit(JobOrigin::Cli, diagnose("sleep"))
@@ -274,7 +286,7 @@ async fn queued_jobs_cancel_without_running_and_a_full_queue_creates_no_row() {
     assert_eq!(rows, accepted.len());
 
     let last = *accepted.last().unwrap();
-    let cancelled = scheduler.cancel(last).unwrap();
+    let cancelled = scheduler.cancel(last).await.unwrap();
     assert_eq!(
         cancelled.status,
         JobStatus::Cancelled,
@@ -291,7 +303,7 @@ async fn queued_jobs_cancel_without_running_and_a_full_queue_creates_no_row() {
         JobStatus::Running
     );
     for id in &accepted {
-        scheduler.cancel(*id).unwrap();
+        scheduler.cancel(*id).await.unwrap();
     }
     for id in &accepted {
         let job = scheduler.wait(*id).await.unwrap();
@@ -314,7 +326,7 @@ async fn queued_jobs_cancel_without_running_and_a_full_queue_creates_no_row() {
 #[tokio::test]
 async fn a_job_over_its_timeout_fails_with_timeout() {
     let project = Project::new("budgets:\n  render_seconds: 10\n");
-    let scheduler = project.scheduler("stub", 1, 8);
+    let scheduler = project.scheduler("stub", 1, 8).await;
     let job = run(&scheduler, diagnose("sleep")).await;
     assert_eq!(job.status, JobStatus::Failed);
     assert_eq!(error_code(&job), "timeout");
@@ -330,7 +342,7 @@ async fn captions_jobs_publish_their_validated_output() {
         "WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n",
     )
     .unwrap();
-    let scheduler = project.scheduler("stub", 1, 8);
+    let scheduler = project.scheduler("stub", 1, 8).await;
     let job = run(
         &scheduler,
         OperationRequest::Captions(CaptionsParams {
@@ -350,7 +362,7 @@ async fn captions_jobs_publish_their_validated_output() {
 #[tokio::test]
 async fn identical_renders_coalesce_while_one_is_in_flight() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 1, 8);
+    let scheduler = project.scheduler("stub", 1, 8).await;
     let render = || {
         OperationRequest::Render(RenderParams {
             scene: Some("SlowScene".into()),
@@ -381,7 +393,7 @@ async fn identical_renders_coalesce_while_one_is_in_flight() {
         .unwrap();
     assert!(matches!(fresh, Submission::Queued(_)));
     for id in [first.id, fresh.job().id] {
-        scheduler.cancel(id).unwrap();
+        scheduler.cancel(id).await.unwrap();
         scheduler.wait(id).await.unwrap();
     }
     let out_dir = project.root.join(ARTIFACTS_DIR).join(first.id.to_string());
@@ -395,7 +407,7 @@ async fn renders_are_validated_cached_and_feed_default_sources() {
         return;
     }
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 2, 8);
+    let scheduler = project.scheduler("stub", 2, 8).await;
     let render = || {
         OperationRequest::Render(RenderParams {
             scene: Some("MainScene".into()),
@@ -464,7 +476,7 @@ async fn discover_is_cached_and_reports_engine_findings() {
         vec![b'#'; 2 * 1024 * 1024 + 1],
     )
     .unwrap();
-    let scheduler = project.scheduler("stub", 1, 8);
+    let scheduler = project.scheduler("stub", 1, 8).await;
     let index = scheduler.discover().await.unwrap();
     assert_eq!(index.files, 1);
     assert_eq!(index.scenes[0].name, "MainScene");
@@ -492,7 +504,7 @@ async fn discover_is_cached_and_reports_engine_findings() {
 #[tokio::test]
 async fn direct_operations_are_not_jobs() {
     let project = Project::new("");
-    let scheduler = project.scheduler("stub", 1, 8);
+    let scheduler = project.scheduler("stub", 1, 8).await;
     let error = scheduler
         .submit(
             JobOrigin::Http,
@@ -526,4 +538,228 @@ async fn init_creates_a_project_through_the_runtime() {
     assert_eq!(result.scene.file, "scenes/main.py");
     assert!(result.artifacts.iter().all(|artifact| artifact.bytes > 0));
     assert!(target.join("director.yaml").is_file());
+}
+
+fn finishes(events: &mut broadcast::Receiver<EngineEvent>) -> HashMap<Uuid, Vec<JobSummary>> {
+    let mut finished: HashMap<Uuid, Vec<JobSummary>> = HashMap::new();
+    while let Ok(event) = events.try_recv() {
+        if let EngineEvent::JobFinished { job, .. } = event {
+            finished.entry(job.id).or_default().push(job);
+        }
+    }
+    finished
+}
+
+#[tokio::test]
+async fn logs_are_complete_when_a_job_finishes() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let job = run(&scheduler, diagnose("chatty")).await;
+    assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
+    let mut chatter = 0;
+    let mut after = None;
+    loop {
+        let page = scheduler.store().logs(job.id, after, 500).unwrap();
+        chatter += page
+            .items
+            .iter()
+            .filter(|record| record.message.starts_with("chatter "))
+            .count();
+        match page.next_cursor {
+            Some(cursor) => after = Some(cursor.parse().unwrap()),
+            None => break,
+        }
+    }
+    assert_eq!(
+        chatter, 500,
+        "every stderr line is stored before the job ends"
+    );
+}
+
+#[tokio::test]
+async fn a_second_engine_leaves_running_jobs_alone_and_cancels_across_processes() {
+    let project = Project::new("");
+    let first = project.scheduler("stub", 1, 8).await;
+    let job = first
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job();
+    wait_until_running(&first, job.id).await;
+
+    let second = project.engine(EngineMode::Serve, stub("stub"), 1, 8).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let still = second.store().get_job(job.id).unwrap().unwrap();
+    assert_eq!(still.status, JobStatus::Running, "{:?}", still.error);
+    assert_eq!(still.owner, first.instance_id());
+
+    let started = Instant::now();
+    let flagged = second.cancel(job.id).await.unwrap();
+    assert!(flagged.cancel_requested);
+    let finished = second.wait(job.id).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_eq!(finished.status, JobStatus::Cancelled);
+    assert_eq!(error_data(&finished)["by"], "client");
+}
+
+#[tokio::test]
+async fn jobs_of_a_vanished_engine_fail_as_engine_lost_and_are_published() {
+    let project = Project::new("");
+    let store = Store::open(project.root.join(".manim-director/state.db")).unwrap();
+    let before = Uuid::new_v4();
+    crate::db::testing::queued_job(&store, before, Uuid::new_v4());
+
+    let engine = project.engine(EngineMode::Mcp, stub("stub"), 1, 8).await;
+    let reaped = engine.store().get_job(before).unwrap().unwrap();
+    assert_eq!(reaped.status, JobStatus::Failed, "reaped at start");
+    assert_eq!(error_code(&reaped), "engine_lost");
+
+    let mut events = engine.subscribe();
+    let later = Uuid::new_v4();
+    let crashed = Uuid::new_v4();
+    store
+        .renew_lease(crashed, EngineMode::Cli, now_millis())
+        .unwrap();
+    crate::db::testing::queued_job(&store, later, crashed);
+    store.set_running(later).unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(
+        store.get_job(later).unwrap().unwrap().status,
+        JobStatus::Running,
+        "a live lease protects the job"
+    );
+    store
+        .renew_lease(
+            crashed,
+            EngineMode::Cli,
+            now_millis() - crate::LEASE_STALE_MILLIS - 1,
+        )
+        .unwrap();
+    let job = tokio::time::timeout(Duration::from_secs(5), engine.wait(later))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(error_code(&job), "engine_lost");
+    assert_eq!(error_data(&job)["owner"], crashed.to_string());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(finishes(&mut events).get(&later).map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn a_full_queue_is_a_typed_error_that_leaks_no_handle_and_frees_on_cancel() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 2).await;
+    let busy = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job()
+        .id;
+    wait_until_running(&scheduler, busy).await;
+    let mut queued = Vec::new();
+    for _ in 0..2 {
+        queued.push(
+            scheduler
+                .submit(JobOrigin::Cli, diagnose("sleep"))
+                .await
+                .unwrap()
+                .into_job()
+                .id,
+        );
+    }
+    let full = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap_err();
+    assert_eq!(full, EngineError::QueueFull { capacity: 2 });
+    assert_eq!(full.status(), 429);
+    assert_eq!(scheduler.active_jobs(), 3, "the rejected job holds nothing");
+    assert_eq!(scheduler.store().jobs(None, 50).unwrap().items.len(), 3);
+
+    scheduler.cancel(queued[0]).await.unwrap();
+    assert_eq!(scheduler.active_jobs(), 2);
+    let replacement = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .expect("a cancelled job gives its queue slot back");
+    for id in [busy, queued[1], replacement.job().id] {
+        scheduler.cancel(id).await.unwrap();
+        scheduler.wait(id).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_finish_that_loses_to_another_engine_publishes_the_winner_once() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let mut events = scheduler.subscribe();
+    let job = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job();
+    wait_until_running(&scheduler, job.id).await;
+    let lost = ErrorBody::new("engine_lost", "reaped elsewhere", None);
+    scheduler
+        .store()
+        .finish_error(job.id, JobStatus::Failed, &lost)
+        .unwrap();
+    scheduler
+        .inner
+        .cancel_local(job.id, CancelledBy::Client)
+        .await
+        .unwrap();
+    for _ in 0..200 {
+        if scheduler.active_jobs() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let finished = finishes(&mut events);
+    let published = &finished[&job.id];
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].status, JobStatus::Failed);
+    assert_eq!(
+        error_code(&scheduler.store().get_job(job.id).unwrap().unwrap()),
+        "engine_lost"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_cancels_own_jobs_and_releases_the_lease() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let running = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job();
+    let queued = scheduler
+        .submit(JobOrigin::Cli, diagnose("sleep"))
+        .await
+        .unwrap()
+        .into_job();
+    wait_until_running(&scheduler, running.id).await;
+    scheduler.shutdown().await;
+    for id in [running.id, queued.id] {
+        let job = scheduler.store().get_job(id).unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Cancelled);
+        assert_eq!(error_data(&job)["by"], "shutdown");
+    }
+    assert_eq!(scheduler.active_jobs(), 0);
+    let error = scheduler
+        .submit(JobOrigin::Cli, diagnose("late"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "internal");
+
+    // The lease is gone, so a later engine reaps nothing of ours and an
+    // orphan row with our id would count as abandoned.
+    let other = Uuid::new_v4();
+    let owned = Uuid::new_v4();
+    crate::db::testing::queued_job(scheduler.store(), owned, scheduler.instance_id());
+    assert_eq!(
+        scheduler.store().reap(other, now_millis()).unwrap()[0].id,
+        owned
+    );
 }

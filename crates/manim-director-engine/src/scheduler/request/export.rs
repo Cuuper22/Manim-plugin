@@ -167,7 +167,7 @@ fn project_entries(root: &Path, spec: &DirectorSpec) -> Vec<ExportEntry> {
         .chain(&spec.narration.manifest)
         .chain(&spec.narration.source);
     for value in referenced {
-        if let Ok(path) = artifacts::confine(root, value) {
+        if let Ok(path) = crate::confine(root, value) {
             paths.insert(path);
         }
     }

@@ -1,6 +1,5 @@
 use crate::{
-    apply_source_mutation, init_project, inspect, parse_params, BridgeConfig, Scheduler,
-    SourceMutation,
+    init_project, inspect, parse_params, write_source, BridgeConfig, Scheduler, SourceWrite,
 };
 use anyhow::Result;
 use manim_director_core::{
@@ -15,6 +14,12 @@ use uuid::Uuid;
 const MAX_SPEC_RESOURCE_BYTES: usize = 128 * 1024;
 
 pub async fn run_mcp(scheduler: Scheduler) -> Result<()> {
+    let served = serve_stdio(&scheduler).await;
+    scheduler.shutdown().await;
+    served
+}
+
+async fn serve_stdio(scheduler: &Scheduler) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut lines = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
@@ -23,7 +28,7 @@ pub async fn run_mcp(scheduler: Scheduler) -> Result<()> {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle_request(&scheduler, request).await,
+            Ok(request) => handle_request(scheduler, request).await,
             Err(error) => Some(rpc_error(
                 Value::Null,
                 -32700,
@@ -62,8 +67,8 @@ async fn handle_request(scheduler: &Scheduler, request: Value) -> Option<Value> 
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tool_contracts()})),
         "tools/call" => call_tool(scheduler, params).await,
-        "resources/list" => Ok(json!({"resources": resources(scheduler)})),
-        "resources/read" => read_resource(scheduler, params),
+        "resources/list" => Ok(json!({"resources": resources(scheduler).await})),
+        "resources/read" => read_resource(scheduler, params).await,
         _ => Err((-32601, "method not found".to_owned(), None)),
     };
     Some(match result {
@@ -74,30 +79,55 @@ async fn handle_request(scheduler: &Scheduler, request: Value) -> Option<Value> 
 
 type RpcFailure = (i64, String, Option<Value>);
 
+const TOOLS: &[&str] = &[
+    "project_init",
+    "project_inspect",
+    "project_apply",
+    "doctor",
+    "render",
+    "qa",
+    "diagnose",
+    "export",
+    "job_status",
+];
+
+/// Unknown tools are protocol errors; everything that goes wrong inside a
+/// tool is an `isError` result carrying the engine's error body.
 async fn call_tool(scheduler: &Scheduler, params: Value) -> std::result::Result<Value, RpcFailure> {
-    let root = scheduler.root();
     let name = params
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("missing tool name"))?;
+    if !TOOLS.contains(&name) {
+        return Err((-32602, format!("unknown tool: {name}"), None));
+    }
     let arguments = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    Ok(run_tool(scheduler, name, arguments)
+        .await
+        .unwrap_or_else(|error| tool_error(&error)))
+}
+
+async fn run_tool(
+    scheduler: &Scheduler,
+    name: &str,
+    arguments: Value,
+) -> std::result::Result<Value, EngineError> {
+    let root = scheduler.root();
     match name {
         "project_init" => {
             let params: InitParams = serde_json::from_value(arguments)
-                .map_err(|error| invalid(format!("invalid init arguments: {error}")))?;
-            let result = init_project(&BridgeConfig::default(), root, params)
-                .await
-                .map_err(engine_failure)?;
+                .map_err(|error| EngineError::invalid("arguments", error.to_string()))?;
+            let result = init_project(&BridgeConfig::default(), root, params).await?;
             Ok(tool_result(
                 format!("created {} in {}", result.scene.name, result.scene.file),
-                serde_json::to_value(result).map_err(internal)?,
+                serde_json::to_value(result).map_err(EngineError::internal)?,
             ))
         }
         "project_inspect" => {
-            let summary = inspect(scheduler).await.map_err(engine_failure)?;
+            let summary = inspect(scheduler).await?;
             Ok(tool_result(
                 format!(
                     "{}: {} scenes, {} profiles",
@@ -105,7 +135,7 @@ async fn call_tool(scheduler: &Scheduler, params: Value) -> std::result::Result<
                     summary.scenes.len(),
                     summary.profiles.len()
                 ),
-                serde_json::to_value(summary).map_err(internal)?,
+                serde_json::to_value(summary).map_err(EngineError::internal)?,
             ))
         }
         "project_apply" => {
@@ -113,26 +143,29 @@ async fn call_tool(scheduler: &Scheduler, params: Value) -> std::result::Result<
                 let sources: Vec<Value> = paths
                     .as_array()
                     .filter(|paths| !paths.is_empty())
-                    .ok_or_else(|| invalid("ingest must be a non-empty path array"))?
+                    .ok_or_else(|| {
+                        EngineError::invalid("ingest", "must be a non-empty path array")
+                    })?
                     .iter()
                     .map(|path| json!({"path": path}))
                     .collect();
                 return submit_tool(scheduler, Operation::Ingest, json!({"sources": sources}))
                     .await;
             }
-            let mutation: SourceMutation = serde_json::from_value(arguments)
-                .map_err(|error| invalid(format!("invalid edit: {error}")))?;
-            let result = apply_source_mutation(root, mutation)
-                .await
-                .map_err(internal)?;
+            let write: SourceWrite = serde_json::from_value(arguments)
+                .map_err(|error| EngineError::invalid("arguments", error.to_string()))?;
+            let root = root.to_path_buf();
+            let python = scheduler.python().to_path_buf();
+            let store = scheduler.store().clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let index = store.newest_discover().map_err(EngineError::internal)?;
+                write_source(&root, &python, &write, index.as_ref())
+            })
+            .await
+            .map_err(EngineError::internal)??;
             Ok(tool_result(
-                format!(
-                    "updated {} @ {}; undo {}",
-                    result.path,
-                    &result.revision[..12],
-                    result.undo_path.as_deref().unwrap_or("new file")
-                ),
-                serde_json::to_value(result).map_err(internal)?,
+                format!("updated {} @ {}", result.path, &result.revision[..12]),
+                serde_json::to_value(result).map_err(EngineError::internal)?,
             ))
         }
         "doctor" => submit_tool(scheduler, Operation::Doctor, arguments).await,
@@ -142,26 +175,23 @@ async fn call_tool(scheduler: &Scheduler, params: Value) -> std::result::Result<
         "export" => submit_tool(scheduler, Operation::Export, arguments).await,
         "job_status" => {
             let id = parse_job_id(&arguments)?;
-            let job = scheduler
-                .store()
-                .get_job(id)
-                .map_err(internal)?
-                .ok_or_else(|| engine_failure(EngineError::job_not_found(id)))?;
             let cursor = arguments
                 .get("cursor")
                 .and_then(Value::as_str)
                 .map(str::parse::<i64>)
                 .transpose()
-                .map_err(|_| invalid("cursor must be an integer string"))?;
+                .map_err(|_| EngineError::invalid("cursor", "must be an integer string"))?;
             let limit = arguments
                 .get("limit")
                 .and_then(Value::as_u64)
                 .unwrap_or(20)
                 .clamp(1, 100) as usize;
-            let logs = scheduler
+            let (job, logs) = scheduler
                 .store()
-                .logs(id, cursor, limit)
-                .map_err(internal)?;
+                .blocking(move |store| Ok((store.get_job(id)?, store.logs(id, cursor, limit)?)))
+                .await
+                .map_err(EngineError::internal)?;
+            let job = job.ok_or_else(|| EngineError::job_not_found(id))?;
             let logs = bounded_log_page(logs, 56 * 1024);
             let resource = format!("manim://jobs/{id}");
             Ok(tool_result(
@@ -174,7 +204,7 @@ async fn call_tool(scheduler: &Scheduler, params: Value) -> std::result::Result<
                 json!({"job": JobSummary::from(&job),"error":job.error,"events":logs.items,"next_cursor":logs.next_cursor,"resource":resource}),
             ))
         }
-        _ => Err((-32602, format!("unknown tool: {name}"), None)),
+        _ => unreachable!("call_tool admits only known tools"),
     }
 }
 
@@ -182,13 +212,9 @@ async fn submit_tool(
     scheduler: &Scheduler,
     operation: Operation,
     arguments: Value,
-) -> std::result::Result<Value, RpcFailure> {
-    let request = parse_params(operation, arguments).map_err(engine_failure)?;
-    let job = scheduler
-        .submit(JobOrigin::Mcp, request)
-        .await
-        .map_err(engine_failure)?
-        .into_job();
+) -> std::result::Result<Value, EngineError> {
+    let request = parse_params(operation, arguments)?;
+    let job = scheduler.submit(JobOrigin::Mcp, request).await?.into_job();
     let resource = format!("manim://jobs/{}", job.id);
     let verb = if job.cached { "cached" } else { "queued" };
     Ok(tool_result(
@@ -197,29 +223,40 @@ async fn submit_tool(
     ))
 }
 
-fn resources(scheduler: &Scheduler) -> Vec<Value> {
+async fn resources(scheduler: &Scheduler) -> Vec<Value> {
     let mut values = vec![
         json!({"uri":"manim://project/spec","name":"Project spec","mimeType":"text/yaml"}),
         json!({"uri":"manim://jobs/recent","name":"Recent jobs","mimeType":"application/json"}),
     ];
-    if let Ok(page) = scheduler.store().jobs(None, 20) {
+    let recent = scheduler
+        .store()
+        .blocking(|store| store.jobs(None, 20))
+        .await;
+    if let Ok(page) = recent {
         values.extend(page.items.into_iter().map(|job| json!({"uri":format!("manim://jobs/{}",job.id),"name":format!("{} {}",job.operation,job.id),"mimeType":"application/json"})));
     }
     values
 }
 
-fn read_resource(scheduler: &Scheduler, params: Value) -> std::result::Result<Value, RpcFailure> {
+async fn read_resource(
+    scheduler: &Scheduler,
+    params: Value,
+) -> std::result::Result<Value, RpcFailure> {
     let uri = params
         .get("uri")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("missing resource uri"))?;
     let (mime, text) = match uri {
         "manim://project/spec" => {
-            let text = read_spec_resource(&scheduler.root().join(SPEC_FILE))?;
+            let text = read_spec_resource(&scheduler.root().join(SPEC_FILE)).await?;
             ("text/yaml", text)
         }
         "manim://jobs/recent" => {
-            let jobs = scheduler.store().jobs(None, 50).map_err(internal)?;
+            let jobs = scheduler
+                .store()
+                .blocking(|store| store.jobs(None, 50))
+                .await
+                .map_err(internal)?;
             let summaries = jobs.items.iter().map(JobSummary::from).collect::<Vec<_>>();
             (
                 "application/json",
@@ -235,9 +272,10 @@ fn read_resource(scheduler: &Scheduler, params: Value) -> std::result::Result<Va
                 .map_err(|_| invalid("invalid job resource uri"))?;
             let job = scheduler
                 .store()
-                .get_job(id)
+                .blocking(move |store| store.get_job(id))
+                .await
                 .map_err(internal)?
-                .ok_or_else(|| engine_failure(EngineError::job_not_found(id)))?;
+                .ok_or_else(|| (-32004, format!("resource not found: {uri}"), None))?;
             (
                 "application/json",
                 serde_json::to_string(&compact_job_resource(&job)).map_err(internal)?,
@@ -270,7 +308,8 @@ fn read_resource(scheduler: &Scheduler, params: Value) -> std::result::Result<Va
             }
             let logs = scheduler
                 .store()
-                .logs(id, cursor, limit)
+                .blocking(move |store| store.logs(id, cursor, limit))
+                .await
                 .map_err(internal)?;
             let logs = bounded_log_page(logs, 96 * 1024);
             (
@@ -283,8 +322,8 @@ fn read_resource(scheduler: &Scheduler, params: Value) -> std::result::Result<Va
     Ok(json!({"contents":[{"uri":uri,"mimeType":mime,"text":text}]}))
 }
 
-fn read_spec_resource(path: &Path) -> std::result::Result<String, RpcFailure> {
-    let bytes = std::fs::read(path).map_err(internal)?;
+async fn read_spec_resource(path: &Path) -> std::result::Result<String, RpcFailure> {
+    let bytes = tokio::fs::read(path).await.map_err(internal)?;
     if bytes.len() > MAX_SPEC_RESOURCE_BYTES {
         return Err((
             -32005,
@@ -346,16 +385,24 @@ fn compact_job_resource(job: &JobRecord) -> Value {
     })
 }
 
-fn parse_job_id(arguments: &Value) -> std::result::Result<Uuid, RpcFailure> {
+fn parse_job_id(arguments: &Value) -> std::result::Result<Uuid, EngineError> {
     let value = arguments
         .get("job_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| invalid("missing job_id"))?;
-    Uuid::parse_str(value).map_err(|_| invalid("job_id must be a UUID"))
+        .ok_or_else(|| EngineError::invalid("job_id", "missing"))?;
+    Uuid::parse_str(value).map_err(|_| EngineError::invalid("job_id", "not a UUID"))
 }
 
 fn tool_result(text: String, structured: Value) -> Value {
     json!({"content":[{"type":"text","text":text}],"structuredContent":structured,"isError":false})
+}
+
+fn tool_error(error: &EngineError) -> Value {
+    json!({
+        "content": [{"type": "text", "text": error.to_string()}],
+        "structuredContent": {"error": error.body()},
+        "isError": true,
+    })
 }
 
 fn tool_contracts() -> Vec<Value> {
@@ -372,8 +419,16 @@ fn tool_contracts() -> Vec<Value> {
         ),
         tool(
             "project_apply",
-            "Atomically edit project source or ingest absolute source paths.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":0},"replacement":{"type":"string"},"merge_patch":{"type":"object"},"expected_revision":{"type":"string"},"ingest":{"type":"array","minItems":1,"items":{"type":"string"}}},"anyOf":[{"required":["path"]},{"required":["ingest"]}]}),
+            "Revision-checked edit of a project source file, or ingest of absolute source paths.",
+            json!({"type":"object","properties":{
+                "path":{"type":"string"},
+                "expected_revision":{"type":["string","null"],"description":"blake3 of the current file; null to create a new file"},
+                "edit":{"type":"object","oneOf":[
+                    {"properties":{"kind":{"const":"replace_all"},"content":{"type":"string"}},"required":["kind","content"]},
+                    {"properties":{"kind":{"const":"replace_lines"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":0},"replacement":{"type":"string"}},"required":["kind","start_line","end_line","replacement"]},
+                    {"properties":{"kind":{"const":"merge_patch"},"patch":{"type":"object"}},"required":["kind","patch"]}]},
+                "ingest":{"type":"array","minItems":1,"items":{"type":"string"}}},
+                "anyOf":[{"required":["path","expected_revision","edit"]},{"required":["ingest"]}]}),
         ),
         tool(
             "doctor",
@@ -420,15 +475,6 @@ fn rpc_error(id: Value, code: i64, message: &str, data: Option<Value>) -> Value 
     json!({"jsonrpc":"2.0","id":id,"error":error})
 }
 
-fn engine_failure(error: EngineError) -> RpcFailure {
-    let code = if error.status() < 500 { -32602 } else { -32000 };
-    (
-        code,
-        error.to_string(),
-        serde_json::to_value(error.body()).ok(),
-    )
-}
-
 fn invalid(message: impl ToString) -> RpcFailure {
     (-32602, message.to_string(), None)
 }
@@ -463,21 +509,28 @@ mod tests {
         assert!(bounded.items.len() < 20);
     }
 
-    #[test]
-    fn project_spec_resource_rejects_oversize_content() {
+    #[tokio::test]
+    async fn project_spec_resource_rejects_oversize_content() {
         let directory = tempfile::tempdir().unwrap();
         let spec = directory.path().join(SPEC_FILE);
         std::fs::write(&spec, vec![b'x'; MAX_SPEC_RESOURCE_BYTES + 1]).unwrap();
-        let error = read_spec_resource(&spec).unwrap_err();
+        let error = read_spec_resource(&spec).await.unwrap_err();
         assert_eq!(error.0, -32005);
         assert_eq!(error.2.unwrap()["code"], "resource_too_large");
     }
 
     #[test]
-    fn engine_errors_keep_their_contract_code() {
-        let (code, _, data) = engine_failure(EngineError::invalid("scene", "too long"));
-        assert_eq!(code, -32602);
-        assert_eq!(data.unwrap()["code"], "invalid_params");
+    fn tool_failures_are_error_results_with_the_contract_body() {
+        let result = tool_error(&EngineError::invalid("scene", "too long"));
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["error"]["code"],
+            "invalid_params"
+        );
+        assert_eq!(
+            result["structuredContent"]["error"]["data"]["field"],
+            "scene"
+        );
     }
 
     #[test]

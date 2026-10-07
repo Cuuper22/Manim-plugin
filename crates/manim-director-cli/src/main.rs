@@ -11,8 +11,9 @@ use manim_director_core::{
     ValidateMathParams,
 };
 use manim_director_engine::{
-    apply_source_mutation, cli_project_path, init_project, inspect, run_mcp, serve, BridgeConfig,
-    Scheduler, SchedulerConfig, ServeConfig, SourceMutation, Store,
+    cli_project_path, current_revision, init_project, inspect, run_mcp, serve, state_db_path,
+    write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, ServeConfig, SourceEdit,
+    SourceWrite, Store,
 };
 use std::{
     collections::BTreeMap,
@@ -20,7 +21,6 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
-    sync::Arc,
     time::{Duration, Instant},
 };
 use tracing_subscriber::EnvFilter;
@@ -124,7 +124,7 @@ async fn run(cli: Cli) -> Outcome {
                 Ok(root) => root,
                 Err(_) => project.canonicalize()?,
             };
-            run_mcp(start_scheduler(&root)?).await?;
+            run_mcp(start_scheduler(&root, EngineMode::Mcp).await?).await?;
             Ok(ExitCode::SUCCESS)
         }
         command => {
@@ -268,11 +268,13 @@ async fn run(cli: Cli) -> Outcome {
                     })
                 }
                 Command::Inspect => {
-                    let summary = inspect(&start_scheduler(&root)?).await?;
-                    output::inspect(&summary, machine);
+                    let scheduler = start_scheduler(&root, EngineMode::Cli).await?;
+                    let summary = inspect(&scheduler).await;
+                    scheduler.shutdown().await;
+                    output::inspect(&summary?, machine);
                     return Ok(ExitCode::SUCCESS);
                 }
-                Command::Edit(args) => return edit(&root, args, machine).await,
+                Command::Edit(args) => return edit(paths, args, machine).await,
                 Command::Serve(args) => return serve_command(&root, args.server).await,
                 Command::Open(args) => return open(&root, args).await,
                 Command::Init(_) | Command::Mcp => unreachable!("handled above"),
@@ -343,13 +345,22 @@ fn parse_ranges(values: &[String]) -> Result<BTreeMap<String, [f64; 2]>, EngineE
         .collect()
 }
 
-fn start_scheduler(root: &Path) -> anyhow::Result<Scheduler> {
-    let store = Arc::new(Store::open(root.join(".manim-director/state.db"))?);
-    Ok(Scheduler::start(root, store, SchedulerConfig::default())?)
+async fn start_scheduler(root: &Path, mode: EngineMode) -> anyhow::Result<Scheduler> {
+    Scheduler::open(root, SchedulerConfig::new(mode)).await
 }
 
 async fn submit_and_wait(root: &Path, request: OperationRequest, machine: bool) -> Outcome {
-    let scheduler = start_scheduler(root)?;
+    let scheduler = start_scheduler(root, EngineMode::Cli).await?;
+    let outcome = submit_and_report(&scheduler, request, machine).await;
+    scheduler.shutdown().await;
+    outcome
+}
+
+async fn submit_and_report(
+    scheduler: &Scheduler,
+    request: OperationRequest,
+    machine: bool,
+) -> Outcome {
     let job = scheduler.submit(JobOrigin::Cli, request).await?.into_job();
     if job.status.is_terminal() {
         output::job(&job, machine);
@@ -364,7 +375,7 @@ async fn submit_and_wait(root: &Path, request: OperationRequest, machine: bool) 
         task.abort();
     }
     let Some(finished) = finished else {
-        scheduler.cancel(job.id)?;
+        scheduler.cancel(job.id).await?;
         let cancelled = tokio::select! {
             finished = scheduler.wait(job.id) => finished?,
             _ = interrupted() => std::process::exit(EXIT_INTERRUPTED.into()),
@@ -443,7 +454,7 @@ async fn interrupted() {
     }
 }
 
-async fn edit(root: &Path, args: EditArgs, machine: bool) -> Outcome {
+async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
     let read = |path: Option<PathBuf>| -> anyhow::Result<Option<String>> {
         path.map(|path| {
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
@@ -452,39 +463,67 @@ async fn edit(root: &Path, args: EditArgs, machine: bool) -> Outcome {
     };
     let content = args.content.or(read(args.content_file)?);
     let replacement = args.replacement.or(read(args.replacement_file)?);
-    let (start_line, end_line) = match args.line {
-        Some(range) => {
-            let (start, end) = range
-                .split_once(':')
-                .ok_or_else(|| EngineError::invalid("line", "expected START:END"))?;
-            let number = |value: &str| {
-                value
-                    .parse()
-                    .map_err(|_| EngineError::invalid("line", "expected START:END"))
-            };
-            (Some(number(start)?), Some(number(end)?))
+    let merge_patch = args.merge_patch.or(read(args.merge_patch_file)?);
+    let edit = match (content, args.line, merge_patch) {
+        (Some(content), _, _) => SourceEdit::ReplaceAll { content },
+        (None, Some(range), _) => {
+            let invalid = || EngineError::invalid("line", "expected START:END");
+            let (start, end) = range.split_once(':').ok_or_else(invalid)?;
+            SourceEdit::ReplaceLines {
+                start_line: start.trim().parse().map_err(|_| invalid())?,
+                end_line: end.trim().parse().map_err(|_| invalid())?,
+                replacement: replacement.unwrap_or_default(),
+            }
         }
-        None => (None, None),
-    };
-    let merge_patch = args
-        .merge_patch
-        .or(read(args.merge_patch_file)?)
-        .map(|value| serde_json::from_str(&value))
-        .transpose()
-        .map_err(|error| EngineError::invalid("merge_patch", error.to_string()))?;
-    let result = apply_source_mutation(
-        root,
-        SourceMutation {
-            path: args.path,
-            content,
-            start_line,
-            end_line,
-            replacement,
-            merge_patch,
-            expected_revision: args.expected_revision,
+        (None, None, Some(patch)) => SourceEdit::MergePatch {
+            patch: serde_json::from_str(&patch)
+                .map_err(|error| EngineError::invalid("merge_patch", error.to_string()))?,
         },
-    )
-    .await?;
+        (None, None, None) => {
+            return Err(
+                EngineError::invalid("edit", "pass --content, --line or --merge-patch").into(),
+            )
+        }
+    };
+    let root = paths.root.to_path_buf();
+    let path = paths.relative(Path::new(&args.path))?;
+    let expected_revision = args.expected_revision;
+    let result = tokio::task::spawn_blocking(move || {
+        // Without --expected-revision the edit applies to whatever is on disk now.
+        let expected_revision = match expected_revision {
+            Some(revision) => Some(revision),
+            None => {
+                let current = current_revision(&root, &path)?;
+                if current.is_none() && !matches!(edit, SourceEdit::ReplaceAll { .. }) {
+                    return Err(EngineError::NotFound {
+                        resource: manim_director_core::Resource::File,
+                        key: path,
+                    });
+                }
+                current
+            }
+        };
+        let index = match state_db_path(&root).is_file() {
+            true => Store::open(state_db_path(&root))
+                .and_then(|store| store.newest_discover())
+                .ok()
+                .flatten(),
+            false => None,
+        };
+        let write = SourceWrite {
+            path,
+            expected_revision,
+            edit,
+        };
+        write_source(
+            &root,
+            &BridgeConfig::default().python,
+            &write,
+            index.as_ref(),
+        )
+    })
+    .await
+    .map_err(EngineError::internal)??;
     if machine {
         output::json(&result);
     } else {
@@ -513,7 +552,7 @@ async fn open(root: &Path, args: OpenArgs) -> Outcome {
 }
 
 async fn serve_command(root: &Path, args: ServerArgs) -> Outcome {
-    let scheduler = start_scheduler(root)?;
+    let scheduler = start_scheduler(root, EngineMode::Serve).await?;
     serve(
         ServeConfig {
             address: SocketAddr::new(args.host, args.port),

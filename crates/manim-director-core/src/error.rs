@@ -100,8 +100,9 @@ named_enum! {
     }
 }
 
-/// Errors returned synchronously when a request is submitted or a direct
-/// operation runs. Each kind has one wire code and one HTTP status.
+/// Errors returned synchronously when a request is submitted, a direct
+/// operation runs, or a source file is read or written. Each kind has one wire
+/// code and one HTTP status.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
     #[error("{}", invalid_params_message(field.as_deref(), reason))]
@@ -143,6 +144,38 @@ pub enum EngineError {
     },
     #[error("The job queue is full ({capacity} jobs); retry when a job finishes.")]
     QueueFull { capacity: usize },
+    #[error("{path} is not an editable project path ({reason}).")]
+    InvalidPath { path: String, reason: &'static str },
+    #[error("{path}: .{extension} files are not accepted here.")]
+    UnsupportedFileType { path: String, extension: String },
+    #[error("{path} is not UTF-8 text.")]
+    NotUtf8 { path: String },
+    #[error("{path} is {bytes} bytes; the limit is {limit_bytes}.")]
+    FileTooLarge {
+        path: String,
+        bytes: u64,
+        limit_bytes: u64,
+    },
+    #[error("Lines {start_line}..={end_line} are outside the file ({total_lines} lines).")]
+    LineOutOfRange {
+        start_line: u64,
+        end_line: u64,
+        total_lines: u64,
+    },
+    #[error("{}", source_invalid_message(path, *line, *column, message))]
+    SourceInvalid {
+        path: String,
+        language: String,
+        message: String,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
+    #[error("{}", revision_conflict_message(path, current_revision.as_deref()))]
+    RevisionConflict {
+        path: String,
+        expected_revision: Option<String>,
+        current_revision: Option<String>,
+    },
     /// A direct operation (`init`, `discover`) failed with a job failure code.
     #[error("{}", .0.message)]
     Operation(ErrorBody),
@@ -165,6 +198,26 @@ fn source_not_found_message(scene: Option<&str>, profile: Option<&str>) -> Strin
         .map(|profile| format!(" at {profile}"))
         .unwrap_or_default();
     format!("No successful render{scene}{profile}; render it first.")
+}
+
+fn source_invalid_message(
+    path: &str,
+    line: Option<u32>,
+    column: Option<u32>,
+    message: &str,
+) -> String {
+    match (line, column) {
+        (Some(line), Some(column)) => format!("{path}:{line}:{column}: {message}"),
+        (Some(line), None) => format!("{path}:{line}: {message}"),
+        _ => format!("{path}: {message}"),
+    }
+}
+
+fn revision_conflict_message(path: &str, current: Option<&str>) -> String {
+    match current {
+        Some(_) => format!("{path} changed since it was read; reload it before saving."),
+        None => format!("{path} no longer exists; reload before saving."),
+    }
 }
 
 impl EngineError {
@@ -210,6 +263,13 @@ impl EngineError {
             Self::RequestTooLarge { .. } => "request_too_large",
             Self::BudgetExceeded { .. } => "budget_exceeded",
             Self::QueueFull { .. } => "queue_full",
+            Self::InvalidPath { .. } => "invalid_path",
+            Self::UnsupportedFileType { .. } => "unsupported_file_type",
+            Self::NotUtf8 { .. } => "not_utf8",
+            Self::FileTooLarge { .. } => "file_too_large",
+            Self::LineOutOfRange { .. } => "line_out_of_range",
+            Self::SourceInvalid { .. } => "source_invalid",
+            Self::RevisionConflict { .. } => "revision_conflict",
             Self::Operation(body) => &body.code,
             Self::Internal(_) => "internal",
         }
@@ -219,9 +279,15 @@ impl EngineError {
         match self {
             Self::InvalidParams { .. }
             | Self::InvalidSpec { .. }
-            | Self::OperationNotAllowed { .. } => 400,
+            | Self::OperationNotAllowed { .. }
+            | Self::InvalidPath { .. }
+            | Self::UnsupportedFileType { .. }
+            | Self::NotUtf8 { .. }
+            | Self::FileTooLarge { .. }
+            | Self::LineOutOfRange { .. }
+            | Self::SourceInvalid { .. } => 400,
             Self::NotFound { .. } | Self::SourceNotFound { .. } => 404,
-            Self::ProjectNotEmpty { .. } => 409,
+            Self::ProjectNotEmpty { .. } | Self::RevisionConflict { .. } => 409,
             Self::RequestTooLarge { .. } | Self::BudgetExceeded { .. } => 413,
             Self::QueueFull { .. } => 429,
             Self::Operation(body) => match body.code.as_str() {
@@ -270,6 +336,41 @@ impl EngineError {
                 actual,
             } => json!({ "budget": budget, "limit": limit, "actual": actual }),
             Self::QueueFull { capacity } => json!({ "capacity": capacity }),
+            Self::InvalidPath { path, reason } => json!({ "path": path, "reason": reason }),
+            Self::UnsupportedFileType { path, extension } => {
+                json!({ "path": path, "extension": extension })
+            }
+            Self::NotUtf8 { path } => json!({ "path": path }),
+            Self::FileTooLarge {
+                path,
+                bytes,
+                limit_bytes,
+            } => json!({ "path": path, "bytes": bytes, "limit_bytes": limit_bytes }),
+            Self::LineOutOfRange {
+                start_line,
+                end_line,
+                total_lines,
+            } => json!({
+                "start_line": start_line,
+                "end_line": end_line,
+                "total_lines": total_lines,
+            }),
+            Self::SourceInvalid {
+                path,
+                language,
+                line,
+                column,
+                ..
+            } => json!({ "path": path, "language": language, "line": line, "column": column }),
+            Self::RevisionConflict {
+                path,
+                expected_revision,
+                current_revision,
+            } => json!({
+                "path": path,
+                "expected_revision": expected_revision,
+                "current_revision": current_revision,
+            }),
             Self::Operation(body) => return body.data.clone(),
             Self::Internal(_) => return None,
         };
@@ -345,6 +446,43 @@ mod tests {
                 413,
             ),
             (EngineError::QueueFull { capacity: 4 }, "queue_full", 429),
+            (
+                EngineError::InvalidPath {
+                    path: ".git/x".into(),
+                    reason: "hidden",
+                },
+                "invalid_path",
+                400,
+            ),
+            (
+                EngineError::FileTooLarge {
+                    path: "a.py".into(),
+                    bytes: 3,
+                    limit_bytes: 2,
+                },
+                "file_too_large",
+                400,
+            ),
+            (
+                EngineError::SourceInvalid {
+                    path: "a.py".into(),
+                    language: "python".into(),
+                    message: "invalid syntax".into(),
+                    line: Some(2),
+                    column: None,
+                },
+                "source_invalid",
+                400,
+            ),
+            (
+                EngineError::RevisionConflict {
+                    path: "a.py".into(),
+                    expected_revision: Some("old".into()),
+                    current_revision: Some("new".into()),
+                },
+                "revision_conflict",
+                409,
+            ),
             (EngineError::internal("boom"), "internal", 500),
         ];
         for (error, code, status) in cases {

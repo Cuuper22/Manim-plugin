@@ -1,58 +1,69 @@
 //! The job queue: submit (resolve once, cache, coalesce), run on a bounded
-//! worker pool, cancel and wait.
+//! worker pool, cancel, wait and shut down. Every database and filesystem
+//! step runs on the blocking pool.
 
+mod active;
 mod artifacts;
 mod direct;
 mod latest;
+mod maintenance;
+mod prune;
+mod recorder;
 mod request;
 
-pub use artifacts::{confine, probe_media, Confinement};
+pub use artifacts::probe_media;
 pub use direct::init_project;
 pub use latest::{latest, latest_render, Latest};
-use request::ProjectContext;
+pub use prune::{prune, PrunePolicy, Pruned};
 pub use request::{cli_project_path, parse_params, parse_request, Frontend};
 
 use crate::{
-    cache, BridgeConfig, BridgeEvent, BridgeOutcome, Invocation, NewJob, RuntimeBridge, Store,
+    cache, now_millis, state_db_path, BridgeConfig, BridgeOutcome, EngineMode, Finish, Invocation,
+    NewJob, RuntimeBridge, Store,
 };
+use active::Active;
 use manim_director_core::{
     python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
-    EngineEvent, ErrorBody, Finding, JobOrigin, JobRecord, JobStatus, JobSummary, LogLevel,
-    LogStream, MediaInfo, MediaSource, Operation, OperationRequest, OperationResult, Progress,
-    ProgressPhase, RuntimeLogLevel, Task, Timestamp,
+    EngineEvent, ErrorBody, Finding, JobOrigin, JobRecord, JobStatus, JobSummary, MediaInfo,
+    MediaSource, Operation, OperationRequest, OperationResult, ProgressPhase, Task,
 };
 use parking_lot::Mutex;
-use request::ResolvedJob;
+use recorder::Recorder;
+use request::{ProjectContext, ResolvedJob};
 use serde_json::json;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Weak},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::sync::{broadcast, mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(30);
-const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_LOG_MESSAGE_CHARS: usize = 2000;
+/// Covers the bridge's kill grace for every running job.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct SchedulerConfig {
+    pub mode: EngineMode,
     /// Jobs run concurrently by this process.
     pub workers: usize,
     /// Queued jobs this process accepts before `queue_full`.
     pub queue_capacity: usize,
     pub bridge: BridgeConfig,
+    pub prune: PrunePolicy,
 }
 
-impl Default for SchedulerConfig {
-    fn default() -> Self {
+impl SchedulerConfig {
+    pub fn new(mode: EngineMode) -> Self {
         Self {
+            mode,
             workers: env_usize("MANIM_DIRECTOR_WORKERS", 2).clamp(1, 32),
             queue_capacity: env_usize("MANIM_DIRECTOR_QUEUE", 128).clamp(1, 4096),
             bridge: BridgeConfig::default(),
+            prune: PrunePolicy::from_env(),
         }
     }
 }
@@ -94,18 +105,24 @@ pub struct Scheduler {
 struct Inner {
     root: PathBuf,
     instance_id: Uuid,
+    mode: EngineMode,
     store: Arc<Store>,
     bridge: RuntimeBridge,
     events: broadcast::Sender<EngineEvent>,
-    queue: mpsc::Sender<Queued>,
+    queue: mpsc::UnboundedSender<Queued>,
+    slots: Arc<Semaphore>,
     queue_capacity: usize,
-    tokens: Mutex<HashMap<Uuid, CancellationToken>>,
+    active: Mutex<HashMap<Uuid, Arc<Active>>>,
     last_valid_spec: Mutex<Option<DirectorSpec>>,
+    prune_policy: PrunePolicy,
+    /// Cancelled when shutdown begins: upkeep stops, submissions are refused.
+    closed: CancellationToken,
 }
 
 struct Queued {
     job: JobRecord,
     context: RunContext,
+    active: Arc<Active>,
 }
 
 /// Per-job facts resolved at submit that the record does not carry.
@@ -116,41 +133,56 @@ struct RunContext {
 }
 
 impl Scheduler {
-    pub fn start(
+    /// Opens the project's job store and starts an engine on it.
+    pub async fn open(root: impl AsRef<Path>, config: SchedulerConfig) -> anyhow::Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        let (root, store) = tokio::task::spawn_blocking(move || {
+            let root = root.canonicalize()?;
+            let store = Store::open(state_db_path(&root))?;
+            anyhow::Ok((root, store))
+        })
+        .await??;
+        Self::start(root, Arc::new(store), config).await
+    }
+
+    /// Starts an engine instance: takes its lease, fails the jobs of engines
+    /// whose lease went stale, then accepts work.
+    pub async fn start(
         root: impl AsRef<Path>,
         store: Arc<Store>,
         config: SchedulerConfig,
-    ) -> std::io::Result<Self> {
-        let root = root.as_ref().canonicalize()?;
-        let (queue, mut receiver) = mpsc::channel::<Queued>(config.queue_capacity);
+    ) -> anyhow::Result<Self> {
+        let instance_id = Uuid::new_v4();
+        let mode = config.mode;
+        let root = root.as_ref().to_path_buf();
+        let root = store
+            .blocking(move |store| {
+                let root = root.canonicalize()?;
+                store.renew_lease(instance_id, mode, now_millis())?;
+                let reaped = store.reap(instance_id, now_millis())?;
+                maintenance::remove_out_dirs(&root, &reaped);
+                Ok(root)
+            })
+            .await?;
+        let (queue, receiver) = mpsc::unbounded_channel();
         let (events, _) = broadcast::channel(1024);
         let inner = Arc::new(Inner {
             root,
-            instance_id: Uuid::new_v4(),
+            instance_id,
+            mode,
             store,
             bridge: RuntimeBridge::new(config.bridge),
             events,
             queue,
+            slots: Arc::new(Semaphore::new(config.queue_capacity)),
             queue_capacity: config.queue_capacity,
-            tokens: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
             last_valid_spec: Mutex::new(None),
+            prune_policy: config.prune,
+            closed: CancellationToken::new(),
         });
-        let workers = Arc::new(Semaphore::new(config.workers));
-        let dispatcher: Weak<Inner> = Arc::downgrade(&inner);
-        tokio::spawn(async move {
-            while let Some(queued) = receiver.recv().await {
-                let Ok(permit) = workers.clone().acquire_owned().await else {
-                    break;
-                };
-                let Some(inner) = dispatcher.upgrade() else {
-                    break;
-                };
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    inner.run(queued).await;
-                });
-            }
-        });
+        dispatch(&inner, receiver, config.workers);
+        maintenance::spawn(&inner);
         Ok(Self { inner })
     }
 
@@ -160,6 +192,15 @@ impl Scheduler {
 
     pub fn store(&self) -> &Arc<Store> {
         &self.inner.store
+    }
+
+    pub fn instance_id(&self) -> Uuid {
+        self.inner.instance_id
+    }
+
+    /// The interpreter the bridge runs, for tools that need the same Python.
+    pub fn python(&self) -> &Path {
+        &self.inner.bridge.config().python
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
@@ -181,6 +222,9 @@ impl Scheduler {
                 allowed: Operation::job_operations().collect(),
             });
         }
+        if self.inner.closed.is_cancelled() {
+            return Err(EngineError::internal("the engine is shutting down"));
+        }
         let inner = self.inner.clone();
         let plan = tokio::task::spawn_blocking(move || inner.plan(origin, request))
             .await
@@ -194,11 +238,11 @@ impl Scheduler {
             }
             Plan::Enqueue(pending) => pending,
         };
-        let permit =
+        let slot =
             self.inner
-                .queue
+                .slots
                 .clone()
-                .try_reserve_owned()
+                .try_acquire_owned()
                 .map_err(|_| EngineError::QueueFull {
                     capacity: self.inner.queue_capacity,
                 })?;
@@ -206,58 +250,90 @@ impl Scheduler {
         let (job, context) = tokio::task::spawn_blocking(move || inner.insert(pending))
             .await
             .map_err(EngineError::internal)??;
-        self.inner
-            .tokens
-            .lock()
-            .insert(job.id, CancellationToken::new());
-        permit.send(Queued {
-            job: job.clone(),
-            context,
-        });
+        let active = Arc::new(Active::new(slot));
+        self.inner.active.lock().insert(job.id, active.clone());
         let _ = self.inner.events.send(EngineEvent::JobQueued {
             job: JobSummary::from(&job),
         });
+        let queued = Queued {
+            job: job.clone(),
+            context,
+            active,
+        };
+        if self.inner.queue.send(queued).is_err() {
+            self.inner.active.lock().remove(&job.id);
+            return Err(EngineError::internal("the job dispatcher stopped"));
+        }
+        if self.inner.closed.is_cancelled() {
+            self.inner
+                .cancel_local(job.id, CancelledBy::Shutdown)
+                .await
+                .map_err(EngineError::internal)?;
+        }
         Ok(Submission::Queued(job))
     }
 
-    /// Requests cancellation; terminal jobs are left as they are. A queued job
-    /// ends at once and its worker later skips it without spawning.
-    pub fn cancel(&self, id: Uuid) -> Result<JobRecord, EngineError> {
-        let store = &self.inner.store;
-        let token = self.inner.tokens.lock().get(&id).cloned();
-        if let Some(token) = token {
-            token.cancel();
-            let error = ErrorBody::cancelled(CancelledBy::Client);
-            if store
-                .cancel_queued(id, &error)
-                .map_err(EngineError::internal)?
-            {
-                if let Ok(Some(job)) = store.get_job(id) {
-                    self.inner.emit_finished(&job);
-                }
-            }
-        }
-        store.request_cancel(id).map_err(EngineError::internal)?;
-        store
-            .get_job(id)
+    /// Requests cancellation from any engine; terminal jobs stay as they are.
+    /// This engine's own jobs end at once (queued) or once their runtime is
+    /// killed (running); another engine acts on the flag within a second.
+    pub async fn cancel(&self, id: Uuid) -> Result<JobRecord, EngineError> {
+        self.inner
+            .store
+            .blocking(move |store| store.request_cancel(id))
+            .await
+            .map_err(EngineError::internal)?;
+        self.inner
+            .cancel_local(id, CancelledBy::Client)
+            .await
+            .map_err(EngineError::internal)?;
+        self.inner
+            .store
+            .blocking(move |store| store.get_job(id))
+            .await
             .map_err(EngineError::internal)?
             .ok_or_else(|| EngineError::job_not_found(id))
     }
 
-    /// Resolves when the job reaches a terminal status.
+    /// Resolves when the job reaches a terminal status, whichever engine runs it.
     pub async fn wait(&self, id: Uuid) -> Result<JobRecord, EngineError> {
         let mut events = self.subscribe();
         loop {
             let job = self
                 .inner
                 .store
-                .get_job(id)
+                .blocking(move |store| store.get_job(id))
+                .await
                 .map_err(EngineError::internal)?
                 .ok_or_else(|| EngineError::job_not_found(id))?;
             if job.status.is_terminal() {
                 return Ok(job);
             }
             let _ = tokio::time::timeout(Duration::from_millis(250), events.recv()).await;
+        }
+    }
+
+    /// Cancels this engine's jobs (`by: shutdown`), waits for their runtimes
+    /// to exit, and gives up the lease.
+    pub async fn shutdown(&self) {
+        self.inner.closed.cancel();
+        let ids: Vec<Uuid> = self.inner.active.lock().keys().copied().collect();
+        for id in ids {
+            if let Err(error) = self.inner.cancel_local(id, CancelledBy::Shutdown).await {
+                tracing::warn!(%id, %error, "could not cancel a job at shutdown");
+            }
+        }
+        let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+        while !self.inner.active.lock().is_empty() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let me = self.inner.instance_id;
+        if let Err(error) = self
+            .inner
+            .store
+            .blocking(move |store| store.release_lease(me))
+            .await
+        {
+            tracing::warn!(%error, "could not release the engine lease");
         }
     }
 
@@ -280,15 +356,15 @@ impl Scheduler {
                 let OperationResult::Discover(result) = outcome else {
                     return Err(EngineError::internal("discover returned another result"));
                 };
-                let store = self.inner.store.clone();
                 let cached = OperationResult::Discover(result.clone());
                 let fingerprint = prepared.fingerprint.clone();
-                tokio::task::spawn_blocking(move || {
-                    store.cache_put(&fingerprint, None, &cached, Operation::Discover)
-                })
-                .await
-                .map_err(EngineError::internal)?
-                .map_err(EngineError::internal)?;
+                self.inner
+                    .store
+                    .blocking(move |store| {
+                        store.cache_put(&fingerprint, None, &cached, Operation::Discover)
+                    })
+                    .await
+                    .map_err(EngineError::internal)?;
                 result
             }
         };
@@ -308,6 +384,36 @@ impl Scheduler {
         }
         Ok(result)
     }
+
+    #[cfg(test)]
+    fn active_jobs(&self) -> usize {
+        self.inner.active.lock().len()
+    }
+}
+
+/// Hands queued jobs to at most `workers` concurrent runs, in order. A worker
+/// is reserved before the next job is taken, so the channel holds exactly the
+/// jobs still waiting.
+fn dispatch(inner: &Arc<Inner>, mut receiver: mpsc::UnboundedReceiver<Queued>, workers: usize) {
+    let workers = Arc::new(Semaphore::new(workers));
+    let dispatcher: Weak<Inner> = Arc::downgrade(inner);
+    tokio::spawn(async move {
+        loop {
+            let Ok(permit) = workers.clone().acquire_owned().await else {
+                break;
+            };
+            let Some(queued) = receiver.recv().await else {
+                break;
+            };
+            let Some(inner) = dispatcher.upgrade() else {
+                break;
+            };
+            tokio::spawn(async move {
+                let _permit = permit;
+                inner.run(queued).await;
+            });
+        }
+    });
 }
 
 enum Plan {
@@ -331,6 +437,12 @@ struct PreparedDiscover {
     files: u32,
     truncated: bool,
     oversized: Vec<String>,
+}
+
+enum Outcome {
+    Succeeded(Box<OperationResult>),
+    Failed(ErrorBody),
+    Cancelled(CancelledBy),
 }
 
 impl Inner {
@@ -380,7 +492,7 @@ impl Inner {
                 .cache_get(&fingerprint.value)
                 .map_err(EngineError::internal)?
             {
-                if self.artifacts_intact(&entry.result) {
+                if artifacts::intact(&self.root, &entry.result) {
                     let scene = entry.result.scene().cloned();
                     let new_job = NewJob {
                         id,
@@ -420,15 +532,6 @@ impl Inner {
             fingerprint: fingerprint.map(|fingerprint| fingerprint.value),
             scene_revision,
         })))
-    }
-
-    /// A cache entry is usable only while every artifact is on disk unchanged in size.
-    fn artifacts_intact(&self, result: &OperationResult) -> bool {
-        result.artifacts().iter().all(|artifact| {
-            artifacts::existing(&self.root, artifact)
-                .and_then(|path| path.metadata().ok())
-                .is_some_and(|metadata| metadata.len() == artifact.bytes)
-        })
     }
 
     fn insert(&self, pending: Box<Pending>) -> Result<(JobRecord, RunContext), EngineError> {
@@ -502,51 +605,90 @@ impl Inner {
         })
     }
 
-    async fn run(self: Arc<Self>, queued: Queued) {
-        let Queued { job, context } = queued;
-        let id = job.id;
-        let token = self.tokens.lock().get(&id).cloned().unwrap_or_default();
-        let outcome = self.execute(&job, &context, &token).await;
-        if let Some(outcome) = outcome {
-            self.finish(&job, outcome).await;
+    /// Cancels one of this engine's jobs. A queued job ends here; a running
+    /// one ends when its worker sees the token and kills the runtime.
+    async fn cancel_local(&self, id: Uuid, by: CancelledBy) -> anyhow::Result<()> {
+        let Some(active) = self.active.lock().get(&id).cloned() else {
+            return Ok(());
+        };
+        active.cancel(by);
+        let error = ErrorBody::cancelled(by);
+        let cancelled = self
+            .store
+            .blocking(move |store| store.cancel_queued(id, &error))
+            .await?;
+        if let Some(job) = cancelled {
+            active.leave_queue();
+            self.active.lock().remove(&id);
+            self.publish(&active, &job);
         }
-        self.tokens.lock().remove(&id);
+        Ok(())
     }
 
-    /// Runs one queued job; `None` when it was no longer queued.
+    async fn run(self: Arc<Self>, queued: Queued) {
+        let Queued {
+            job,
+            context,
+            active,
+        } = queued;
+        active.leave_queue();
+        let id = job.id;
+        let root = self.root.clone();
+        let started =
+            self.store
+                .blocking(move |store| {
+                    let Some(running) = store.set_running(id)? else {
+                        return Ok(Err(store.get_job(id)?));
+                    };
+                    let out_dir = match running.task.out_dir() {
+                        Some(out_dir) => artifacts::create_out_dir(&root, out_dir)
+                            .map_err(|error| error.to_string()),
+                        None => Ok(()),
+                    };
+                    Ok(Ok((running, out_dir)))
+                })
+                .await;
+        match started {
+            Ok(Ok((running, out_dir))) => {
+                let _ = self.events.send(EngineEvent::JobStarted {
+                    job: JobSummary::from(&running),
+                });
+                let recorder = Recorder::start(self.store.clone(), self.events.clone(), id);
+                recorder.engine_phase(
+                    ProgressPhase::Starting,
+                    None,
+                    Some("waiting for the runtime"),
+                );
+                let outcome = match out_dir {
+                    _ if active.token.is_cancelled() => Outcome::Cancelled(active.cancelled_by()),
+                    Err(error) => Outcome::Failed(ErrorBody::internal(format!(
+                        "Could not create the job's artifact directory: {error}"
+                    ))),
+                    Ok(()) => self.execute(&job, &context, &active, &recorder).await,
+                };
+                recorder.close().await;
+                self.finish(&job, &active, outcome).await;
+            }
+            // Cancelled while queued, or failed by another engine's reaper.
+            Ok(Err(current)) => {
+                if let Some(current) = current.filter(|job| job.status.is_terminal()) {
+                    self.publish(&active, &current);
+                }
+            }
+            Err(error) => tracing::error!(%id, %error, "could not start the job"),
+        }
+        self.active.lock().remove(&id);
+    }
+
     async fn execute(
         &self,
         job: &JobRecord,
         context: &RunContext,
-        token: &CancellationToken,
-    ) -> Option<Outcome> {
-        let id = job.id;
-        if !self.store.set_running(id).unwrap_or(false) {
-            return None;
-        }
-        if token.is_cancelled() {
-            return Some(Outcome::Cancelled);
-        }
-        if let Ok(Some(started)) = self.store.get_job(id) {
-            let _ = self.events.send(EngineEvent::JobStarted {
-                job: JobSummary::from(&started),
-            });
-        }
-        let mut recorder = Recorder::new(self.store.clone(), self.events.clone(), id);
-        recorder.engine_phase(
-            ProgressPhase::Starting,
-            None,
-            Some("waiting for the runtime"),
-        );
-        if let Some(out_dir) = job.task.out_dir() {
-            if let Err(error) = artifacts::create_out_dir(&self.root, out_dir) {
-                return Some(Outcome::Failed(ErrorBody::internal(format!(
-                    "Could not create the job's artifact directory: {error}"
-                ))));
-            }
-        }
-        let request_id = id.to_string();
-        let attempt = token.child_token();
+        active: &Active,
+        recorder: &Recorder,
+    ) -> Outcome {
+        let request_id = job.id.to_string();
+        let attempt = active.token.child_token();
         let timeout = Duration::from_secs(job.limits.timeout_seconds);
         let (outcome, timed_out) = {
             let run = self.bridge.run(
@@ -569,7 +711,7 @@ impl Inner {
                 }
             }
         };
-        Some(match outcome {
+        match outcome {
             BridgeOutcome::Succeeded(value) => {
                 let count = value["artifacts"].as_array().map_or(0, Vec::len) as u64;
                 if count > 0 {
@@ -598,57 +740,74 @@ impl Inner {
             BridgeOutcome::Cancelled if timed_out => {
                 Outcome::Failed(ErrorBody::timeout(job.limits.timeout_seconds))
             }
-            BridgeOutcome::Cancelled => Outcome::Cancelled,
-        })
+            BridgeOutcome::Cancelled => Outcome::Cancelled(active.cancelled_by()),
+        }
     }
 
-    async fn finish(&self, job: &JobRecord, outcome: Outcome) {
+    /// Records the job's one terminal transition. Losing that race to another
+    /// engine's reaper is logged and the winner's record is published instead.
+    async fn finish(&self, job: &JobRecord, active: &Active, outcome: Outcome) {
         let id = job.id;
-        let recorded = match &outcome {
-            Outcome::Succeeded(result) => {
-                let revision = result.scene().and_then(|scene| {
-                    (job.scene_file.as_deref() != Some(scene.file.as_str()))
-                        .then(|| cache::file_revision(&self.root.join(&scene.file)).ok())
-                        .flatten()
-                });
-                let stored = self.store.finish_success(id, result, revision.as_deref());
-                if let (Ok(true), Some(fingerprint)) = (&stored, &job.fingerprint) {
-                    if let Err(error) =
-                        self.store
-                            .cache_put(fingerprint, Some(id), result, job.operation)
-                    {
+        let root = self.root.clone();
+        let job_file = job.scene_file.clone();
+        let fingerprint = job.fingerprint.clone();
+        let operation = job.operation;
+        let out_dir = job.task.out_dir().cloned();
+        let recorded = self
+            .store
+            .blocking(move |store| {
+                let finish = match &outcome {
+                    Outcome::Succeeded(result) => {
+                        let revision = result
+                            .scene()
+                            .filter(|scene| job_file.as_deref() != Some(scene.file.as_str()))
+                            .and_then(|scene| cache::file_revision(&root.join(&scene.file)).ok());
+                        store.finish_success(id, result, revision.as_deref())?
+                    }
+                    Outcome::Failed(error) => store.finish_error(id, JobStatus::Failed, error)?,
+                    Outcome::Cancelled(by) => store.finish_error(
+                        id,
+                        JobStatus::Cancelled,
+                        &ErrorBody::cancelled(*by),
+                    )?,
+                };
+                let kept = matches!(
+                    (&finish, &outcome),
+                    (Finish::Ended(_), Outcome::Succeeded(_))
+                );
+                if let (true, Some(fingerprint), Outcome::Succeeded(result)) =
+                    (kept, &fingerprint, &outcome)
+                {
+                    if let Err(error) = store.cache_put(fingerprint, Some(id), result, operation) {
                         tracing::warn!(%id, %error, "could not cache the result");
                     }
                 }
-                stored
-            }
-            Outcome::Failed(error) => self.store.finish_error(id, JobStatus::Failed, error),
-            Outcome::Cancelled => self.store.finish_error(
-                id,
-                JobStatus::Cancelled,
-                &ErrorBody::cancelled(CancelledBy::Client),
-            ),
-        };
-        let ended = match recorded {
-            Ok(ended) => ended,
-            Err(error) => {
-                tracing::error!(%id, %error, "could not record the job outcome");
-                false
-            }
-        };
-        let kept = ended && matches!(outcome, Outcome::Succeeded(_));
-        if !kept {
-            if let Some(out_dir) = job.task.out_dir() {
-                if let Err(error) = artifacts::remove_out_dir(&self.root, out_dir) {
-                    tracing::warn!(%id, %error, "could not remove the job's artifact directory");
+                if let (false, Some(out_dir)) = (kept, &out_dir) {
+                    if let Err(error) = artifacts::remove_out_dir(&root, out_dir) {
+                        tracing::warn!(%id, %error, "could not remove the job's artifact directory");
+                    }
                 }
+                Ok(finish)
+            })
+            .await;
+        match recorded {
+            Ok(Finish::Ended(record)) => self.publish(active, &record),
+            Ok(Finish::Superseded(record)) => {
+                tracing::warn!(
+                    %id,
+                    status = %record.status,
+                    "the job had already ended elsewhere; this run's outcome was discarded"
+                );
+                self.publish(active, &record);
             }
+            Err(error) => tracing::error!(%id, %error, "could not record the job outcome"),
         }
-        // Exactly one terminal transition per job, so exactly one event.
-        if ended {
-            if let Ok(Some(finished)) = self.store.get_job(id) {
-                self.emit_finished(&finished);
-            }
+    }
+
+    /// Publishes a job's terminal state at most once per job.
+    fn publish(&self, active: &Active, job: &JobRecord) {
+        if active.claim_publication() {
+            self.emit_finished(job);
         }
     }
 
@@ -659,12 +818,6 @@ impl Inner {
             error: job.error.clone(),
         });
     }
-}
-
-enum Outcome {
-    Succeeded(Box<OperationResult>),
-    Failed(ErrorBody),
-    Cancelled,
 }
 
 /// Parses a runtime result into the operation's type and enforces the
@@ -694,100 +847,6 @@ pub(crate) fn accept_result(
         &mut result,
     )?;
     Ok(result)
-}
-
-/// Turns bridge events into progress events and log records.
-struct Recorder {
-    store: Arc<Store>,
-    events: broadcast::Sender<EngineEvent>,
-    id: Uuid,
-    persisted_at: Option<Instant>,
-}
-
-impl Recorder {
-    fn new(store: Arc<Store>, events: broadcast::Sender<EngineEvent>, id: Uuid) -> Self {
-        Self {
-            store,
-            events,
-            id,
-            persisted_at: None,
-        }
-    }
-
-    fn record(&mut self, event: BridgeEvent<'_>) {
-        match event {
-            BridgeEvent::Ready(ready) => {
-                let message = format!(
-                    "Runtime {} ready (Python {}, Manim {}).",
-                    ready.runtime_version,
-                    ready.python,
-                    ready.manim.as_deref().unwrap_or("not installed")
-                );
-                self.log(LogStream::Engine, LogLevel::Info, &message);
-                for failure in &ready.preload_failed {
-                    let message =
-                        format!("Preloading {} failed: {}", failure.module, failure.message);
-                    self.log(LogStream::Engine, LogLevel::Warning, &message);
-                }
-            }
-            BridgeEvent::Progress(frame) => self.progress(Progress {
-                phase: frame.phase,
-                current: frame.current,
-                total: frame.total,
-                scene_seconds: frame.scene_seconds,
-                message: frame.message,
-                updated_at: Timestamp::now(),
-            }),
-            BridgeEvent::Log(frame) => {
-                let level = match frame.level {
-                    RuntimeLogLevel::Info => LogLevel::Info,
-                    RuntimeLogLevel::Warning => LogLevel::Warning,
-                };
-                self.log(LogStream::Runtime, level, &frame.message);
-            }
-            BridgeEvent::Stderr(line) => self.log(LogStream::Stderr, LogLevel::Info, &line),
-        }
-    }
-
-    /// Progress the engine itself reports (`starting`, `validate`).
-    fn engine_phase(&mut self, phase: ProgressPhase, total: Option<u64>, message: Option<&str>) {
-        self.progress(Progress {
-            phase,
-            current: 0,
-            total,
-            scene_seconds: None,
-            message: message.map(str::to_owned),
-            updated_at: Timestamp::now(),
-        });
-    }
-
-    fn progress(&mut self, progress: Progress) {
-        let due = self
-            .persisted_at
-            .is_none_or(|at| at.elapsed() >= PROGRESS_PERSIST_INTERVAL);
-        if due {
-            self.persisted_at = Some(Instant::now());
-            if let Err(error) = self.store.set_progress(self.id, &progress) {
-                tracing::warn!(id = %self.id, %error, "could not persist progress");
-            }
-        }
-        let _ = self.events.send(EngineEvent::JobProgress {
-            job_id: self.id,
-            progress,
-        });
-    }
-
-    /// One record per ≤ 2000-character piece of `message`.
-    fn log(&self, stream: LogStream, level: LogLevel, message: &str) {
-        let chars: Vec<char> = message.chars().collect();
-        for piece in chars.chunks(MAX_LOG_MESSAGE_CHARS) {
-            let piece: String = piece.iter().collect();
-            if let Err(error) = self.store.append_log(self.id, stream, level, &piece, None) {
-                tracing::warn!(id = %self.id, %error, "could not store a log record");
-                return;
-            }
-        }
-    }
 }
 
 #[cfg(test)]

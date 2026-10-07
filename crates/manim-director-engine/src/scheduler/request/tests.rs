@@ -485,12 +485,13 @@ fn diagnosing_a_job_reads_its_error_and_logs() {
         .unwrap();
     project
         .store
-        .append_log(
+        .append_logs(
             failed,
-            LogStream::Stderr,
-            LogLevel::Info,
-            "NameError: rowz",
-            None,
+            &[crate::NewLog::now(
+                LogStream::Stderr,
+                LogLevel::Info,
+                "NameError: rowz",
+            )],
         )
         .unwrap();
     project

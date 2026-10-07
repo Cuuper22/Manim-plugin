@@ -1,9 +1,13 @@
 //! The artifact contract (OPS §1.1): where a job's files may live, what each
 //! kind must look like, and the probe that measures media.
 
+use crate::{
+    confine::{confine, state_dir, Confinement},
+    process::wait_bounded,
+};
 use manim_director_core::{
     files, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat, MediaInfo,
-    OperationResult, Task, Timeline, ARTIFACTS_DIR,
+    OperationResult, Task, Timeline,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -11,51 +15,27 @@ use std::{
     collections::BTreeMap,
     fs, io,
     io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Confinement {
-    /// Not a plain project-relative path.
-    Lexical,
-    Missing,
-    /// Resolves (through a symlink) outside the project.
-    Outside,
-    NotFile,
-}
-
-/// The one place a project-relative artifact path becomes a filesystem path:
-/// an existing regular file inside the canonical `root`.
-pub fn confine(root: &Path, relative: &str) -> Result<PathBuf, Confinement> {
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || !path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(Confinement::Lexical);
-    }
-    let canonical = root
-        .join(path)
-        .canonicalize()
-        .map_err(|_| Confinement::Missing)?;
-    if !canonical.starts_with(root) {
-        return Err(Confinement::Outside);
-    }
-    if !canonical.is_file() {
-        return Err(Confinement::NotFile);
-    }
-    Ok(canonical)
-}
-
 /// The artifact's file if it still exists inside the project.
 pub fn existing(root: &Path, artifact: &Artifact) -> Option<PathBuf> {
     confine(root, &artifact.path).ok()
+}
+
+/// A stored result is reusable only while every artifact is on disk with its
+/// recorded size.
+pub fn intact(root: &Path, result: &OperationResult) -> bool {
+    result.artifacts().iter().all(|artifact| {
+        existing(root, artifact)
+            .and_then(|path| path.metadata().ok())
+            .is_some_and(|metadata| metadata.len() == artifact.bytes)
+    })
 }
 
 /// Creates `<root>/.manim-director/artifacts/<job>` after checking that the
@@ -77,23 +57,7 @@ pub fn remove_out_dir(root: &Path, out_dir: &Path) -> io::Result<()> {
 }
 
 fn ensure_state_dirs(root: &Path, create: bool) -> io::Result<()> {
-    let state = root.join(".manim-director");
-    for dir in [state.clone(), root.join(ARTIFACTS_DIR)] {
-        match fs::symlink_metadata(&dir) {
-            Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => {
-                return Err(io::Error::other(format!(
-                    "{} is not a real directory",
-                    dir.display()
-                )))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
-                fs::create_dir(&dir)?
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
+    state_dir(root, "artifacts", create).map(drop)
 }
 
 /// What a job's artifacts are checked against.
@@ -519,18 +483,10 @@ pub fn probe_media(path: &Path) -> Result<MediaInfo, String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("ffprobe could not start ({error})"))?;
-    let deadline = Instant::now() + PROBE_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("ffprobe timed out".into());
-            }
-            Err(error) => return Err(format!("ffprobe failed ({error})")),
-        }
+    let status = match wait_bounded(&mut child, PROBE_TIMEOUT) {
+        Ok(Some(status)) => status,
+        Ok(None) => return Err("ffprobe timed out".into()),
+        Err(error) => return Err(format!("ffprobe failed ({error})")),
     };
     let mut output = Vec::new();
     if let Some(mut stdout) = child.stdout.take() {
@@ -638,7 +594,7 @@ mod tests {
     use super::*;
     use manim_director_core::{
         CaptionsResult, CaptionsTask, MediaFormat, RenderResult, RenderSettings, RenderTask,
-        Renderer, SceneRef,
+        Renderer, SceneRef, ARTIFACTS_DIR,
     };
 
     fn probe(json: Value) -> ProbeOutput {
@@ -677,26 +633,6 @@ mod tests {
             ),
         );
         assert!(wrong.unwrap_err().contains("not mov"));
-    }
-
-    #[test]
-    fn confinement_rejects_traversal_symlink_escapes_and_directories() {
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secret.mp4"), "x").unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let root = project.path().canonicalize().unwrap();
-        std::fs::create_dir(root.join("dir")).unwrap();
-        std::fs::write(root.join("dir/a.mp4"), "x").unwrap();
-        assert_eq!(confine(&root, "dir/a.mp4").unwrap(), root.join("dir/a.mp4"));
-        assert_eq!(confine(&root, "../a.mp4"), Err(Confinement::Lexical));
-        assert_eq!(confine(&root, "/etc/passwd"), Err(Confinement::Lexical));
-        assert_eq!(confine(&root, "dir/b.mp4"), Err(Confinement::Missing));
-        assert_eq!(confine(&root, "dir"), Err(Confinement::NotFile));
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
-            assert_eq!(confine(&root, "link/secret.mp4"), Err(Confinement::Outside));
-        }
     }
 
     fn render_task(root: &Path, transparent: bool) -> Task {

@@ -1,9 +1,10 @@
 //! The public path rule (OPS §1.2) for every path-typed param, and the CLI's
 //! conversion of its path arguments into project-relative form.
 
+use crate::confine::resolve_existing_prefix;
 use manim_director_core::{check_project_path, files, EngineError};
 use std::{
-    fs, io,
+    io,
     path::{Component, Path, PathBuf},
 };
 
@@ -59,23 +60,6 @@ pub(crate) fn project_path(
             Ok(resolved)
         }
     }
-}
-
-/// Canonicalizes the deepest existing ancestor (symlinks included) and
-/// re-appends the missing tail; `None` when that lands outside `root`.
-fn resolve_existing_prefix(root: &Path, path: &Path) -> Option<PathBuf> {
-    let mut existing = path;
-    let mut tail = Vec::new();
-    while fs::symlink_metadata(existing).is_err() {
-        tail.push(existing.file_name()?);
-        existing = existing.parent()?;
-    }
-    let mut resolved = existing.canonicalize().ok()?;
-    if !resolved.starts_with(root) {
-        return None;
-    }
-    resolved.extend(tail.iter().rev());
-    Some(resolved)
 }
 
 fn require_extension(field: &str, path: &Path, allowed: &[&str]) -> Result<(), EngineError> {
@@ -147,6 +131,7 @@ fn canonical_prefix(path: &Path) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn reason(error: EngineError) -> String {
         match error {

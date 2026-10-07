@@ -7,7 +7,11 @@ use manim_director_core::{
     DirectorSpec, EngineError, ErrorBody, InitMode, InitParams, InitResult, InitTask,
     OperationRequest, OperationResult, Task,
 };
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -69,6 +73,20 @@ pub async fn init_project(
     params: InitParams,
 ) -> Result<InitResult, EngineError> {
     OperationRequest::Init(params.clone()).validate()?;
+    let target = target.to_path_buf();
+    let (root, task) = tokio::task::spawn_blocking(move || preflight(&target, &params))
+        .await
+        .map_err(EngineError::internal)??;
+    let runtime = RuntimeBridge::new(bridge.clone());
+    match run(&runtime, &root, &Task::Init(task), INIT_TIMEOUT).await? {
+        OperationResult::Init(result) => Ok(result),
+        _ => Err(EngineError::internal("init returned another result")),
+    }
+}
+
+/// Creates the target directory and builds the task: add-scene mode needs a
+/// valid spec, create mode an empty directory unless `force`.
+fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), EngineError> {
     fs::create_dir_all(target).map_err(EngineError::internal)?;
     let root = target.canonicalize().map_err(EngineError::internal)?;
     let task = match &params.scene_template {
@@ -112,11 +130,7 @@ pub async fn init_project(
             }
         }
     };
-    let runtime = RuntimeBridge::new(bridge.clone());
-    match run(&runtime, &root, &Task::Init(task), INIT_TIMEOUT).await? {
-        OperationResult::Init(result) => Ok(result),
-        _ => Err(EngineError::internal("init returned another result")),
-    }
+    Ok((root, task))
 }
 
 /// Entries that make a directory a non-empty project: everything except
