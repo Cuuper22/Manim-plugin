@@ -70,8 +70,16 @@ Four themes ship, each checked for contrast and color-vision deficiencies: `midn
 
 ## Install
 
-You need Python 3.11+, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`) and, for `MathTex`, a TeX
-distribution that includes `dvisvgm` (TeX Live, MacTeX or MiKTeX).
+You need Python 3.11+ with `venv`, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`), a TeX distribution
+that includes `dvisvgm` (TeX Live, MacTeX or MiKTeX), and what pip needs to build Manim's Cairo and
+Pango bindings. On Debian or Ubuntu:
+
+```bash
+sudo apt install python3-venv python3-dev build-essential pkg-config libcairo2-dev libpango1.0-dev \
+  ffmpeg texlive-latex-base texlive-latex-extra texlive-fonts-recommended dvisvgm
+```
+
+On macOS, `brew install ffmpeg pkg-config cairo` and install MacTeX. Then:
 
 ```bash
 git clone https://github.com/Cuuper22/Manim-plugin.git

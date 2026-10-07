@@ -6,9 +6,9 @@ the [reference](reference.md).
 ## Install
 
 Requirements: Python 3.11+, FFmpeg with `ffprobe`, and a TeX distribution with `dvisvgm` for `Tex`
-and `MathTex`. On Linux, Manim also needs the Cairo and Pango libraries
-([Manim's installation notes](https://docs.manim.community/en/stable/installation.html) list them per
-system).
+and `MathTex`. On Linux and macOS, pip builds Manim's Cairo (and on Linux its Pango) bindings, which
+needs a C compiler, `pkg-config` and the Cairo and Pango development files; the
+[README](../README.md#install) lists the packages.
 
 ```bash
 python3 scripts/install.py --with-manim                 # release binary, Manim and the runtime
