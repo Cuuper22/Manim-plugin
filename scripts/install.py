@@ -8,7 +8,6 @@ import hashlib
 import hmac
 import json
 import os
-from pathlib import Path, PurePosixPath
 import platform
 import shutil
 import stat
@@ -19,8 +18,8 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO
-
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY_NAME = "manim-director.exe" if os.name == "nt" else "manim-director"
@@ -153,7 +152,9 @@ def extract_binary(archive: Path, archive_kind: str, binary_name: str, destinati
                 members = bundle.infolist()
                 names = [member.filename for member in members]
                 if len(names) != len(expected_names) or set(names) != expected_names:
-                    raise RuntimeError("Release archive does not contain the exact signed release layout")
+                    raise RuntimeError(
+                        "Release archive does not contain the exact signed release layout"
+                    )
                 for member in members:
                     _validate_member_name(member.filename, expected_names)
                     unix_mode = (member.external_attr >> 16) & 0xFFFF
@@ -162,7 +163,9 @@ def extract_binary(archive: Path, archive_kind: str, binary_name: str, destinati
                         raise RuntimeError("Release archive member is not a regular file")
                     if member.flag_bits & 0x1:
                         raise RuntimeError("Encrypted release archives are not supported")
-                    if member.filename != binary_name and not (0 < member.file_size <= MAX_NOTICE_BYTES):
+                    if member.filename != binary_name and not (
+                        0 < member.file_size <= MAX_NOTICE_BYTES
+                    ):
                         raise RuntimeError("Release notice has an invalid size")
                 binary = next(member for member in members if member.filename == binary_name)
                 with bundle.open(binary, "r") as source:
@@ -172,7 +175,9 @@ def extract_binary(archive: Path, archive_kind: str, binary_name: str, destinati
                 members = bundle.getmembers()
                 names = [member.name for member in members]
                 if len(names) != len(expected_names) or set(names) != expected_names:
-                    raise RuntimeError("Release archive does not contain the exact signed release layout")
+                    raise RuntimeError(
+                        "Release archive does not contain the exact signed release layout"
+                    )
                 for member in members:
                     _validate_member_name(member.name, expected_names)
                     if not member.isfile():
@@ -229,7 +234,16 @@ def build_binary(destination: Path) -> None:
     require("npm", "Install Node.js 22 or newer.")
     run("npm", "ci", cwd=ROOT / "workbench")
     run("npm", "run", "build", cwd=ROOT / "workbench")
-    run("cargo", "build", "--release", "--locked", "-p", "manim-director-cli", "--bin", "manim-director")
+    run(
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "manim-director-cli",
+        "--bin",
+        "manim-director",
+    )
     binary = ROOT / "target" / "release" / BINARY_NAME
     if not binary.is_file():
         raise SystemExit(f"Build completed without expected binary: {binary}")
@@ -239,7 +253,9 @@ def build_binary(destination: Path) -> None:
 def install_executable(source: Path, destination: Path) -> None:
     """Replace `destination` by rename: copying over a running engine fails ("text file busy")."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_install = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    descriptor, raw_install = tempfile.mkstemp(
+        prefix=f".{destination.name}.", dir=destination.parent
+    )
     os.close(descriptor)
     install_tmp = Path(raw_install)
     try:
@@ -255,7 +271,11 @@ def install_runtime(venv: Path, with_manim: bool) -> None:
         run(sys.executable, "-m", "venv", str(venv))
     command = [str(venv_python(venv)), "-m", "pip", "install"]
     if with_manim:
-        command += ["--constraint", str(ROOT / "runtime" / "constraints-full.txt"), f"{ROOT / 'runtime'}[full]"]
+        command += [
+            "--constraint",
+            str(ROOT / "runtime" / "constraints-full.txt"),
+            f"{ROOT / 'runtime'}[full]",
+        ]
     else:
         command.append(str(ROOT / "runtime"))
     run(*command)
@@ -296,7 +316,9 @@ def main() -> None:
             download_binary(installed)
         except (OSError, RuntimeError, urllib.error.URLError) as error:
             if not (shutil.which("cargo") and shutil.which("npm")):
-                raise SystemExit(f"Could not install a release binary: {error}. Re-run with --from-source.") from error
+                raise SystemExit(
+                    f"Could not install a release binary: {error}. Re-run with --from-source."
+                ) from error
             print(f"Release download failed ({error}); building locally instead.", flush=True)
             build_binary(installed)
     install_runtime(runtime_venv, args.with_manim)

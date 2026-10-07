@@ -6,13 +6,12 @@ from __future__ import annotations
 import argparse
 import gzip
 import io
-from pathlib import Path
 import stat
 import tarfile
 import zipfile
+from pathlib import Path
 
 from release_integrity import RELEASE_TARGETS, ROOT, SEMVER
-
 
 LEGAL_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
 
@@ -47,19 +46,21 @@ def write_zip(output: Path, members: list[tuple[str, bytes, int]]) -> None:
 
 
 def write_tar_gz(output: Path, members: list[tuple[str, bytes, int]]) -> None:
-    with output.open("wb") as raw_output:
-        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_output, mtime=0, compresslevel=9) as compressed:
-            with tarfile.open(fileobj=compressed, mode="w", format=tarfile.GNU_FORMAT) as archive:
-                for name, payload, mode in members:
-                    info = tarfile.TarInfo(name)
-                    info.size = len(payload)
-                    info.mode = mode
-                    info.mtime = 0
-                    info.uid = 0
-                    info.gid = 0
-                    info.uname = ""
-                    info.gname = ""
-                    archive.addfile(info, io.BytesIO(payload))
+    with (
+        output.open("wb") as raw_output,
+        gzip.GzipFile(filename="", mode="wb", fileobj=raw_output, mtime=0, compresslevel=9) as gz,
+        tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as archive,
+    ):
+        for name, payload, mode in members:
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mode = mode
+            info.mtime = 0
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            archive.addfile(info, io.BytesIO(payload))
 
 
 def main() -> None:

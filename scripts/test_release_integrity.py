@@ -2,23 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import io
-from pathlib import Path
 import shutil
 import stat
 import sys
 import tarfile
 import tempfile
 import unittest
-from unittest import mock
 import zipfile
-
+from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import install  # noqa: E402
 import package_release  # noqa: E402
 import release_integrity  # noqa: E402
-
 
 RELEASE_FILES = (
     *release_integrity.PLUGIN_MANIFESTS,
@@ -44,12 +42,28 @@ class VersionAndChecksumTests(unittest.TestCase):
     def test_every_release_reference_is_checked(self) -> None:
         version = release_integrity.validate_versions()
         drifts = {
-            ".claude-plugin/plugin.json": ("versions differ", f'"version": "{version}"', '"version": "9.9.9"'),
-            "scripts/mcp_launcher.py": ("versions differ", f'VERSION = "{version}"', 'VERSION = "9.9.9"'),
+            ".claude-plugin/plugin.json": (
+                "versions differ",
+                f'"version": "{version}"',
+                '"version": "9.9.9"',
+            ),
+            "scripts/mcp_launcher.py": (
+                "versions differ",
+                f'VERSION = "{version}"',
+                'VERSION = "9.9.9"',
+            ),
             ".claude-plugin/marketplace.json": ("immutable release ref", f'"v{version}"', '"main"'),
-            ".agents/plugins/marketplace.json": ("immutable release ref", f'"v{version}"', '"main"'),
+            ".agents/plugins/marketplace.json": (
+                "immutable release ref",
+                f'"v{version}"',
+                '"main"',
+            ),
             "THIRD_PARTY_NOTICES.md": ("source tree", f"/tree/v{version}", "/tree/main"),
-            ".codex-plugin/plugin.json": ("must name the plugin", '"name": "manim-plugin"', '"name": "other"'),
+            ".codex-plugin/plugin.json": (
+                "must name the plugin",
+                '"name": "manim-plugin"',
+                '"name": "other"',
+            ),
         }
         for relative, (message, old, new) in drifts.items():
             with self.subTest(file=relative), tempfile.TemporaryDirectory() as raw_tmp:
@@ -59,15 +73,19 @@ class VersionAndChecksumTests(unittest.TestCase):
                     shutil.copyfile(release_integrity.ROOT / name, root / name)
                 self.assertEqual(release_integrity.validate_versions(root), version)
                 drifted = root / relative
-                drifted.write_text(drifted.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+                drifted.write_text(
+                    drifted.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8"
+                )
                 with self.assertRaisesRegex(ValueError, message):
                     release_integrity.validate_versions(root)
 
     def test_component_drift_is_rejected(self) -> None:
         versions = {"plugin": "1.1.0", "workbench": "1.1.1"}
-        with mock.patch.object(release_integrity, "component_versions", return_value=versions):
-            with self.assertRaisesRegex(ValueError, "versions differ"):
-                release_integrity.validate_versions()
+        with (
+            mock.patch.object(release_integrity, "component_versions", return_value=versions),
+            self.assertRaisesRegex(ValueError, "versions differ"),
+        ):
+            release_integrity.validate_versions()
 
     def test_release_package_names_are_allowlisted(self) -> None:
         self.assertEqual(
@@ -123,7 +141,9 @@ class VersionAndChecksumTests(unittest.TestCase):
 
 class ArchiveExtractionTests(unittest.TestCase):
     @staticmethod
-    def _zip_release_members(binary_name: str, contents: bytes) -> list[tuple[zipfile.ZipInfo | str, bytes]]:
+    def _zip_release_members(
+        binary_name: str, contents: bytes
+    ) -> list[tuple[zipfile.ZipInfo | str, bytes]]:
         return [
             (binary_name, contents),
             ("LICENSE", b"MIT license"),
@@ -131,7 +151,9 @@ class ArchiveExtractionTests(unittest.TestCase):
         ]
 
     @staticmethod
-    def _tar_release_members(binary_name: str, contents: bytes) -> list[tuple[tarfile.TarInfo, bytes]]:
+    def _tar_release_members(
+        binary_name: str, contents: bytes
+    ) -> list[tuple[tarfile.TarInfo, bytes]]:
         return [
             (tarfile.TarInfo(binary_name), contents),
             (tarfile.TarInfo("LICENSE"), b"MIT license"),
@@ -192,7 +214,9 @@ class ArchiveExtractionTests(unittest.TestCase):
                 archive = directory / f"unsafe-{index}.zip"
                 self._write_zip(archive, members)
                 with self.subTest(index=index), self.assertRaises(RuntimeError):
-                    install.extract_binary(archive, "zip", "manim-director", directory / f"output-{index}")
+                    install.extract_binary(
+                        archive, "zip", "manim-director", directory / f"output-{index}"
+                    )
 
     def test_tar_rejects_unsafe_paths_and_non_regular_members(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -210,16 +234,25 @@ class ArchiveExtractionTests(unittest.TestCase):
 
             for index, member in enumerate(members):
                 archive = directory / f"unsafe-{index}.tar.gz"
-                release_members = [(member, b"binary"), *self._tar_release_members("placeholder", b"")[1:]]
+                release_members = [
+                    (member, b"binary"),
+                    *self._tar_release_members("placeholder", b"")[1:],
+                ]
                 self._write_tar(archive, release_members)
                 with self.subTest(index=index), self.assertRaises(RuntimeError):
-                    install.extract_binary(archive, "tar.gz", "manim-director", directory / f"output-{index}")
+                    install.extract_binary(
+                        archive, "tar.gz", "manim-director", directory / f"output-{index}"
+                    )
 
             multiple = directory / "multiple.tar.gz"
             extra = tarfile.TarInfo("extra")
-            self._write_tar(multiple, [*self._tar_release_members("manim-director", b"x"), (extra, b"x")])
+            self._write_tar(
+                multiple, [*self._tar_release_members("manim-director", b"x"), (extra, b"x")]
+            )
             with self.assertRaisesRegex(RuntimeError, "exact signed release layout"):
-                install.extract_binary(multiple, "tar.gz", "manim-director", directory / "multiple-output")
+                install.extract_binary(
+                    multiple, "tar.gz", "manim-director", directory / "multiple-output"
+                )
 
     def test_release_archives_are_deterministic_and_include_notices(self) -> None:
         members = [
@@ -237,7 +270,11 @@ class ArchiveExtractionTests(unittest.TestCase):
             with tarfile.open(first, "r:gz") as bundle:
                 archived = bundle.getmembers()
             self.assertEqual([member.name for member in archived], [name for name, _, _ in members])
-            self.assertTrue(all(member.uid == 0 and member.gid == 0 and member.mtime == 0 for member in archived))
+            self.assertTrue(
+                all(
+                    member.uid == 0 and member.gid == 0 and member.mtime == 0 for member in archived
+                )
+            )
 
     def test_checksum_mismatch_never_opens_archive_or_replaces_destination(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -267,7 +304,9 @@ class ArchiveExtractionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_tmp:
             destination = Path(raw_tmp) / "binary"
             with self.assertRaisesRegex(RuntimeError, "invalid size"):
-                install._copy_regular_member(io.BytesIO(b"x"), destination, install.MAX_RELEASE_BYTES + 1)
+                install._copy_regular_member(
+                    io.BytesIO(b"x"), destination, install.MAX_RELEASE_BYTES + 1
+                )
             self.assertFalse(destination.exists())
 
 

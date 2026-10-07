@@ -6,12 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import tomllib
+from pathlib import Path
 
 from install import sha256_file
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -37,7 +36,9 @@ def _toml(path: Path) -> dict[str, object]:
 
 
 def _assigned_version(path: Path, name: str) -> str:
-    match = re.search(rf'^{name}\s*=\s*["\']([^"\']+)["\']\s*$', path.read_text(encoding="utf-8"), re.MULTILINE)
+    match = re.search(
+        rf'^{name}\s*=\s*["\']([^"\']+)["\']\s*$', path.read_text(encoding="utf-8"), re.MULTILINE
+    )
     if not match:
         raise ValueError(f"{name} is missing from {path}")
     return match.group(1)
@@ -92,7 +93,9 @@ def validate_versions(root: Path = ROOT, tag: str | None = None) -> str:
     for marketplace in MARKETPLACES:
         ref = marketplace_ref(root, marketplace)
         if ref != expected_tag:
-            raise ValueError(f"{marketplace} ref {ref!r} must equal immutable release ref {expected_tag!r}")
+            raise ValueError(
+                f"{marketplace} ref {ref!r} must equal immutable release ref {expected_tag!r}"
+            )
     notices = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     if f"{REPOSITORY}/tree/{expected_tag}\n" not in notices:
         raise ValueError(f"THIRD_PARTY_NOTICES.md must link the {expected_tag} source tree")
@@ -107,7 +110,9 @@ def marketplace_ref(root: Path, marketplace: str) -> str:
             raise ValueError(f"{marketplace} must contain exactly one {PLUGIN_NAME} entry")
         return str(entries[0]["source"]["ref"])
     except (KeyError, TypeError) as exc:
-        raise ValueError(f"{marketplace} entry for {PLUGIN_NAME} is missing its source ref") from exc
+        raise ValueError(
+            f"{marketplace} entry for {PLUGIN_NAME} is missing its source ref"
+        ) from exc
 
 
 def write_checksums(directory: Path, output: Path) -> list[Path]:
@@ -121,12 +126,15 @@ def write_checksums(directory: Path, output: Path) -> list[Path]:
     present_names = {
         path.name
         for path in directory.iterdir()
-        if path.name.startswith("manim-director-v") and (path.name.endswith(".tar.gz") or path.name.endswith(".zip"))
+        if path.name.startswith("manim-director-v")
+        and (path.name.endswith(".tar.gz") or path.name.endswith(".zip"))
     }
     if present_names != expected_names:
         missing = ", ".join(sorted(expected_names - present_names)) or "none"
         unexpected = ", ".join(sorted(present_names - expected_names)) or "none"
-        raise ValueError(f"release archive set is incomplete (missing: {missing}; unexpected: {unexpected})")
+        raise ValueError(
+            f"release archive set is incomplete (missing: {missing}; unexpected: {unexpected})"
+        )
     assets = sorted(directory / name for name in expected_names)
     invalid = [path.name for path in assets if not path.is_file() or path.is_symlink()]
     if invalid:
@@ -142,7 +150,9 @@ def write_checksums(directory: Path, output: Path) -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    versions = subparsers.add_parser("versions", help="Assert every release component has one version.")
+    versions = subparsers.add_parser(
+        "versions", help="Assert every release component has one version."
+    )
     versions.add_argument("--tag", help="Release tag, for example v1.0.0.")
     checksums = subparsers.add_parser("checksums", help="Write SHA256SUMS for release archives.")
     checksums.add_argument("--directory", type=Path, default=Path("dist"))
