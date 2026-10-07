@@ -353,7 +353,8 @@ export interface LatestBase {
 }
 
 export interface SceneLatest {
-  video: (LatestBase & { profile: string | null; timeline: TimelineMark[] }) | null;
+  /** `captions`: the render's caption files still on disk (Manim writes subcaptions as `.srt`). */
+  video: (LatestBase & { profile: string | null; timeline: TimelineMark[]; captions: Artifact[] }) | null;
   /** `at_seconds` is `null` for a `still` (the last frame). */
   still: (LatestBase & { operation: "still" | "frame"; at_seconds: number | null }) | null;
   contact_sheet: (LatestBase & { frames: SheetFrame[]; source_job_id: JobId | null }) | null;

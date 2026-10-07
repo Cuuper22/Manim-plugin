@@ -3,7 +3,7 @@ import type { Artifact, JobId, JobSummary, Scene, SceneLatest } from "../api/typ
 import type { StageAction } from "../model/actions.ts";
 import { formatTime } from "../model/format.ts";
 import { activityText, isActive, progressDetail } from "../model/jobs.ts";
-import { mediaSummary, playback as playbackOf } from "../model/media.ts";
+import { captionsLabel, downloadUrl, mediaSummary, playback as playbackOf } from "../model/media.ts";
 import type { PlaybackController } from "../stage/playback.ts";
 import { useStore } from "../store/useWorkbench.ts";
 import { Icon } from "./Icon.tsx";
@@ -175,13 +175,15 @@ function Activity({ job, onLogs, onDiagnose }: ActivityProps) {
   );
 }
 
-/** What the shown artifact is, and whether its scene changed since. */
+/** What the shown artifact is, whether its scene changed since, and a render's caption files. */
 function StageMeta({ latest, view }: { latest: SceneLatest | null; view: StageView }) {
   let shown: { artifact: Artifact; outdated: boolean } | null = null;
   let text = "";
+  let captions: readonly Artifact[] = [];
   if (view === "video" && latest?.video) {
     shown = latest.video;
     text = [latest.video.profile, mediaSummary(shown.artifact)].filter(Boolean).join(" · ");
+    captions = latest.video.captions;
   } else if (view === "still" && latest?.still) {
     shown = latest.still;
     text = stillLabel(latest.still.at_seconds);
@@ -194,6 +196,12 @@ function StageMeta({ latest, view }: { latest: SceneLatest | null; view: StageVi
     <p className="row meta stage-meta">
       <span>{text}</span>
       {shown.outdated ? <Outdated /> : null}
+      {captions.map((file) => (
+        <a key={file.path} className="button quiet small" href={downloadUrl(file)} download>
+          <Icon name="export" />
+          {captionsLabel(file)}
+        </a>
+      ))}
     </p>
   );
 }
