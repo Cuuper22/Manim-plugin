@@ -4,7 +4,16 @@ import type { Artifact, Finding, Scene, SceneLatest, TimelineMark } from "../src
 import { planAction, planExport } from "../src/model/actions.ts";
 import { bySeverity, cleanQa, codeTarget, fromDiagnosis, fromWorkspace } from "../src/model/findings.ts";
 import { clockTime, formatTime } from "../src/model/format.ts";
-import { activityText, deliverable, jobTitle, retryRequest, stageActivity, statusText } from "../src/model/jobs.ts";
+import {
+  activityText,
+  deliverable,
+  expectedSeconds,
+  jobTitle,
+  progressFraction,
+  retryRequest,
+  stageActivity,
+  statusText,
+} from "../src/model/jobs.ts";
 import { downloadUrl, playback } from "../src/model/media.ts";
 import { commandFor, type FocusZone, type KeyInput } from "../src/model/shortcuts.ts";
 import { lanes, markAt, markStep, rulerTicks, shuttleRate, stepFrames, tickLabel } from "../src/model/timeline.ts";
@@ -235,6 +244,21 @@ test("jobs read as one line and retry only what HTTP accepts", () => {
   const zip = { ...video(), kind: "archive" as const, media: null, url: "/api/files/dist/x.zip?v=1" };
   assert.equal(deliverable(job({ operation: "export", status: "succeeded", artifacts: [zip] }))?.url, zip.url);
   assert.equal(deliverable(job({ status: "succeeded", artifacts: [zip] })), null);
+});
+
+test("a render without a total measures its progress against the scene's expected length", () => {
+  const at = (seconds: number | null) => ({ ...progress(4, "2026-10-07T10:00:00.000Z"), total: null, scene_seconds: seconds });
+  assert.equal(progressFraction(progress(5, "2026-10-07T10:00:00.000Z"), 100), 0.5, "a total wins");
+  assert.equal(progressFraction(at(2.15), 8.6), 0.25);
+  assert.equal(progressFraction(at(12), 8.6), 0.99, "an estimate never reads done");
+  assert.equal(progressFraction(at(2.15), null), null);
+  assert.equal(progressFraction(at(null), 8.6), null);
+
+  const render = job({ scene_id: scene.id });
+  const declared = { ...scene, declared: { id: "recurrence", purpose: null, duration_seconds: 12 } };
+  assert.equal(expectedSeconds(render, { scenes: [declared], latest: { [scene.id]: rendered } }), 8.6, "the last render");
+  assert.equal(expectedSeconds(render, { scenes: [declared], latest: {} }), 12, "else the declared length");
+  assert.equal(expectedSeconds({ ...render, operation: "qa" }, { scenes: [declared], latest: {} }), null);
 });
 
 test("keys map to commands only where focus does not need them", () => {

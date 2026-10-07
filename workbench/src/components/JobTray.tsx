@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import type { JobId, JobStatus, JobSummary } from "../api/types.ts";
 import { useDismiss } from "../hooks/useShortcuts.ts";
 import { clockTime } from "../model/format.ts";
-import { deliverable, isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
+import { deliverable, isActive, jobTitle, retryRequest, statusText } from "../model/jobs.ts";
 import { downloadUrl } from "../model/media.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
 import { Icon } from "./Icon.tsx";
-import { Progress } from "./Progress.tsx";
+import { JobProgress } from "./Progress.tsx";
 
 const PAGE = 25;
 
@@ -124,7 +124,7 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
           {clockTime(job.created_at)}
         </time>
       </div>
-      {job.status === "running" ? <Progress fraction={progressFraction(job.progress)} label={`${title} progress`} /> : null}
+      {job.status === "running" ? <JobProgress job={job} label={`${title} progress`} /> : null}
       {job.error && job.status === "failed" ? <p className="meta danger clamp">{job.error.message}</p> : null}
       <div className="row job-actions">
         <span className="meta job-status">{statusText(job)}</span>

@@ -8,7 +8,7 @@ import { useShortcuts } from "../hooks/useShortcuts.ts";
 import { useTheme } from "../hooks/useTheme.ts";
 import { planAction, planExport, type StageAction } from "../model/actions.ts";
 import { bySeverity, fromWorkspace, type CodeTarget } from "../model/findings.ts";
-import { isActive, progressFraction, stageActivity } from "../model/jobs.ts";
+import { expectedSeconds, isActive, progressFraction, stageActivity } from "../model/jobs.ts";
 import { PlaybackController } from "../stage/playback.ts";
 import type { Workspace } from "../store/reducer.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -136,7 +136,7 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
   const stateOf = (action: string, target: SceneId | null = sceneId): ActionState => {
     const job = jobFor(action, target);
     const busy = pending.has(keyOf(action, target)) || (job !== null && isActive(job));
-    return { busy, fraction: busy && job ? progressFraction(job.progress) : null };
+    return { busy, fraction: busy && job ? progressFraction(job.progress, expectedSeconds(job, workspace)) : null };
   };
 
   const run = async (action: StageAction) => {

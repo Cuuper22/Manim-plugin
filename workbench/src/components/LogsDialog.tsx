@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JobId, JobSummary, LogEntry } from "../api/types.ts";
 import { clockTime } from "../model/format.ts";
-import { isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
+import { isActive, jobTitle, retryRequest, statusText } from "../model/jobs.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
-import { Progress } from "./Progress.tsx";
+import { JobProgress } from "./Progress.tsx";
 
 const PAGE_SIZE = 200;
 const LEVEL_CLASS: Record<LogEntry["level"], string | undefined> = { info: undefined, warning: "warning", error: "danger" };
@@ -109,7 +109,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
           </form>
         </div>
       </header>
-      {job?.status === "running" ? <Progress fraction={progressFraction(job.progress)} label={`${title} progress`} /> : null}
+      {job?.status === "running" ? <JobProgress job={job} label={`${title} progress`} /> : null}
       {job?.error ? (
         <p className="card" data-tone="danger" role="alert">
           {job.error.message} <span className="muted">({job.error.code})</span>

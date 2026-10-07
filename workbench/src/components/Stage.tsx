@@ -2,12 +2,12 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import type { Artifact, JobId, JobSummary, Scene, SceneLatest } from "../api/types.ts";
 import type { StageAction } from "../model/actions.ts";
 import { formatTime } from "../model/format.ts";
-import { activityText, isActive, progressDetail, progressFraction } from "../model/jobs.ts";
+import { activityText, isActive, progressDetail } from "../model/jobs.ts";
 import { mediaSummary, playback as playbackOf } from "../model/media.ts";
 import type { PlaybackController } from "../stage/playback.ts";
 import { useStore } from "../store/useWorkbench.ts";
 import { Icon } from "./Icon.tsx";
-import { Progress } from "./Progress.tsx";
+import { JobProgress } from "./Progress.tsx";
 import { TabList, panelId, tabId, type TabSpec } from "./TabList.tsx";
 import { Timeline } from "./Timeline.tsx";
 
@@ -170,7 +170,7 @@ function Activity({ job, onLogs, onDiagnose }: ActivityProps) {
           Cancel
         </button>
       )}
-      {failed ? null : <Progress fraction={progressFraction(job.progress)} label={`${activityText(job)} progress`} />}
+      {failed ? null : <JobProgress job={job} label={`${activityText(job)} progress`} />}
     </div>
   );
 }
