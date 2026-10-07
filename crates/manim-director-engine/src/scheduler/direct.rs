@@ -6,7 +6,7 @@ use crate::{cache, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge};
 use manim_director_core::{
     python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
     ErrorBody, Finding, InitMode, InitParams, InitResult, InitTask, Operation, OperationRequest,
-    OperationResult, Task,
+    OperationResult, Task, SPEC_FILE,
 };
 use std::{
     collections::BTreeMap,
@@ -216,7 +216,8 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
         None => {
             let entries = project_entries(&root).map_err(EngineError::internal)?;
             if !entries.is_empty() && !params.force {
-                return Err(EngineError::ProjectNotEmpty { entries });
+                let project = root.join(SPEC_FILE).is_file();
+                return Err(EngineError::ProjectNotEmpty { entries, project });
             }
             let directory_name = root
                 .file_name()
@@ -332,8 +333,14 @@ mod tests {
         assert_eq!(
             error,
             EngineError::ProjectNotEmpty {
-                entries: vec!["notes.txt".into()]
+                entries: vec!["notes.txt".into()],
+                project: false,
             }
         );
+        fs::write(directory.path().join("director.yaml"), "version: 1\n").unwrap();
+        let error = init_project(&unreachable, directory.path(), InitParams::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("already a project"), "{error}");
     }
 }

@@ -129,8 +129,12 @@ pub enum EngineError {
         scene: Option<String>,
         profile: Option<String>,
     },
-    #[error("The target directory is not empty; pass force to overwrite its template files.")]
-    ProjectNotEmpty { entries: Vec<String> },
+    #[error("{}", project_not_empty_message(*project))]
+    ProjectNotEmpty {
+        entries: Vec<String>,
+        /// The directory already holds a `director.yaml`.
+        project: bool,
+    },
     #[error("The request is {} bytes; the limit is {limit_bytes}.", actual_bytes.map_or("too many".to_owned(), |n| n.to_string()))]
     RequestTooLarge {
         limit_bytes: u64,
@@ -198,6 +202,13 @@ fn source_not_found_message(scene: Option<&str>, profile: Option<&str>) -> Strin
         .map(|profile| format!(" at {profile}"))
         .unwrap_or_default();
     format!("No successful render{scene}{profile}; render it first.")
+}
+
+fn project_not_empty_message(project: bool) -> &'static str {
+    match project {
+        true => "This directory is already a project; add a scene with scene_template (--scene-template). force (--force) would replace director.yaml and scenes/main.py, and keeps no copy.",
+        false => "The target directory is not empty; force (--force) writes the template into it, replacing any of its files with the same names.",
+    }
 }
 
 fn source_invalid_message(
@@ -325,7 +336,7 @@ impl EngineError {
             Self::SourceNotFound { scene, profile } => {
                 json!({ "scene": scene, "profile": profile })
             }
-            Self::ProjectNotEmpty { entries } => json!({ "entries": entries }),
+            Self::ProjectNotEmpty { entries, .. } => json!({ "entries": entries }),
             Self::RequestTooLarge {
                 limit_bytes,
                 actual_bytes,
@@ -424,7 +435,10 @@ mod tests {
                 404,
             ),
             (
-                EngineError::ProjectNotEmpty { entries: vec![] },
+                EngineError::ProjectNotEmpty {
+                    entries: vec![],
+                    project: false,
+                },
                 "project_not_empty",
                 409,
             ),
