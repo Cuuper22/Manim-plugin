@@ -115,17 +115,9 @@ fn mark_truncated(root: &mut Value, path: &[Step]) {
 fn halve(text: &str, keep_end: bool) -> String {
     let keep = text.len() / 2;
     if keep_end {
-        let mut start = text.len() - keep;
-        while !text.is_char_boundary(start) {
-            start += 1;
-        }
-        format!("…{}", &text[start..])
+        format!("…{}", &text[text.ceil_char_boundary(text.len() - keep)..])
     } else {
-        let mut end = keep;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}…", &text[..end])
+        format!("{}…", &text[..text.floor_char_boundary(keep)])
     }
 }
 

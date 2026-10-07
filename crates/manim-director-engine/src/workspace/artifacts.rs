@@ -3,6 +3,7 @@
 
 use crate::confine;
 use manim_director_core::{files, Artifact, ArtifactKind, MediaInfo};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Serialize;
 use std::{fs, path::Path, time::UNIX_EPOCH};
 
@@ -16,6 +17,18 @@ pub fn file_version(metadata: &fs::Metadata) -> String {
     format!("{:x}-{:x}", metadata.len(), mtime)
 }
 
+/// What `encodeURIComponent` leaves alone.
+const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'!')
+    .remove(b'~')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
+
 /// `/api/files/<path>?v=<version>`, each segment encoded like
 /// `encodeURIComponent`.
 pub fn file_url(path: &str, version: &str) -> String {
@@ -24,25 +37,7 @@ pub fn file_url(path: &str, version: &str) -> String {
 }
 
 fn encode_component(segment: &str) -> String {
-    let mut encoded = String::with_capacity(segment.len());
-    for byte in segment.bytes() {
-        match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'!'
-            | b'~'
-            | b'*'
-            | b'\''
-            | b'('
-            | b')' => encoded.push(byte as char),
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
+    utf8_percent_encode(segment, URI_COMPONENT).to_string()
 }
 
 /// The exact `Content-Type` of a served file (HTTP §7.2). Text formats are
@@ -108,6 +103,10 @@ mod tests {
             "/api/files/.manim-director/artifacts/7f/Re%20cur%23rence.mp4?v=a-1"
         );
         assert_eq!(encode_component("é(1)!"), "%C3%A9(1)!");
+        assert_eq!(
+            encode_component(r##" !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"##),
+            "%20!%22%23%24%25%26'()*%2B%2C-.%2F%3A%3B%3C%3D%3E%3F%40%5B%5C%5D%5E_%60%7B%7C%7D~"
+        );
     }
 
     #[test]

@@ -6,8 +6,8 @@ use crate::{
     process::wait_bounded,
 };
 use manim_director_core::{
-    files, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat, MediaInfo,
-    OperationResult, Task, Timeline, ARTIFACTS_DIR,
+    files, named_enum, Artifact, ArtifactKind, ErrorBody, ExportTask, MediaExportFormat,
+    MediaFormat, MediaInfo, OperationResult, Task, Timeline, ARTIFACTS_DIR,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -78,28 +78,15 @@ pub struct Expectations<'a> {
     pub budget_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Check {
-    Location,
-    Missing,
-    Empty,
-    Signature,
-    Probe,
-    Contract,
-    Parse,
-}
-
-impl Check {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Location => "location",
-            Self::Missing => "missing",
-            Self::Empty => "empty",
-            Self::Signature => "signature",
-            Self::Probe => "probe",
-            Self::Contract => "contract",
-            Self::Parse => "parse",
-        }
+named_enum! {
+    pub enum Check {
+        Location = "location",
+        Missing = "missing",
+        Empty = "empty",
+        Signature = "signature",
+        Probe = "probe",
+        Contract = "contract",
+        Parse = "parse",
     }
 }
 
@@ -124,7 +111,7 @@ fn invalid(path: Option<&str>, check: Check, detail: &str, mismatches: Vec<Misma
     );
     ErrorBody::new(
         "artifact_invalid",
-        format!("{subject} failed the {} check: {detail}.", check.as_str()),
+        format!("{subject} failed the {check} check: {detail}."),
         Some(json!({
             "path": path,
             "check": check.as_str(),
@@ -277,7 +264,7 @@ impl Location {
             Self::Within(dir) => path.starts_with(dir),
             Self::Exactly(expected) => path == expected,
             Self::ProjectFiles => {
-                path.starts_with(root) && !path.starts_with(root.join(".manim-director"))
+                path.starts_with(root) && !path.starts_with(root.join(files::STATE_DIR))
             }
             Self::Nowhere => false,
         }
@@ -373,7 +360,11 @@ fn contract(expect: &Expectations<'_>, artifact: &Artifact, transcode: Transcode
             let settings = &render.settings;
             size(settings.width, settings.height);
             check_container(&mut mismatches, media, settings.format.as_str());
-            check_fps(&mut mismatches, media, f64::from(settings.fps));
+            let fps = match settings.format {
+                MediaFormat::Gif => gif_rate(settings.fps, media.fps),
+                _ => f64::from(settings.fps),
+            };
+            check_fps(&mut mismatches, media, fps);
             check_alpha(&mut mismatches, media, settings.transparent);
         }
         (Task::Render(render), ArtifactKind::Section) => {
@@ -445,6 +436,20 @@ fn check_fps(mismatches: &mut Vec<Mismatch>, media: &MediaInfo, expected: f64) {
             expected: json!(expected),
             actual: json!(media.fps),
         });
+    }
+}
+
+/// GIF frame delays are whole centiseconds, so a GIF rendered at `fps`
+/// probes at 100/n for a delay n either side of 100/fps: the one of those
+/// two rates nearest `actual`.
+fn gif_rate(fps: u32, actual: Option<f64>) -> f64 {
+    let delay = 100.0 / f64::from(fps);
+    let [fast, slow] = [delay.floor(), delay.ceil()].map(|delay| 100.0 / delay.max(1.0));
+    let distance = |rate: f64| actual.map_or(0.0, |actual| (rate - actual).abs());
+    if distance(fast) <= distance(slow) {
+        fast
+    } else {
+        slow
     }
 }
 
@@ -612,7 +617,7 @@ mod tests {
     use super::*;
     use manim_director_core::{
         CaptionsResult, CaptionsTask, MediaFormat, RenderResult, RenderSettings, RenderTask,
-        Renderer, SceneRef, ARTIFACTS_DIR,
+        SceneRef, ARTIFACTS_DIR,
     };
 
     fn probe(json: Value) -> ProbeOutput {
@@ -658,13 +663,8 @@ mod tests {
             scene: Some("A".into()),
             files: vec![],
             settings: RenderSettings {
-                profile: "draft".into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
-                format: MediaFormat::Mp4,
                 transparent,
+                ..crate::db::testing::draft()
             },
             media_dir: root.join("media"),
             out_dir: root.join(".manim-director/artifacts/job"),
@@ -718,6 +718,48 @@ mod tests {
             has_alpha: true,
         });
         assert!(contract(&expect, &video, Transcode::default()).is_empty());
+    }
+
+    #[test]
+    fn a_gif_render_may_probe_at_the_centisecond_rate_next_to_its_fps() {
+        let root = Path::new("/p");
+        let probed = |fps: u32, actual: f64| {
+            let mut task = render_task(root, false);
+            if let Task::Render(render) = &mut task {
+                render.settings.fps = fps;
+                render.settings.format = MediaFormat::Gif;
+            }
+            let expect = Expectations {
+                root,
+                task: &task,
+                source: None,
+                budget_bytes: u64::MAX,
+            };
+            let mut video = artifact(ArtifactKind::Video, "v.gif");
+            video.media = Some(MediaInfo {
+                container: "gif".into(),
+                codec: Some("gif".into()),
+                width: 854,
+                height: 480,
+                fps: Some(actual),
+                duration_seconds: Some(1.0),
+                has_alpha: false,
+            });
+            contract(&expect, &video, Transcode::default())
+                .iter()
+                .map(|mismatch| mismatch.field)
+                .collect::<Vec<_>>()
+        };
+        for (fps, actual) in [(15, 50.0 / 3.0), (30, 100.0 / 3.0), (24, 25.0), (60, 100.0)] {
+            assert!(
+                probed(fps, actual).is_empty(),
+                "{fps} fps probed at {actual}"
+            );
+        }
+        assert!(probed(15, 100.0 / 7.0).is_empty(), "the slower neighbour");
+        assert!(probed(25, 25.0).is_empty());
+        assert_eq!(probed(15, 25.0), ["fps"]);
+        assert_eq!(probed(25, 50.0 / 3.0), ["fps"]);
     }
 
     #[test]

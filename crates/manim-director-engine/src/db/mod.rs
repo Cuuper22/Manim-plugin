@@ -17,7 +17,7 @@ pub use logs::NewLog;
 pub use runtime::{RuntimeIdentity, StoredRuntime};
 
 use anyhow::{anyhow, Result};
-use manim_director_core::{scene_id, JobRecord, LogRecord, OperationResult, Task};
+use manim_director_core::{files, scene_id, JobRecord, LogRecord, OperationResult, Task};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
@@ -39,7 +39,7 @@ const JOB_COLUMNS: &str = "sequence, id, operation, status, origin, owner, reque
 
 /// Where a project keeps its job store.
 pub fn state_db_path(root: &Path) -> PathBuf {
-    root.join(".manim-director/state.db")
+    root.join(files::STATE_DIR).join("state.db")
 }
 
 pub struct Store {
@@ -175,8 +175,34 @@ fn conversion(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite
 pub(crate) mod testing {
     use super::*;
     use manim_director_core::{
-        DiagnoseParams, DiagnoseResult, DiagnoseTask, JobOrigin, Limits, OperationRequest,
+        DiagnoseParams, DiagnoseResult, DiagnoseTask, DirectorSpec, DiscoveredScene, JobOrigin,
+        Limits, OperationRequest, RenderSettings,
     };
+
+    /// A CLI job of some other engine with no links; tests set what matters.
+    pub(crate) fn new_job<'a>(
+        id: Uuid,
+        request: &'a OperationRequest,
+        task: &'a Task,
+    ) -> NewJob<'a> {
+        NewJob {
+            id,
+            origin: JobOrigin::Cli,
+            owner: Uuid::new_v4(),
+            request,
+            task,
+            limits: Limits {
+                timeout_seconds: 60,
+                memory_mb: None,
+            },
+            fingerprint: None,
+            source_job_id: None,
+            scene_class: None,
+            scene_file: None,
+            scene_revision: None,
+            profile: None,
+        }
+    }
 
     /// Inserts a queued `diagnose` job owned by `owner`.
     pub(crate) fn queued_job(store: &Store, id: Uuid, owner: Uuid) -> JobRecord {
@@ -189,23 +215,36 @@ pub(crate) mod testing {
         });
         store
             .insert_job(&NewJob {
-                id,
-                origin: JobOrigin::Cli,
                 owner,
-                request: &request,
-                task: &task,
-                limits: Limits {
-                    timeout_seconds: 60,
-                    memory_mb: None,
-                },
                 fingerprint: Some("fp"),
-                source_job_id: None,
                 scene_class: Some("Intro"),
-                scene_file: None,
-                scene_revision: None,
-                profile: None,
+                ..new_job(id, &request, &task)
             })
             .unwrap()
+    }
+
+    /// The built-in `draft` profile: 854x480 at 15 fps, cairo, mp4.
+    pub(crate) fn draft() -> RenderSettings {
+        DirectorSpec::defaults()
+            .profile("draft")
+            .cloned()
+            .expect("draft is built in")
+    }
+
+    /// A two-line `Scene` subclass found at `file:line`.
+    pub(crate) fn scene(name: &str, file: &str, line: u32) -> DiscoveredScene {
+        DiscoveredScene {
+            name: name.into(),
+            file: file.into(),
+            line,
+            end_line: line + 1,
+            construct_line: None,
+            bases: vec!["Scene".into()],
+            doc: None,
+            theme: None,
+            sections: vec![],
+            beats: vec![],
+        }
     }
 
     pub(crate) fn diagnosis() -> OperationResult {

@@ -3,10 +3,7 @@
 
 use crate::confine::resolve_existing_prefix;
 use manim_director_core::{check_project_path, files, EngineError};
-use std::{
-    io,
-    path::{Component, Path, PathBuf},
-};
+use std::path::{Component, Path, PathBuf};
 
 pub(crate) enum PathUse<'a> {
     /// An existing regular file.
@@ -52,7 +49,7 @@ pub(crate) fn project_path(
             media_dir,
             extensions,
         } => {
-            let denied = [root.join(".manim-director"), root.join(media_dir)];
+            let denied = [root.join(files::STATE_DIR), root.join(media_dir)];
             let under_denied = denied
                 .iter()
                 .any(|dir| dir != root && resolved.starts_with(dir));
@@ -81,20 +78,15 @@ fn require_extension(field: &str, path: &Path, allowed: &[&str]) -> Result<(), E
 /// the project-relative POSIX form every request carries.
 pub fn cli_project_path(root: &Path, cwd: &Path, argument: &Path) -> Result<String, EngineError> {
     let absolute = normalize(&cwd.join(argument));
-    let relative = absolute
-        .strip_prefix(root)
-        .map(Path::to_path_buf)
-        .or_else(|_| {
-            // The cwd may reach the project through a symlink.
-            let canonical = canonical_prefix(&absolute)?;
-            canonical
-                .strip_prefix(root)
-                .map(Path::to_path_buf)
-                .map_err(|_| io::ErrorKind::NotFound.into())
-        })
-        .map_err(|_: io::Error| {
-            EngineError::invalid(argument.display().to_string(), "outside_project")
-        })?;
+    let relative = match absolute.strip_prefix(root) {
+        Ok(relative) => relative.to_path_buf(),
+        // The cwd may reach the project through a symlink.
+        Err(_) => resolve_existing_prefix(root, &absolute)
+            .and_then(|resolved| Some(resolved.strip_prefix(root).ok()?.to_path_buf()))
+            .ok_or_else(|| {
+                EngineError::invalid(argument.display().to_string(), "outside_project")
+            })?,
+    };
     let text = relative.to_string_lossy().replace('\\', "/");
     if text.is_empty() {
         return Err(EngineError::invalid(
@@ -117,18 +109,6 @@ fn normalize(path: &Path) -> PathBuf {
         }
     }
     normalized
-}
-
-fn canonical_prefix(path: &Path) -> io::Result<PathBuf> {
-    let mut existing = path;
-    let mut tail = Vec::new();
-    while !existing.exists() {
-        tail.push(existing.file_name().ok_or(io::ErrorKind::NotFound)?);
-        existing = existing.parent().ok_or(io::ErrorKind::NotFound)?;
-    }
-    let mut canonical = existing.canonicalize()?;
-    canonical.extend(tail.iter().rev());
-    Ok(canonical)
 }
 
 #[cfg(test)]
@@ -268,5 +248,16 @@ mod tests {
             reason(cli_project_path(&root, &scenes, Path::new("../../elsewhere.py")).unwrap_err()),
             "outside_project"
         );
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            let alias = elsewhere.path().join("alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            assert_eq!(
+                cli_project_path(&root, &alias.join("scenes"), Path::new("new/a.py")).unwrap(),
+                "scenes/new/a.py",
+                "a cwd reaching the project through a symlink"
+            );
+        }
     }
 }

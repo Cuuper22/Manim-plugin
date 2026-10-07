@@ -99,6 +99,13 @@ async fn the_server_lists_exactly_the_ten_catalog_tools_and_no_resources() {
     )
     .await
     .is_none());
+    for (invalid, id) in [(json!([1, 2]), Value::Null), (json!({"id": 9}), json!(9))] {
+        let answer = handle(&scheduler, invalid).await.unwrap();
+        assert_eq!(
+            (&answer["error"]["code"], &answer["id"]),
+            (&json!(-32600), &id)
+        );
+    }
 }
 
 #[tokio::test]
@@ -122,6 +129,35 @@ async fn inspect_counts_the_scenes_discovery_finds() {
         refused["structuredContent"]["error"]["code"],
         "invalid_params"
     );
+}
+
+#[tokio::test]
+async fn inspect_agrees_with_the_workbench_on_order_and_findings() {
+    let directory = tempfile::tempdir().unwrap();
+    let scheduler = scheduler(directory.path()).await;
+    fs::write(
+        scheduler.root().join("director.yaml"),
+        "version: 1\nproject:\n  name: Demo\ntheme: nonexistent\nscenes:\n  - {id: proof, class: Proof, file: scenes/main.py}\n",
+    )
+    .unwrap();
+    let result = call(&scheduler, "inspect", json!({})).await;
+    let structured = &result["structuredContent"];
+    let scenes: Vec<_> = structured["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|scene| scene["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(scenes, ["Proof", "Intro"], "declared scenes first");
+    assert_eq!(structured["scenes"][0]["declared_id"], "proof");
+    assert_eq!(structured["latest"][0]["video_outdated"], false);
+    let codes: Vec<_> = structured["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"unknown_theme"), "{codes:?}");
 }
 
 #[tokio::test]
@@ -172,6 +208,47 @@ async fn job_tools_wait_for_the_result_and_failures_are_error_results() {
             assert!(error["data"]["field"].as_str().unwrap().contains(field));
         }
     }
+}
+
+#[tokio::test]
+async fn job_answers_say_the_verdict_and_give_absolute_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let scheduler = scheduler(directory.path()).await;
+    let doctor = call(&scheduler, "doctor", json!({"wait_seconds": 10})).await;
+    assert!(text(&doctor).contains("\nready to render: yes"), "{doctor}");
+    let diagnosed = call(
+        &scheduler,
+        "submit",
+        json!({"operation": "diagnose", "text": "hello", "wait_seconds": 10}),
+    )
+    .await;
+    assert!(text(&diagnosed).ends_with("\ninfo hello"), "{diagnosed}");
+    let failed = call(
+        &scheduler,
+        "submit",
+        json!({"operation": "diagnose", "text": "error", "wait_seconds": 10}),
+    )
+    .await;
+    let cause = "\nerror scenes/main.py:3: name 'x' is not defined";
+    assert!(text(&failed).ends_with(cause), "{failed}");
+
+    fs::create_dir_all(scheduler.root().join("captions")).unwrap();
+    fs::write(
+        scheduler.root().join("captions/en.vtt"),
+        "WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n",
+    )
+    .unwrap();
+    let arguments = json!({"operation": "captions", "path": "captions/en.vtt",
+        "output": "captions/en.srt", "wait_seconds": 10});
+    let captions = call(&scheduler, "submit", arguments).await;
+    let path = scheduler
+        .root()
+        .join("captions/en.srt")
+        .display()
+        .to_string();
+    assert_eq!(captions["structuredContent"]["paths"], json!([path]));
+    assert_eq!(text(&captions).lines().nth(1), Some("1 cues, 1.0 s"));
+    assert!(text(&captions).ends_with(&path));
 }
 
 #[tokio::test]

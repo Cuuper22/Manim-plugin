@@ -3,7 +3,7 @@
 
 use super::{job_by_id, Store};
 use anyhow::Result;
-use manim_director_core::{ErrorBody, JobRecord, Timestamp};
+use manim_director_core::{named_enum, ErrorBody, JobRecord, Timestamp};
 use rusqlite::{params, TransactionBehavior};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,23 +12,16 @@ use uuid::Uuid;
 /// A lease whose heartbeat is older than this is stale.
 pub const LEASE_STALE_MILLIS: i64 = 10_000;
 
-/// How an engine process runs; long-lived modes also reap and prune.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EngineMode {
-    Serve,
-    Mcp,
-    Cli,
+named_enum! {
+    /// How an engine process runs; long-lived modes also prune history.
+    pub enum EngineMode {
+        Serve = "serve",
+        Mcp = "mcp",
+        Cli = "cli",
+    }
 }
 
 impl EngineMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Serve => "serve",
-            Self::Mcp => "mcp",
-            Self::Cli => "cli",
-        }
-    }
-
     pub fn is_long_lived(self) -> bool {
         matches!(self, Self::Serve | Self::Mcp)
     }

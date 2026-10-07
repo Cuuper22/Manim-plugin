@@ -78,7 +78,11 @@ def diagnose(task, root, rid):
     if text == "huge":
         send({"type": "log", "request_id": rid, "level": "info", "message": "x" * (1100 * 1024)})
     if text == "error":
-        raise StubError("render_failed", "Scene raised NameError.", {"stage": "construct"})
+        cause = {"code": "name_error", "severity": "error", "message": "name 'x' is not defined",
+                 "hint": None, "location": {"file": "scenes/main.py", "line": 3, "column": None},
+                 "at_seconds": None, "beat": None, "frame": None}
+        raise StubError("render_failed", "Scene raised NameError.",
+                        {"stage": "construct", "findings": [cause]})
     if text == "unknown-code":
         raise StubError("exploded", "Something odd.", None)
     if text == "null-id":
@@ -154,13 +158,17 @@ def discover(task, root, rid):
     scenes = []
     for path in task["files"]:
         with open(path, encoding="utf-8") as handle:
-            for number, line in enumerate(handle, 1):
-                match = re.match(r"class (\w+)\(", line)
-                if match:
-                    scenes.append({"name": match.group(1), "file": relative(path, root),
-                                   "line": number, "end_line": number, "construct_line": None,
-                                   "bases": ["Scene"], "doc": None, "theme": None,
-                                   "sections": [], "beats": []})
+            lines = handle.readlines()
+        for number, line in enumerate(lines, 1):
+            match = re.match(r"class (\w+)\(", line)
+            if match:
+                scenes.append({"name": match.group(1), "file": relative(path, root),
+                               "line": number, "end_line": number, "construct_line": None,
+                               "bases": ["Scene"], "doc": None, "theme": None,
+                               "sections": [], "beats": []})
+        if "# edited during the scan\n" in lines:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write("class Late(Scene):\n    pass\n")
     return {"truncated": False, "scenes": scenes, "findings": [], "artifacts": []}
 
 

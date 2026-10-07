@@ -8,6 +8,7 @@ mod mcp;
 mod process;
 mod scheduler;
 mod server;
+mod signal;
 mod workspace;
 
 pub use bridge::*;
@@ -19,3 +20,4 @@ pub use inspect::*;
 pub use mcp::*;
 pub use scheduler::*;
 pub use server::*;
+pub use signal::shutdown_signal;

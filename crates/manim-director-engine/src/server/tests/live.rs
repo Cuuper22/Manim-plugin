@@ -310,17 +310,20 @@ async fn render_results_appear_as_latest_with_marks_and_go_stale() {
 #[tokio::test]
 async fn a_bound_server_answers_real_sockets_on_its_tokenized_url() {
     let harness = Harness::new("").await;
-    let remote = ServeConfig {
-        address: SocketAddr::from(([0, 0, 0, 0], 0)),
-        workbench_dir: None,
-        allow_remote: false,
-    };
-    let refused = Server::bind(remote, harness.state.scheduler.clone()).await;
-    assert!(refused
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("--allow-remote"));
+    // 127.0.0.2 is loopback, but no Host it could send would be accepted.
+    for ip in [[0, 0, 0, 0], [127, 0, 0, 2]] {
+        let remote = ServeConfig {
+            address: SocketAddr::from((ip, 0)),
+            workbench_dir: None,
+            allow_remote: false,
+        };
+        let refused = Server::bind(remote, harness.state.scheduler.clone()).await;
+        assert!(refused
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("--allow-remote"));
+    }
 
     let local = ServeConfig {
         address: SocketAddr::from(([127, 0, 0, 1], 0)),

@@ -1,5 +1,4 @@
 use super::*;
-use manim_director_core::DiscoveredScene;
 use serde_json::json;
 use std::sync::{Arc, Barrier};
 
@@ -224,6 +223,13 @@ fn stale_or_missing_revisions_conflict() {
 fn concurrent_writers_from_one_revision_cannot_both_win() {
     let project = Arc::new(Project::new());
     project.file("notes.txt", b"base\n");
+    // Half the writers name the file through a symlink; both names share a lock.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("notes.txt", project.root.join("alias.txt")).unwrap();
+    let names = match cfg!(unix) {
+        true => ["notes.txt", "alias.txt"],
+        false => ["notes.txt"; 2],
+    };
     let base = project.revision("notes.txt");
     let writers = 8;
     let barrier = Arc::new(Barrier::new(writers));
@@ -232,7 +238,8 @@ fn concurrent_writers_from_one_revision_cannot_both_win() {
             let (project, barrier, base) = (project.clone(), barrier.clone(), base.clone());
             std::thread::spawn(move || {
                 barrier.wait();
-                project.write("notes.txt", base, replace_all(&format!("writer {index}\n")))
+                let edit = replace_all(&format!("writer {index}\n"));
+                project.write(names[index % 2], base, edit)
             })
         })
         .collect();
@@ -389,9 +396,11 @@ fn merge_patch_updates_the_spec() {
             SourceEdit::MergePatch { patch },
         )
         .unwrap();
-    let spec = DirectorSpec::parse(&project.read(SPEC_FILE)).unwrap();
-    assert_eq!(spec.project.title.as_deref(), Some("Recurrences"));
-    assert_eq!(spec.project.seed, None);
+    // Keys keep their order; new ones go last.
+    assert_eq!(
+        project.read(SPEC_FILE),
+        "version: 1\nproject:\n  name: Demo\n  title: Recurrences\n"
+    );
 }
 
 #[test]
@@ -423,18 +432,7 @@ fn python_is_checked_with_the_configured_interpreter() {
     let index = DiscoverResult {
         files: 1,
         truncated: false,
-        scenes: vec![DiscoveredScene {
-            name: "Intro".into(),
-            file: "scenes/a.py".into(),
-            line: 1,
-            end_line: 2,
-            construct_line: None,
-            bases: vec!["Scene".into()],
-            doc: None,
-            theme: None,
-            sections: vec![],
-            beats: vec![],
-        }],
+        scenes: vec![crate::db::testing::scene("Intro", "scenes/a.py", 1)],
         findings: vec![],
         artifacts: vec![],
     };

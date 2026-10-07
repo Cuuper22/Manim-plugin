@@ -9,6 +9,7 @@ use axum::{
     http::{header, Method, Uri},
     response::{IntoResponse, Response},
 };
+use manim_director_core::path_rule_violation;
 use percent_encoding::percent_decode_str;
 use std::{borrow::Cow, path::PathBuf};
 
@@ -45,14 +46,13 @@ impl Workbench {
     }
 }
 
-/// A request path with no hidden or parent segments.
+/// A request path that obeys the project path rule, so it cannot name a
+/// drive, a parent or a hidden file.
 fn safe_relative(path: &str) -> Option<String> {
     let decoded = percent_decode_str(path).decode_utf8().ok()?;
-    let safe = !decoded.contains('\\')
-        && decoded
-            .split('/')
-            .all(|segment| !segment.is_empty() && !segment.starts_with('.'));
-    safe.then(|| decoded.into_owned())
+    path_rule_violation(&decoded, false)
+        .is_none()
+        .then(|| decoded.into_owned())
 }
 
 /// `text/*` and scripts declare UTF-8; everything else is mime_guess's guess.
@@ -124,7 +124,17 @@ mod tests {
             safe_relative("assets/app.js").as_deref(),
             Some("assets/app.js")
         );
-        for refused in ["../secret", "%2e%2e/secret", ".env", "a//b", "a\\b"] {
+        for refused in [
+            "../secret",
+            "%2e%2e/secret",
+            ".env",
+            "a//b",
+            "a\\b",
+            "C:/Windows/win.ini",
+            "C:x",
+            "c%3A/x",
+            "index.html::$DATA",
+        ] {
             assert_eq!(safe_relative(refused), None, "{refused}");
         }
     }

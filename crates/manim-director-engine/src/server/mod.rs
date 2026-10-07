@@ -14,7 +14,7 @@ mod workbench;
 #[cfg(test)]
 mod tests;
 
-use crate::Scheduler;
+use crate::{shutdown_signal, Scheduler};
 use anyhow::{bail, Result};
 use auth::Session;
 use axum::{
@@ -43,7 +43,7 @@ pub const REMOTE_WARNING: &str = "WARNING: --allow-remote: the API is reachable 
 pub struct ServeConfig {
     pub address: SocketAddr,
     pub workbench_dir: Option<PathBuf>,
-    /// Accept any Host header and allow binding a non-loopback address.
+    /// Accept any Host header and allow binding any address.
     pub allow_remote: bool,
 }
 
@@ -55,11 +55,11 @@ pub struct Server {
 
 impl Server {
     pub async fn bind(config: ServeConfig, scheduler: Scheduler) -> Result<Self> {
-        if !config.address.ip().is_loopback() && !config.allow_remote {
-            bail!(
-                "{} is not a loopback address; pass --allow-remote to serve other machines",
-                config.address.ip()
-            );
+        // The Host check knows loopback only by these names, so a browser
+        // could not sign in on any other address.
+        let ip = config.address.ip();
+        if ip != Ipv4Addr::LOCALHOST && ip != Ipv6Addr::LOCALHOST && !config.allow_remote {
+            bail!("{ip} is not 127.0.0.1 or ::1; pass --allow-remote to serve another address");
         }
         let listener = TcpListener::bind(config.address).await?;
         let port = listener.local_addr()?.port();
@@ -179,21 +179,4 @@ async fn common_headers(request: Request, next: Next) -> Response {
             .or_insert(HeaderValue::from_static("no-store"));
     }
     response
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut signal) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            signal.recv().await;
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
 }

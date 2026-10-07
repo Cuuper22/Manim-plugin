@@ -31,16 +31,43 @@ pub fn fingerprint(
     runtime_identity: &str,
     task: &Task,
 ) -> io::Result<Fingerprint> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(CACHE_SCHEMA);
-    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
-    hasher.update(b"\0");
-    hasher.update(runtime_identity.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(task.operation().as_str().as_bytes());
-    hasher.update(b"\0");
-    hasher.update(&serde_json::to_vec(&task.cache_identity())?);
+    Fingerprint::new(runtime_identity, task, input_hashes(root, spec, task)?)
+}
 
+impl Fingerprint {
+    /// The key over files hashed earlier by [`input_hashes`].
+    pub fn new(
+        runtime_identity: &str,
+        task: &Task,
+        files: BTreeMap<String, String>,
+    ) -> io::Result<Self> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(CACHE_SCHEMA);
+        hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+        hasher.update(b"\0");
+        hasher.update(runtime_identity.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(task.operation().as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&serde_json::to_vec(&task.cache_identity())?);
+        for (relative, hash) in &files {
+            hasher.update(relative.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(hash.as_bytes());
+        }
+        Ok(Self {
+            value: hasher.finalize().to_hex().to_string(),
+            files,
+        })
+    }
+}
+
+/// blake3 hex of every project file `task` reads, by project-relative path.
+pub fn input_hashes(
+    root: &Path,
+    spec: &DirectorSpec,
+    task: &Task,
+) -> io::Result<BTreeMap<String, String>> {
     let paths = match task {
         Task::Discover(discover) => discover.files.clone(),
         _ => {
@@ -58,15 +85,7 @@ pub fn fingerprint(
             .replace('\\', "/");
         hashes.insert(relative, file_revision(&path)?);
     }
-    for (relative, hash) in &hashes {
-        hasher.update(relative.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(hash.as_bytes());
-    }
-    Ok(Fingerprint {
-        value: hasher.finalize().to_hex().to_string(),
-        files: hashes,
-    })
+    Ok(hashes)
 }
 
 /// blake3 hex of a file's bytes.
@@ -87,7 +106,7 @@ pub fn file_revision(path: &Path) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manim_director_core::{DiscoverTask, MediaFormat, RenderSettings, Renderer, StillTask};
+    use manim_director_core::{DiscoverTask, MediaFormat, RenderSettings, StillTask};
     use std::fs;
 
     fn still(out_dir: &str, fresh: bool) -> Task {
@@ -95,13 +114,8 @@ mod tests {
             scene: Some("A".into()),
             files: vec![],
             settings: RenderSettings {
-                profile: "draft".into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
                 format: MediaFormat::Png,
-                transparent: false,
+                ..crate::db::testing::draft()
             },
             media_dir: "/m".into(),
             out_dir: out_dir.into(),
@@ -153,8 +167,10 @@ mod tests {
                 .value
         );
         fs::write(root.join("manim.cfg"), "[CLI]\nframe_rate = 30").unwrap();
+        fs::write(root.join("radius.npy"), "data").unwrap();
         let with_cfg = fingerprint(root, &spec, "py", &still("/a", false)).unwrap();
         assert!(with_cfg.file_hash("manim.cfg").is_some());
+        assert!(with_cfg.file_hash("radius.npy").is_some());
         assert_ne!(
             with_cfg.value,
             fingerprint(root, &spec, "other-runtime", &still("/a", false))

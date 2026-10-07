@@ -89,11 +89,8 @@ impl StderrTail {
         self.text.push_str(line);
         self.text.push('\n');
         if self.text.len() > STDERR_TAIL_BYTES {
-            let mut cut = self.text.len() - STDERR_TAIL_BYTES;
-            while !self.text.is_char_boundary(cut) {
-                cut += 1;
-            }
-            self.text.drain(..cut);
+            let cut = self.text.len() - STDERR_TAIL_BYTES;
+            self.text.drain(..self.text.ceil_char_boundary(cut));
         }
     }
 }

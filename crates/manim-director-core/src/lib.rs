@@ -7,6 +7,7 @@ mod params;
 mod protocol;
 mod result;
 mod spec;
+pub mod summary;
 mod task;
 
 pub use error::*;

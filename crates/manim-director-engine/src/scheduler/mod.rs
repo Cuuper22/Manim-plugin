@@ -17,7 +17,7 @@ pub use artifacts::probe_media;
 pub use direct::init_project;
 pub use latest::{latest, latest_render, Latest};
 pub use prune::{prune, PrunePolicy, Pruned};
-pub use request::{cli_project_path, parse_params, parse_request, Frontend};
+pub use request::{cli_project_path, parse_request, Frontend};
 
 use crate::{
     cache, now_millis, state_db_path, BridgeConfig, EngineMode, NewJob, PrewarmPolicy,
@@ -37,7 +37,7 @@ use std::{
     sync::{Arc, Weak},
     time::Duration,
 };
-use tokio::sync::{broadcast, mpsc, watch, Semaphore};
+use tokio::sync::{broadcast, mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -64,8 +64,12 @@ impl SchedulerConfig {
             && std::env::var("MANIM_DIRECTOR_PREWARM").map_or(true, |value| value.trim() != "0");
         Self {
             mode,
-            workers: env_usize("MANIM_DIRECTOR_WORKERS", 2).clamp(1, 32),
-            queue_capacity: env_usize("MANIM_DIRECTOR_QUEUE", 128).clamp(1, 4096),
+            workers: env_number("MANIM_DIRECTOR_WORKERS")
+                .unwrap_or(2)
+                .clamp(1, 32),
+            queue_capacity: env_number("MANIM_DIRECTOR_QUEUE")
+                .unwrap_or(128)
+                .clamp(1, 4096),
             bridge: BridgeConfig::default(),
             prune: PrunePolicy::from_env(),
             prewarm: prewarm.then(PrewarmPolicy::default),
@@ -73,11 +77,9 @@ impl SchedulerConfig {
     }
 }
 
-fn env_usize(name: &str, fallback: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(fallback)
+/// A numeric setting from the environment; unset or unparsable is `None`.
+fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.trim().parse().ok()
 }
 
 /// How a submission was satisfied: HTTP answers 202 for `Queued`, 200 otherwise.
@@ -381,29 +383,49 @@ impl Scheduler {
     }
 }
 
-/// Hands queued jobs to at most `workers` concurrent runs, in order. A worker
-/// is reserved before the next job is taken, so the channel holds exactly the
-/// jobs still waiting.
+/// Hands queued jobs to at most `workers` concurrent runs, in order. A
+/// worker is taken only for a job in hand, so a job that gave its worker
+/// back while it waits for a scene lock can always get one again.
 fn dispatch(inner: &Arc<Inner>, mut receiver: mpsc::UnboundedReceiver<Queued>, workers: usize) {
     let workers = Arc::new(Semaphore::new(workers));
     let dispatcher: Weak<Inner> = Arc::downgrade(inner);
     tokio::spawn(async move {
         loop {
-            let Ok(permit) = workers.clone().acquire_owned().await else {
+            let Some(queued) = receiver.recv().await else {
                 break;
             };
-            let Some(queued) = receiver.recv().await else {
+            let Ok(permit) = workers.clone().acquire_owned().await else {
                 break;
             };
             let Some(inner) = dispatcher.upgrade() else {
                 break;
             };
-            tokio::spawn(async move {
-                let _permit = permit;
-                inner.run(queued).await;
-            });
+            let mut slot = Slot {
+                workers: workers.clone(),
+                permit: Some(permit),
+            };
+            tokio::spawn(async move { inner.run(queued, &mut slot).await });
         }
     });
+}
+
+/// A running job's claim on a worker, given back while the job only waits
+/// for a scene lock so unrelated jobs can run meanwhile.
+struct Slot {
+    workers: Arc<Semaphore>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Slot {
+    async fn take(&mut self) {
+        if self.permit.is_none() {
+            self.permit = self.workers.clone().acquire_owned().await.ok();
+        }
+    }
+
+    fn give_back(&mut self) {
+        self.permit = None;
+    }
 }
 
 enum Plan {

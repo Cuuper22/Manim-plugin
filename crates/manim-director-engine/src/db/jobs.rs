@@ -280,14 +280,15 @@ impl Store {
         Ok(CursorPage { items, next_cursor })
     }
 
-    /// The queued or running job computing `fingerprint`, for coalescing.
+    /// The queued or running job computing `fingerprint`, for coalescing; a
+    /// job being cancelled will not deliver, so it is not one.
     pub fn active_job_with_fingerprint(&self, fingerprint: &str) -> Result<Option<JobRecord>> {
         self.conn
             .lock()
             .query_row(
                 &format!(
                     "SELECT {JOB_COLUMNS} FROM jobs WHERE fingerprint=?1 AND status IN ('queued','running')
-                     ORDER BY sequence DESC LIMIT 1"
+                     AND cancel_requested=0 ORDER BY sequence DESC LIMIT 1"
                 ),
                 [fingerprint],
                 row_to_job,
@@ -405,6 +406,23 @@ impl Store {
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(pairs)
+    }
+
+    /// Every `(scene_class, scene_file, profile)` some render succeeded at.
+    pub fn render_profiles(&self) -> Result<Vec<(String, String, String)>> {
+        let conn = self.conn.lock();
+        let mut statement = conn.prepare(
+            "SELECT DISTINCT scene_class, scene_file, profile FROM jobs
+             WHERE operation = ?1 AND status = ?2 AND scene_class IS NOT NULL
+               AND scene_file IS NOT NULL AND profile IS NOT NULL",
+        )?;
+        let triples = statement
+            .query_map(
+                params![Operation::Render.as_str(), JobStatus::Succeeded.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(triples)
     }
 
     pub fn job_links(&self) -> Result<Vec<JobLinks>> {
@@ -540,6 +558,10 @@ mod tests {
         store.request_cancel(a).unwrap();
         store.request_cancel(b).unwrap();
         assert_eq!(store.cancel_requests(mine).unwrap(), [a]);
+        assert!(
+            store.active_job_with_fingerprint("fp").unwrap().is_none(),
+            "a resubmission does not join a job being cancelled"
+        );
         let cancelled = store
             .cancel_queued(a, &ErrorBody::new("cancelled", "x", None))
             .unwrap()

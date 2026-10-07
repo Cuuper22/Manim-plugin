@@ -1,5 +1,8 @@
 use clap::{Args, Parser, Subcommand};
-use manim_director_core::ExportFormat;
+use manim_director_core::{
+    default_export_format, default_qa_frames, default_samples, default_scale,
+    default_sheet_columns, default_sheet_count, default_tolerance, ExportFormat,
+};
 use std::{net::IpAddr, path::PathBuf};
 use uuid::Uuid;
 
@@ -54,7 +57,7 @@ pub enum Command {
     /// Atomically replace, line-edit or merge-patch project source.
     Edit(EditArgs),
     /// Serve the REST/SSE API and workbench.
-    Serve(ServeArgs),
+    Serve(ServerArgs),
     /// Open the local workbench and serve its API.
     Open(OpenArgs),
     /// Serve MCP over stdio.
@@ -130,9 +133,9 @@ pub struct FrameArgs {
 pub struct ContactSheetArgs {
     #[command(flatten)]
     pub source: SourceArgs,
-    #[arg(long, default_value_t = 6)]
+    #[arg(long, default_value_t = default_sheet_count())]
     pub count: u8,
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = default_sheet_columns())]
     pub columns: u8,
 }
 
@@ -140,7 +143,7 @@ pub struct ContactSheetArgs {
 pub struct QaArgs {
     #[command(flatten)]
     pub source: SourceArgs,
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = default_qa_frames())]
     pub frames: u8,
 }
 
@@ -161,9 +164,9 @@ pub struct ValidateMathArgs {
     pub steps: Vec<String>,
     #[arg(long = "range", value_name = "VAR=LO:HI")]
     pub ranges: Vec<String>,
-    #[arg(long, default_value_t = 200)]
+    #[arg(long, default_value_t = default_samples())]
     pub samples: u32,
-    #[arg(long, default_value_t = 1e-9)]
+    #[arg(long, default_value_t = default_tolerance())]
     pub tolerance: f64,
     #[arg(long)]
     pub seed: Option<u64>,
@@ -174,7 +177,7 @@ pub struct CaptionsArgs {
     pub path: PathBuf,
     #[arg(long = "shift", default_value_t = 0.0, allow_negative_numbers = true)]
     pub shift_seconds: f64,
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = default_scale())]
     pub scale: f64,
     #[arg(long)]
     pub output: Option<PathBuf>,
@@ -199,7 +202,7 @@ pub struct IngestArgs {
 
 #[derive(Debug, Args)]
 pub struct ExportArgs {
-    #[arg(long, default_value = "zip")]
+    #[arg(long, default_value_t = default_export_format())]
     pub format: ExportFormat,
     #[command(flatten)]
     pub source: SourceArgs,
@@ -233,12 +236,6 @@ pub struct EditArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct ServeArgs {
-    #[command(flatten)]
-    pub server: ServerArgs,
-}
-
-#[derive(Debug, Args)]
 pub struct OpenArgs {
     #[command(flatten)]
     pub server: ServerArgs,
@@ -254,7 +251,7 @@ pub struct ServerArgs {
     pub port: u16,
     #[arg(long, env = "MANIM_DIRECTOR_WORKBENCH")]
     pub workbench_dir: Option<PathBuf>,
-    /// Accept other machines: binds non-loopback addresses and any Host header.
+    /// Accept other machines: binds any address and accepts any Host header.
     #[arg(long)]
     pub allow_remote: bool,
 }

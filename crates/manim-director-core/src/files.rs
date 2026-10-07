@@ -7,10 +7,15 @@ use std::{
 };
 use walkdir::WalkDir;
 
+/// Engine state under the project root: the job store, artifacts, locks,
+/// undo snapshots and, by default, Manim's media cache.
+pub const STATE_DIR: &str = ".manim-director";
+pub const DEFAULT_MEDIA_DIR: &str = ".manim-director/media";
+
 /// Directory names skipped at any depth by every project walk.
 pub const IGNORED_DIR_NAMES: &[&str] = &[
     ".git",
-    ".manim-director",
+    STATE_DIR,
     "__pycache__",
     ".venv",
     "venv",
@@ -24,10 +29,12 @@ pub const VIDEO: &[&str] = &["mp4", "mov", "webm", "gif"];
 pub const IMAGE: &[&str] = &["png", "jpg", "jpeg", "webp"];
 pub const CAPTIONS: &[&str] = &["vtt", "srt"];
 
-/// Project files whose content can change a render (cache fingerprint).
+/// Project files whose content can change a render (cache fingerprint):
+/// code, data, TeX, shaders, images, audio and fonts.
 pub const RENDER_INPUTS: &[&str] = &[
-    "py", "svg", "png", "jpg", "jpeg", "webp", "csv", "json", "tex", "typ", "md", "wav", "mp3",
-    "ogg", "ttf", "otf", "cfg", "toml", "txt", "yaml", "yml",
+    "py", "cfg", "toml", "yaml", "yml", "json", "csv", "tsv", "txt", "dat", "npy", "npz",
+    "parquet", "md", "tex", "sty", "cls", "bib", "typ", "glsl", "frag", "vert", "svg", "png",
+    "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "wav", "mp3", "ogg", "ttf", "otf",
 ];
 
 /// Text files the source API reads and writes.
@@ -107,7 +114,10 @@ pub fn is_secret_like(path: impl AsRef<Path>) -> bool {
         || ["id_rsa", "id_ed25519", "id_ecdsa"]
             .iter()
             .any(|prefix| name.starts_with(prefix))
-        || matches!(name.as_str(), ".npmrc" | ".pypirc" | ".netrc")
+        || matches!(
+            name.as_str(),
+            ".npmrc" | ".pypirc" | ".netrc" | ".git-credentials" | ".pgpass"
+        )
 }
 
 /// The ignored-directory set for one project: the shared names plus the
@@ -201,6 +211,8 @@ mod tests {
             "id_ed25519",
             ".npmrc",
             ".netrc",
+            ".git-credentials",
+            ".pgpass",
         ] {
             assert!(is_secret_like(secret), "{secret}");
         }

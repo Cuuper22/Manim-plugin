@@ -42,7 +42,7 @@ async fn start(root: &Path, args: ServerArgs, machine: bool) -> Result<Server> {
     let scheduler = Scheduler::open(root, SchedulerConfig::new(EngineMode::Serve)).await?;
     let config = ServeConfig {
         address: SocketAddr::new(args.host, args.port),
-        workbench_dir: resolve_workbench(args.workbench_dir),
+        workbench_dir: args.workbench_dir,
         allow_remote: args.allow_remote,
     };
     let server = match Server::bind(config, scheduler.clone()).await {
@@ -70,13 +70,6 @@ async fn start(root: &Path, args: ServerArgs, machine: bool) -> Result<Server> {
         println!("{listening}");
     }
     Ok(server)
-}
-
-fn resolve_workbench(explicit: Option<PathBuf>) -> Option<PathBuf> {
-    explicit.or_else(|| {
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workbench/dist");
-        development.is_dir().then_some(development)
-    })
 }
 
 /// A private redirect page for the browser: the token stays out of process

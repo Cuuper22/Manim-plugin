@@ -542,6 +542,26 @@ async fn discover_is_cached_and_reports_engine_findings() {
 }
 
 #[tokio::test]
+async fn a_scan_that_raced_an_edit_is_not_cached() {
+    let project = Project::new("");
+    fs::write(
+        project.root.join("scenes/main.py"),
+        "# edited during the scan\nclass MainScene(Scene):\n    pass\n",
+    )
+    .unwrap();
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let names = |index: DiscoverResult| -> Vec<String> {
+        index.scenes.into_iter().map(|scene| scene.name).collect()
+    };
+    assert_eq!(names(scheduler.discover().await.unwrap()), ["MainScene"]);
+    assert_eq!(
+        names(scheduler.discover().await.unwrap()),
+        ["MainScene", "Late"],
+        "the edit is scanned, not hidden behind the older scan"
+    );
+}
+
+#[tokio::test]
 async fn direct_operations_are_not_jobs() {
     let project = Project::new("");
     let scheduler = project.scheduler("stub", 1, 8).await;
@@ -697,6 +717,31 @@ async fn renders_of_one_scene_wait_for_each_other() {
     );
 }
 
+#[tokio::test]
+async fn a_job_waiting_for_a_scene_lock_leaves_its_worker_to_other_jobs() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 2, 8).await;
+    let render = || {
+        OperationRequest::Render(RenderParams {
+            scene: Some("SlowScene".into()),
+            fresh: true,
+            ..Default::default()
+        })
+    };
+    let mut renders = Vec::new();
+    for _ in 0..2 {
+        let job = scheduler.submit(JobOrigin::Cli, render()).await.unwrap();
+        wait_until_running(&scheduler, job.job().id).await;
+        renders.push(job.into_job().id);
+    }
+    let other = run(&scheduler, diagnose("x")).await;
+    assert_eq!(other.status, JobStatus::Succeeded, "{:?}", other.error);
+    for id in renders {
+        scheduler.cancel(id).await.unwrap();
+        scheduler.wait(id).await.unwrap();
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn the_memory_ceiling_comes_from_the_budget_only_when_set() {
@@ -840,6 +885,43 @@ async fn jobs_of_a_vanished_engine_fail_as_engine_lost_and_are_published() {
 }
 
 #[tokio::test]
+async fn a_one_off_engine_takes_a_scene_over_from_an_engine_that_died_holding_it() {
+    let project = Project::new("");
+    let store = Store::open(project.root.join(".manim-director/state.db")).unwrap();
+    let (dead, held) = (Uuid::new_v4(), Uuid::new_v4());
+    // Fresh when the next command starts, stale soon after: a SIGKILL.
+    let heartbeat = now_millis() - crate::LEASE_STALE_MILLIS + 2_000;
+    store.renew_lease(dead, EngineMode::Cli, heartbeat).unwrap();
+    crate::db::testing::queued_job(&store, held, dead);
+    store.set_running(held).unwrap();
+    assert!(store.try_lock_scene("SlowScene", held, dead).unwrap());
+
+    let scheduler = project.scheduler("stub", 1, 8).await;
+    let render = OperationRequest::Render(RenderParams {
+        scene: Some("SlowScene".into()),
+        fresh: true,
+        ..Default::default()
+    });
+    let job = scheduler
+        .submit(JobOrigin::Cli, render)
+        .await
+        .unwrap()
+        .into_job();
+    let started = Instant::now();
+    while stub_records(&project, "stub-requests.txt").is_empty() {
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "still locked out"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let lost = store.get_job(held).unwrap().unwrap();
+    assert_eq!(error_code(&lost), "engine_lost");
+    scheduler.cancel(job.id).await.unwrap();
+    scheduler.wait(job.id).await.unwrap();
+}
+
+#[tokio::test]
 async fn reaping_a_copied_projects_jobs_never_touches_the_original_artifacts() {
     let original = Project::new("");
     let copy = Project::new("");
@@ -858,23 +940,7 @@ async fn reaping_a_copied_projects_jobs_never_touches_the_original_artifacts() {
         profile: None,
     });
     store
-        .insert_job(&crate::NewJob {
-            id,
-            origin: JobOrigin::Cli,
-            owner: Uuid::new_v4(),
-            request: &request,
-            task: &task,
-            limits: manim_director_core::Limits {
-                timeout_seconds: 60,
-                memory_mb: None,
-            },
-            fingerprint: None,
-            source_job_id: None,
-            scene_class: None,
-            scene_file: None,
-            scene_revision: None,
-            profile: None,
-        })
+        .insert_job(&crate::db::testing::new_job(id, &request, &task))
         .unwrap();
     for dir in [&foreign_dir, &artifacts::job_dir(&copy.root, id)] {
         artifacts::create_out_dir(dir.ancestors().nth(3).unwrap(), dir).unwrap();

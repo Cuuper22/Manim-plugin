@@ -8,11 +8,12 @@ use crate::{
 };
 use chrono::Utc;
 use manim_director_core::{
-    files, path_rule_violation, relative_posix, DirectorSpec, DiscoverResult, EngineError,
-    Resource, SpecError, SPEC_FILE,
+    files, named_enum, path_rule_violation, relative_posix, scene_key, DirectorSpec,
+    DiscoverResult, EngineError, Resource, SpecError, SPEC_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use serde_yaml::{Mapping, Value as Yaml};
 use std::{
     fs::{self, File},
     io::{self, Read, Write},
@@ -43,18 +44,18 @@ except (SyntaxError, ValueError) as error:
                       'column': getattr(error, 'offset', None)}))
 ";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceLanguage {
-    Python,
-    Json,
-    Yaml,
-    Toml,
-    Markdown,
-    Latex,
-    Typst,
-    Captions,
-    Text,
+named_enum! {
+    pub enum SourceLanguage {
+        Python = "python",
+        Json = "json",
+        Yaml = "yaml",
+        Toml = "toml",
+        Markdown = "markdown",
+        Latex = "latex",
+        Typst = "typst",
+        Captions = "captions",
+        Text = "text",
+    }
 }
 
 impl SourceLanguage {
@@ -69,20 +70,6 @@ impl SourceLanguage {
             Some("typ") => Self::Typst,
             Some("vtt" | "srt") => Self::Captions,
             _ => Self::Text,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Python => "python",
-            Self::Json => "json",
-            Self::Yaml => "yaml",
-            Self::Toml => "toml",
-            Self::Markdown => "markdown",
-            Self::Latex => "latex",
-            Self::Typst => "typst",
-            Self::Captions => "captions",
-            Self::Text => "text",
         }
     }
 }
@@ -254,7 +241,8 @@ pub fn write_source(
     }
     validate(python, path, &next)?;
 
-    let _lock = lock(root, path)?;
+    // Keyed by the resolved file, so a symlink and its target share one lock.
+    let _lock = lock(root, &relative_posix(root, &target))?;
     let on_disk = disk_revision(&target)?;
     if on_disk != previous_revision {
         return Err(conflict(write, on_disk));
@@ -276,7 +264,7 @@ pub fn write_source(
                     .scenes
                     .iter()
                     .filter(|scene| scene.file == path)
-                    .map(|scene| format!("{}#{}", scene.file, scene.name))
+                    .map(|scene| scene_key(&scene.file, &scene.name))
                     .collect()
             })
             .unwrap_or_default(),
@@ -367,9 +355,10 @@ fn apply(path: &str, current: Option<&str>, edit: &SourceEdit) -> Result<String,
                         location.as_ref().map(|at| at.column() as u32),
                     )
                 })?,
-                None => Value::Object(Map::new()),
+                None => Yaml::Null,
             };
-            merge_patch(&mut document, Value::Object(patch.clone()));
+            let patch = serde_yaml::to_value(patch).map_err(EngineError::internal)?;
+            merge_patch(&mut document, patch);
             serde_yaml::to_string(&document).map_err(EngineError::internal)
         }
     }
@@ -421,21 +410,21 @@ fn bare(line: &str, crlf: bool) -> &str {
     }
 }
 
-/// RFC 7386.
-fn merge_patch(target: &mut Value, patch: Value) {
-    let Value::Object(patch) = patch else {
+/// RFC 7386, applied to the YAML itself so the file keeps its key order.
+fn merge_patch(target: &mut Yaml, patch: Yaml) {
+    let Yaml::Mapping(patch) = patch else {
         *target = patch;
         return;
     };
-    if !target.is_object() {
-        *target = Value::Object(Map::new());
+    if !target.is_mapping() {
+        *target = Yaml::Mapping(Mapping::new());
     }
-    if let Value::Object(object) = target {
+    if let Yaml::Mapping(mapping) = target {
         for (key, value) in patch {
             if value.is_null() {
-                object.remove(&key);
+                mapping.shift_remove(&key);
             } else {
-                merge_patch(object.entry(key).or_insert(Value::Null), value);
+                merge_patch(mapping.entry(key).or_insert(Yaml::Null), value);
             }
         }
     }

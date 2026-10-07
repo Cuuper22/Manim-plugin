@@ -119,9 +119,14 @@ pub struct JobRecord {
     pub scene_file: Option<String>,
 }
 
-/// `"<file>#<Class>"` when both halves are known.
+/// `"<file>#<Class>"`, how every surface names a scene.
+pub fn scene_key(file: &str, class: &str) -> String {
+    format!("{file}#{class}")
+}
+
+/// The scene id when both halves are known.
 pub fn scene_id(file: Option<&str>, class: Option<&str>) -> Option<String> {
-    Some(format!("{}#{}", file?, class?))
+    Some(scene_key(file?, class?))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

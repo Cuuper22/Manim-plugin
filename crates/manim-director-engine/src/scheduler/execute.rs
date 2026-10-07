@@ -4,6 +4,7 @@
 
 use super::{
     active::Active, artifacts, recorder::Recorder, runtime, Inner, Outcome, Queued, RunContext,
+    Slot,
 };
 use crate::{
     cache, request_line, BridgeEvent, BridgeOutcome, Finish, RuntimeIdentity, SpawnKey, Undelivered,
@@ -27,7 +28,7 @@ struct Started {
 }
 
 impl Inner {
-    pub(super) async fn run(self: Arc<Self>, queued: Queued) {
+    pub(super) async fn run(self: Arc<Self>, queued: Queued, slot: &mut Slot) {
         let Queued {
             job,
             context,
@@ -57,11 +58,7 @@ impl Inner {
                     .events
                     .send(EngineEvent::Job(Arc::new(running.clone())));
                 let recorder = Recorder::start(self.store.clone(), self.events.clone(), id);
-                recorder.engine_phase(
-                    ProgressPhase::Starting,
-                    None,
-                    Some("waiting for the runtime"),
-                );
+                recorder.engine_phase(ProgressPhase::Starting, Some("waiting for the runtime"));
                 let (outcome, start) = match out_dir {
                     _ if active.token.is_cancelled() => {
                         (Outcome::Cancelled(active.cancelled_by()), None)
@@ -72,7 +69,10 @@ impl Inner {
                         ))),
                         None,
                     ),
-                    Ok(()) => self.execute(&job, &context, &key, &active, &recorder).await,
+                    Ok(()) => {
+                        self.execute(&job, &context, &key, &active, &recorder, slot)
+                            .await
+                    }
                 };
                 recorder.close().await;
                 self.finish(&job, &context, &active, outcome, start).await;
@@ -97,12 +97,26 @@ impl Inner {
         key: &SpawnKey,
         active: &Active,
         recorder: &Recorder,
+        slot: &mut Slot,
     ) -> (Outcome, Option<Started>) {
         let attempt = active.token.child_token();
         let timeout = Duration::from_secs(job.limits.timeout_seconds);
         let mut start = None;
         let (outcome, timed_out) = {
-            let run = self.dispatch(job, context, key, &attempt, recorder, &mut start);
+            let run = async {
+                if let Some(lock) = scene_lock_key(&job.task) {
+                    match self
+                        .lock_scene(job.id, &lock, &attempt, recorder, slot)
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => return BridgeOutcome::Cancelled,
+                        Err(error) => return BridgeOutcome::Failed(error),
+                    }
+                }
+                self.dispatch(job, context, key, &attempt, recorder, &mut start)
+                    .await
+            };
             tokio::pin!(run);
             tokio::select! {
                 outcome = &mut run => (outcome, false),
@@ -114,9 +128,11 @@ impl Inner {
         };
         let outcome = match outcome {
             BridgeOutcome::Succeeded(value) => {
-                let count = value["artifacts"].as_array().map_or(0, Vec::len) as u64;
-                if count > 0 {
-                    recorder.engine_phase(ProgressPhase::Validate, Some(count), None);
+                if value["artifacts"]
+                    .as_array()
+                    .is_some_and(|list| !list.is_empty())
+                {
+                    recorder.engine_phase(ProgressPhase::Validate, None);
                 }
                 let root = self.root.clone();
                 let task = job.task.clone();
@@ -146,9 +162,9 @@ impl Inner {
         (outcome, start)
     }
 
-    /// Takes the scene lock and a ready worker, records the start
-    /// fingerprint, then hands the worker the request. A worker that died
-    /// before taking the request is replaced once.
+    /// Takes a ready runtime worker, records the start fingerprint, then
+    /// hands the worker the request. A worker that died before taking the
+    /// request is replaced once.
     async fn dispatch(
         &self,
         job: &JobRecord,
@@ -158,13 +174,6 @@ impl Inner {
         recorder: &Recorder,
         start: &mut Option<Started>,
     ) -> BridgeOutcome {
-        if let Some(lock) = scene_lock_key(&job.task) {
-            match self.lock_scene(job.id, &lock, cancel, recorder).await {
-                Ok(true) => {}
-                Ok(false) => return BridgeOutcome::Cancelled,
-                Err(error) => return BridgeOutcome::Failed(error),
-            }
-        }
         let request_id = job.id.to_string();
         let line = match request_line(&request_id, &self.root, &job.task) {
             Ok(line) => line,
@@ -199,16 +208,22 @@ impl Inner {
         }
     }
 
-    /// Waits until the job holds its scene lock; `Ok(false)` when cancelled.
+    /// Waits until the job holds its scene lock, and a worker with it;
+    /// `Ok(false)` when cancelled.
     async fn lock_scene(
         &self,
         id: Uuid,
         key: &str,
         cancel: &CancellationToken,
         recorder: &Recorder,
+        slot: &mut Slot,
     ) -> Result<bool, ErrorBody> {
         let mut announced = false;
         loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return Ok(false),
+                _ = slot.take() => {}
+            }
             let (lock, owner) = (key.to_owned(), self.instance_id);
             let held = self
                 .store
@@ -218,11 +233,11 @@ impl Inner {
             if held {
                 return Ok(true);
             }
+            slot.give_back();
             if !announced {
                 announced = true;
                 recorder.engine_phase(
                     ProgressPhase::Starting,
-                    None,
                     Some(&format!("Waiting for another render of {key}")),
                 );
             }

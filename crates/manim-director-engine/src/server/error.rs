@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use manim_director_core::{EngineError, ErrorBody, Resource};
+use manim_director_core::{parse_value, EngineError, ErrorBody, Resource};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -153,12 +153,7 @@ impl ApiError {
                 }
                 .into()
             }
-            other => EngineError::InvalidParams {
-                field: None,
-                reason: other.body_text(),
-                allowed: Vec::new(),
-            }
-            .into(),
+            other => EngineError::invalid_request(other.body_text()).into(),
         }
     }
 }
@@ -201,23 +196,13 @@ impl IntoResponse for ApiError {
 
 /// Parses a JSON body strictly; the error names the offending field.
 pub fn parse_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, EngineError> {
-    serde_path_to_error::deserialize(json_value(bytes)?).map_err(|error| {
-        let path = error.path().to_string();
-        EngineError::InvalidParams {
-            field: (path != ".").then_some(path),
-            reason: error.into_inner().to_string(),
-            allowed: Vec::new(),
-        }
-    })
+    parse_value(json_value(bytes)?)
 }
 
 /// Any well-formed JSON document.
 pub fn json_value(bytes: &[u8]) -> Result<Value, EngineError> {
-    serde_json::from_slice(bytes).map_err(|error| EngineError::InvalidParams {
-        field: None,
-        reason: format!("malformed JSON: {error}"),
-        allowed: Vec::new(),
-    })
+    serde_json::from_slice(bytes)
+        .map_err(|error| EngineError::invalid_request(format!("malformed JSON: {error}")))
 }
 
 /// Turns the router's bare 405 into the envelope, keeping its `Allow` header.
@@ -252,12 +237,7 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for ApiQuery<T> {
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
         match Query::<T>::from_request_parts(parts, state).await {
             Ok(Query(value)) => Ok(Self(value)),
-            Err(rejection) => Err(EngineError::InvalidParams {
-                field: None,
-                reason: rejection.body_text(),
-                allowed: Vec::new(),
-            }
-            .into()),
+            Err(rejection) => Err(EngineError::invalid_request(rejection.body_text()).into()),
         }
     }
 }

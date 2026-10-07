@@ -44,6 +44,11 @@ pub struct InitParams {
     pub force: bool,
 }
 
+/// An empty params object; anything in it is refused.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoParams {}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoverParams {}
@@ -119,10 +124,10 @@ impl Default for ContactSheetParams {
     }
 }
 
-fn default_sheet_count() -> u8 {
+pub fn default_sheet_count() -> u8 {
     6
 }
-fn default_sheet_columns() -> u8 {
+pub fn default_sheet_columns() -> u8 {
     3
 }
 
@@ -150,7 +155,7 @@ impl Default for QaParams {
     }
 }
 
-fn default_qa_frames() -> u8 {
+pub fn default_qa_frames() -> u8 {
     8
 }
 
@@ -178,10 +183,10 @@ pub struct ValidateMathParams {
     pub seed: Option<u64>,
 }
 
-fn default_samples() -> u32 {
+pub fn default_samples() -> u32 {
     200
 }
-fn default_tolerance() -> f64 {
+pub fn default_tolerance() -> f64 {
     1e-9
 }
 
@@ -197,7 +202,7 @@ pub struct CaptionsParams {
     pub output: Option<String>,
 }
 
-fn default_scale() -> f64 {
+pub fn default_scale() -> f64 {
     1.0
 }
 
@@ -257,7 +262,7 @@ impl Default for ExportParams {
     }
 }
 
-fn default_export_format() -> ExportFormat {
+pub fn default_export_format() -> ExportFormat {
     ExportFormat::Zip
 }
 
@@ -303,11 +308,7 @@ impl OperationRequest {
     /// Parses the tagged wire object. Errors name the offending field.
     pub fn from_json(value: Value) -> Result<Self, EngineError> {
         let Value::Object(mut object) = value else {
-            return Err(EngineError::InvalidParams {
-                field: None,
-                reason: "expected a JSON object".into(),
-                allowed: Vec::new(),
-            });
+            return Err(EngineError::invalid_request("expected a JSON object"));
         };
         let operation = match object.remove("operation") {
             Some(Value::String(name)) => name.parse::<Operation>().map_err(|error| {
@@ -322,19 +323,19 @@ impl OperationRequest {
     /// Parses an operation's params object (no `operation` key).
     pub fn from_params(operation: Operation, params: Value) -> Result<Self, EngineError> {
         Ok(match operation {
-            Operation::Init => Self::Init(parse(params)?),
-            Operation::Discover => Self::Discover(parse(params)?),
-            Operation::Doctor => Self::Doctor(parse(params)?),
-            Operation::Render => Self::Render(parse(params)?),
-            Operation::Still => Self::Still(parse(params)?),
-            Operation::Frame => Self::Frame(parse(params)?),
-            Operation::ContactSheet => Self::ContactSheet(parse(params)?),
-            Operation::Qa => Self::Qa(parse(params)?),
-            Operation::Diagnose => Self::Diagnose(parse(params)?),
-            Operation::ValidateMath => Self::ValidateMath(parse(params)?),
-            Operation::Captions => Self::Captions(parse(params)?),
-            Operation::Ingest => Self::Ingest(parse(params)?),
-            Operation::Export => Self::Export(parse(params)?),
+            Operation::Init => Self::Init(parse_value(params)?),
+            Operation::Discover => Self::Discover(parse_value(params)?),
+            Operation::Doctor => Self::Doctor(parse_value(params)?),
+            Operation::Render => Self::Render(parse_value(params)?),
+            Operation::Still => Self::Still(parse_value(params)?),
+            Operation::Frame => Self::Frame(parse_value(params)?),
+            Operation::ContactSheet => Self::ContactSheet(parse_value(params)?),
+            Operation::Qa => Self::Qa(parse_value(params)?),
+            Operation::Diagnose => Self::Diagnose(parse_value(params)?),
+            Operation::ValidateMath => Self::ValidateMath(parse_value(params)?),
+            Operation::Captions => Self::Captions(parse_value(params)?),
+            Operation::Ingest => Self::Ingest(parse_value(params)?),
+            Operation::Export => Self::Export(parse_value(params)?),
         })
     }
 
@@ -380,8 +381,9 @@ impl OperationRequest {
     }
 }
 
-fn parse<T: DeserializeOwned>(params: Value) -> Result<T, EngineError> {
-    serde_path_to_error::deserialize(params).map_err(|error| {
+/// Deserializes `value` as `T`; the error names the offending field.
+pub fn parse_value<T: DeserializeOwned>(value: Value) -> Result<T, EngineError> {
+    serde_path_to_error::deserialize(value).map_err(|error| {
         let path = error.path().to_string();
         EngineError::InvalidParams {
             field: (path != ".").then_some(path),
@@ -423,11 +425,9 @@ impl DiagnoseParams {
             (Some(_), None) => Ok(()),
             (None, Some(text)) if !text.is_empty() => Ok(()),
             (None, Some(_)) => Err(EngineError::invalid("text", "cannot be empty")),
-            _ => Err(EngineError::InvalidParams {
-                field: None,
-                reason: "provide exactly one of job_id or text".into(),
-                allowed: Vec::new(),
-            }),
+            _ => Err(EngineError::invalid_request(
+                "provide exactly one of job_id or text",
+            )),
         }
     }
 }
@@ -489,7 +489,10 @@ impl IngestParams {
         for (index, source) in self.sources.iter().enumerate() {
             let field = |name: &str| format!("sources[{index}].{name}");
             if !std::path::Path::new(&source.path).is_absolute() {
-                return Err(EngineError::invalid(field("path"), "absolute"));
+                return Err(EngineError::invalid(
+                    field("path"),
+                    "must be an absolute host path",
+                ));
             }
             if let Some(id) = &source.id {
                 check_text(&field("id"), id, 64)?;

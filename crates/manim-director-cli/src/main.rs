@@ -2,23 +2,23 @@ mod args;
 mod output;
 mod serve;
 
-use anyhow::Context;
-use args::{Cli, Command, EditArgs, SourceArgs, TargetArgs};
+use args::{Cli, Command, EditArgs, SourceArgs};
 use clap::Parser;
 use manim_director_core::{
-    find_project, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams, EngineError,
-    ExportParams, FrameParams, IngestParams, IngestSource, InitParams, JobOrigin, JobRecord,
-    JobStatus, OperationRequest, ProgressPhase, QaParams, RenderParams, SourceRef, StillParams,
-    ValidateMathParams,
+    find_project, summary, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams,
+    EngineError, EngineEvent, ErrorBody, ExportParams, FrameParams, IngestParams, IngestSource,
+    InitParams, JobOrigin, JobRecord, JobStatus, OperationRequest, Progress, QaParams,
+    RenderParams, SourceRef, StillParams, ValidateMathParams,
 };
 use manim_director_engine::{
-    cli_project_path, current_revision, init_project, inspect, run_mcp, state_db_path,
-    write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, SourceEdit, SourceWrite,
-    Store,
+    cli_project_path, current_revision, init_project, inspect, run_mcp, shutdown_signal,
+    state_db_path, write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, SourceEdit,
+    SourceWrite, Store, Submission,
 };
 use std::{
     collections::BTreeMap,
     fs,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::ExitCode,
     time::{Duration, Instant},
@@ -37,6 +37,7 @@ async fn main() -> ExitCode {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
     let cli = Cli::parse();
     let machine = cli.json;
@@ -77,9 +78,10 @@ impl Failure {
                 if machine {
                     output::json(&serde_json::json!({ "error": body }));
                 } else {
-                    eprintln!("error: {}", error);
-                    if let EngineError::Operation(body) = &error {
-                        output::failure(body);
+                    eprintln!("error: {error}");
+                    let findings = summary::error_findings(&body);
+                    for line in findings.iter().flat_map(summary::finding_lines) {
+                        eprintln!("  {line}");
                     }
                 }
                 let code = match body.code.as_str() {
@@ -90,7 +92,12 @@ impl Failure {
                 ExitCode::from(code)
             }
             Self::Other(error) => {
-                eprintln!("error: {error:#}");
+                match machine {
+                    true => output::json(&serde_json::json!({
+                        "error": ErrorBody::internal(format!("{error:#}"))
+                    })),
+                    false => eprintln!("error: {error:#}"),
+                }
                 ExitCode::from(EXIT_ENGINE)
             }
         }
@@ -114,102 +121,77 @@ async fn run(cli: Cli) -> Outcome {
                 force: args.force,
             };
             let result =
-                init_project(&BridgeConfig::default(), &cwd.join(args.path), params).await?;
+                init_project(&BridgeConfig::default(), &project.join(args.path), params).await?;
             output::init(&result, machine);
             Ok(ExitCode::SUCCESS)
         }
         Command::Mcp => {
-            fs::create_dir_all(&project)?;
+            fs::create_dir_all(&project)
+                .map_err(|error| EngineError::invalid("project", error.to_string()))?;
             let root = match find_project(&project) {
                 Ok(root) => root,
                 Err(_) => project.canonicalize()?,
             };
-            run_mcp(start_scheduler(&root, EngineMode::Mcp).await?).await?;
-            Ok(ExitCode::SUCCESS)
+            let served = run_mcp(start_scheduler(&root, EngineMode::Mcp).await?).await;
+            // stdin is read on a thread nothing can cancel, so a server that
+            // stopped on a signal exits rather than wait for more input.
+            if let Err(error) = served {
+                eprintln!("error: {error:#}");
+                std::process::exit(EXIT_ENGINE.into());
+            }
+            std::process::exit(0)
         }
         command => {
-            let root = find_project(&project).map_err(EngineError::from)?;
+            let scratch;
+            let root = match find_project(&project) {
+                Ok(root) => root,
+                Err(_) if needs_no_project(&command) => {
+                    scratch = Scratch::new()?;
+                    scratch.0.clone()
+                }
+                Err(error) => return Err(EngineError::from(error).into()),
+            };
             let paths = CliPaths {
                 root: &root,
                 cwd: &cwd,
             };
             let request = match command {
                 Command::Doctor => OperationRequest::Doctor(DoctorParams {}),
-                Command::Render(args) => {
-                    let TargetParts {
-                        scene,
-                        file,
-                        profile,
-                        fresh,
-                    } = paths.target(args.target)?;
-                    OperationRequest::Render(RenderParams {
-                        scene,
-                        file,
-                        profile,
-                        sections: args.sections,
-                        fresh,
-                    })
-                }
-                Command::Still(args) => {
-                    let TargetParts {
-                        scene,
-                        file,
-                        profile,
-                        fresh,
-                    } = paths.target(args.target)?;
-                    OperationRequest::Still(StillParams {
-                        scene,
-                        file,
-                        profile,
-                        fresh,
-                    })
-                }
-                Command::Frame(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::Frame(FrameParams {
-                        at_seconds: args.at_seconds,
-                        source,
-                        scene,
-                        profile,
-                    })
-                }
-                Command::ContactSheet(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::ContactSheet(ContactSheetParams {
-                        source,
-                        scene,
-                        profile,
-                        count: args.count,
-                        columns: args.columns,
-                    })
-                }
-                Command::Qa(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::Qa(QaParams {
-                        source,
-                        scene,
-                        profile,
-                        frames: args.frames,
-                    })
-                }
+                Command::Render(args) => OperationRequest::Render(RenderParams {
+                    file: paths.optional(args.target.file)?,
+                    scene: args.target.scene,
+                    profile: args.target.profile,
+                    sections: args.sections,
+                    fresh: args.target.fresh,
+                }),
+                Command::Still(args) => OperationRequest::Still(StillParams {
+                    file: paths.optional(args.target.file)?,
+                    scene: args.target.scene,
+                    profile: args.target.profile,
+                    fresh: args.target.fresh,
+                }),
+                Command::Frame(args) => OperationRequest::Frame(FrameParams {
+                    at_seconds: args.at_seconds,
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                }),
+                Command::ContactSheet(args) => OperationRequest::ContactSheet(ContactSheetParams {
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                    count: args.count,
+                    columns: args.columns,
+                }),
+                Command::Qa(args) => OperationRequest::Qa(QaParams {
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                    frames: args.frames,
+                }),
                 Command::Diagnose(args) => {
                     let text = match args.text_file {
-                        Some(path) => Some(
-                            fs::read_to_string(cwd.join(&path))
-                                .with_context(|| format!("reading {}", path.display()))?,
-                        ),
+                        Some(path) => Some(read_arg("text_file", &cwd.join(path))?),
                         None => args.text,
                     };
                     OperationRequest::Diagnose(DiagnoseParams {
@@ -228,7 +210,7 @@ async fn run(cli: Cli) -> Outcome {
                     path: paths.relative(&args.path)?,
                     shift_seconds: args.shift_seconds,
                     scale: args.scale,
-                    output: args.output.map(|path| paths.relative(&path)).transpose()?,
+                    output: paths.optional(args.output)?,
                 }),
                 Command::Ingest(args) => {
                     if args.ids.len() > args.paths.len() {
@@ -251,22 +233,15 @@ async fn run(cli: Cli) -> Outcome {
                         force: args.force,
                     })
                 }
-                Command::Export(args) => {
-                    let SourceParts {
-                        source,
-                        scene,
-                        profile,
-                    } = paths.source(args.source)?;
-                    OperationRequest::Export(ExportParams {
-                        format: args.format,
-                        source,
-                        scene,
-                        profile,
-                        output: args.output.map(|path| paths.relative(&path)).transpose()?,
-                        gif_fps: args.gif_fps,
-                        gif_width: args.gif_width,
-                    })
-                }
+                Command::Export(args) => OperationRequest::Export(ExportParams {
+                    format: args.format,
+                    source: paths.source(&args.source)?,
+                    scene: args.source.scene,
+                    profile: args.source.profile,
+                    output: paths.optional(args.output)?,
+                    gif_fps: args.gif_fps,
+                    gif_width: args.gif_width,
+                }),
                 Command::Inspect => {
                     let scheduler = start_scheduler(&root, EngineMode::Cli).await?;
                     let summary = inspect(&scheduler).await;
@@ -276,7 +251,7 @@ async fn run(cli: Cli) -> Outcome {
                 }
                 Command::Edit(args) => return edit(paths, args, machine).await,
                 Command::Serve(args) => {
-                    serve::serve(&root, args.server, machine).await?;
+                    serve::serve(&root, args, machine).await?;
                     return Ok(ExitCode::SUCCESS);
                 }
                 Command::Open(args) => {
@@ -290,23 +265,37 @@ async fn run(cli: Cli) -> Outcome {
     }
 }
 
+/// Doctor, validate-math and the diagnosis of a given text run anywhere.
+fn needs_no_project(command: &Command) -> bool {
+    match command {
+        Command::Doctor | Command::ValidateMath(_) => true,
+        Command::Diagnose(args) => args.job.is_none(),
+        _ => false,
+    }
+}
+
+/// A throwaway root for a command run outside any project, so its job leaves
+/// no engine state behind in the directory it was run from.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("manim-director-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&path)?;
+        Ok(Self(path.canonicalize()?))
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Converts CLI path arguments into the project-relative form requests carry.
 struct CliPaths<'a> {
     root: &'a Path,
     cwd: &'a Path,
-}
-
-struct SourceParts {
-    source: Option<SourceRef>,
-    scene: Option<String>,
-    profile: Option<String>,
-}
-
-struct TargetParts {
-    scene: Option<String>,
-    file: Option<String>,
-    profile: Option<String>,
-    fresh: bool,
 }
 
 impl CliPaths<'_> {
@@ -314,27 +303,25 @@ impl CliPaths<'_> {
         cli_project_path(self.root, self.cwd, path)
     }
 
-    fn target(&self, args: TargetArgs) -> Result<TargetParts, EngineError> {
-        Ok(TargetParts {
-            scene: args.scene,
-            file: args.file.map(|file| self.relative(&file)).transpose()?,
-            profile: args.profile,
-            fresh: args.fresh,
-        })
+    fn optional(&self, path: Option<PathBuf>) -> Result<Option<String>, EngineError> {
+        path.map(|path| self.relative(&path)).transpose()
     }
 
-    fn source(&self, args: SourceArgs) -> Result<SourceParts, EngineError> {
-        let source = match (args.job, args.path) {
+    /// `--job` or `--path`; neither means the latest render.
+    fn source(&self, args: &SourceArgs) -> Result<Option<SourceRef>, EngineError> {
+        Ok(match (args.job, &args.path) {
             (Some(id), _) => Some(SourceRef::JobId(id)),
-            (None, Some(path)) => Some(SourceRef::Path(self.relative(&path)?)),
+            (None, Some(path)) => Some(SourceRef::Path(self.relative(path)?)),
             (None, None) => None,
-        };
-        Ok(SourceParts {
-            source,
-            scene: args.scene,
-            profile: args.profile,
         })
     }
+}
+
+/// The text of a file an argument names; an unreadable one is bad input.
+fn read_arg(flag: &str, path: &Path) -> Result<String, EngineError> {
+    fs::read_to_string(path).map_err(|error| {
+        EngineError::invalid(flag, format!("cannot read {}: {error}", path.display()))
+    })
 }
 
 fn parse_ranges(values: &[String]) -> Result<BTreeMap<String, [f64; 2]>, EngineError> {
@@ -367,7 +354,10 @@ async fn submit_and_report(
     request: OperationRequest,
     machine: bool,
 ) -> Outcome {
-    let job = scheduler.submit(JobOrigin::Cli, request).await?.into_job();
+    let submission = scheduler.submit(JobOrigin::Cli, request).await?;
+    // A coalesced job belongs to the client that started it.
+    let mine = matches!(submission, Submission::Queued(_));
+    let job = submission.into_job();
     if job.status.is_terminal() {
         output::job(&job, machine);
         return Ok(exit_code(&job));
@@ -375,16 +365,23 @@ async fn submit_and_report(
     let progress = (!machine).then(|| tokio::spawn(print_progress(scheduler.clone(), job.id)));
     let finished = tokio::select! {
         finished = scheduler.wait(job.id) => Some(finished?),
-        _ = interrupted() => None,
+        _ = shutdown_signal() => None,
     };
     if let Some(task) = progress {
         task.abort();
     }
     let Some(finished) = finished else {
+        if !mine {
+            let id = job.id;
+            let current = scheduler.store().blocking(move |store| store.get_job(id));
+            eprintln!("Stopped waiting; job {id} keeps running for the client that started it.");
+            output::job(&current.await?.unwrap_or(job), machine);
+            return Ok(ExitCode::from(EXIT_INTERRUPTED));
+        }
         scheduler.cancel(job.id).await?;
         let cancelled = tokio::select! {
             finished = scheduler.wait(job.id) => finished?,
-            _ = interrupted() => std::process::exit(EXIT_INTERRUPTED.into()),
+            _ = shutdown_signal() => std::process::exit(EXIT_INTERRUPTED.into()),
         };
         output::job(&cancelled, machine);
         return Ok(ExitCode::from(EXIT_INTERRUPTED));
@@ -406,67 +403,55 @@ fn exit_code(job: &JobRecord) -> ExitCode {
     }
 }
 
-/// One stderr line per phase change, at most one per second within a phase.
+/// One stderr line per change of phase or message; within one, at most one
+/// per second.
 async fn print_progress(scheduler: Scheduler, id: uuid::Uuid) {
     let mut events = scheduler.subscribe();
-    let mut last: Option<(ProgressPhase, Instant)> = None;
+    let mut last: Option<(Progress, Instant)> = None;
     while let Ok(event) = events.recv().await {
-        let manim_director_core::EngineEvent::Progress { job_id, progress } = event else {
+        let EngineEvent::Progress { job_id, progress } = event else {
             continue;
         };
         if job_id != id {
             continue;
         }
-        let quiet = last.is_some_and(|(phase, at)| {
-            phase == progress.phase && at.elapsed() < Duration::from_secs(1)
+        let repeat = last.as_ref().is_some_and(|(shown, at)| {
+            (shown.phase, &shown.message) == (progress.phase, &progress.message)
+                && at.elapsed() < Duration::from_secs(1)
         });
-        if quiet {
-            continue;
+        if !repeat {
+            eprintln!("{}", progress_line(&progress));
+            last = Some((progress, Instant::now()));
         }
-        last = Some((progress.phase, Instant::now()));
-        let phase = progress.phase;
-        let count = match progress.total {
-            Some(total) => format!(" {}/{total}", progress.current),
-            None if progress.current > 0 => format!(" {}", progress.current),
-            None => String::new(),
-        };
-        let message = progress
-            .message
-            .map(|message| format!(" {message}"))
-            .unwrap_or_default();
-        eprintln!("{phase}{count}{message}");
     }
 }
 
-async fn interrupted() {
-    #[cfg(unix)]
-    {
-        let terminate = async {
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(mut signal) => {
-                    signal.recv().await;
-                }
-                Err(_) => std::future::pending::<()>().await,
-            }
-        };
-        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate => {} }
+/// `animate 3 (4.1 s)`, `extract 2/8`, `starting: waiting for the runtime`.
+fn progress_line(progress: &Progress) -> String {
+    let mut line = progress.phase.to_string();
+    match progress.total {
+        Some(total) => line += &format!(" {}/{total}", progress.current),
+        None if progress.current > 0 => line += &format!(" {}", progress.current),
+        None => {}
     }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
+    if let Some(seconds) = progress.scene_seconds {
+        line += &format!(" ({seconds:.1} s)");
     }
+    if let Some(message) = &progress.message {
+        line += &format!(": {message}");
+    }
+    line
 }
 
 async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
-    let read = |path: Option<PathBuf>| -> anyhow::Result<Option<String>> {
-        path.map(|path| {
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
-        })
-        .transpose()
-    };
-    let content = args.content.or(read(args.content_file)?);
-    let replacement = args.replacement.or(read(args.replacement_file)?);
-    let merge_patch = args.merge_patch.or(read(args.merge_patch_file)?);
+    let read = |flag, path: Option<PathBuf>| path.map(|path| read_arg(flag, &path)).transpose();
+    let content = args.content.or(read("content_file", args.content_file)?);
+    let replacement = args
+        .replacement
+        .or(read("replacement_file", args.replacement_file)?);
+    let merge_patch = args
+        .merge_patch
+        .or(read("merge_patch_file", args.merge_patch_file)?);
     let edit = match (content, args.line, merge_patch) {
         (Some(content), _, _) => SourceEdit::ReplaceAll { content },
         (None, Some(range), _) => {
@@ -533,4 +518,34 @@ async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
         println!("{} @ {}", result.path, result.revision);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manim_director_core::{ProgressPhase::*, Timestamp};
+
+    #[test]
+    fn progress_lines_read_as_phase_count_and_message() {
+        let line = |phase, current, total, scene_seconds, message: Option<&str>| {
+            progress_line(&Progress {
+                phase,
+                current,
+                total,
+                scene_seconds,
+                message: message.map(str::to_owned),
+                updated_at: Timestamp::now(),
+            })
+        };
+        assert_eq!(
+            line(Starting, 0, None, None, Some("waiting for the runtime")),
+            "starting: waiting for the runtime"
+        );
+        assert_eq!(
+            line(Animate, 3, None, Some(4.07), None),
+            "animate 3 (4.1 s)"
+        );
+        assert_eq!(line(Extract, 2, Some(8), None, None), "extract 2/8");
+        assert_eq!(line(Validate, 0, None, None, None), "validate");
+    }
 }

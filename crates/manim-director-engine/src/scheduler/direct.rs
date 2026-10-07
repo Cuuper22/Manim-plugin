@@ -2,13 +2,16 @@
 //! worker that preloads nothing, with no job row and their own timeouts.
 
 use super::{accept_result, Inner};
-use crate::{cache, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge};
+use crate::{
+    cache, confine::write_target, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge,
+};
 use manim_director_core::{
-    python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
+    files, python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
     ErrorBody, Finding, InitMode, InitParams, InitResult, InitTask, Operation, OperationRequest,
-    OperationResult, Task,
+    OperationResult, Task, SPEC_FILE,
 };
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -60,6 +63,8 @@ async fn run(
 struct PreparedDiscover {
     task: Task,
     spec: DirectorSpec,
+    /// The scanned files' hashes from before the scan.
+    inputs: BTreeMap<String, String>,
     cached: Option<DiscoverResult>,
     files: u32,
     truncated: bool,
@@ -83,10 +88,12 @@ pub(super) async fn discover(inner: &Arc<Inner>) -> Result<DiscoverResult, Engin
                 return Err(EngineError::internal("discover returned another result"));
             };
             let (inner, task, spec) = (inner.clone(), prepared.task, prepared.spec);
-            let cached = OperationResult::Discover(result.clone());
-            tokio::task::spawn_blocking(move || cache_discover(&inner, &spec, &task, &cached))
-                .await
-                .map_err(EngineError::internal)??;
+            let (inputs, cached) = (prepared.inputs, OperationResult::Discover(result.clone()));
+            tokio::task::spawn_blocking(move || {
+                cache_discover(&inner, &spec, &task, inputs, &cached)
+            })
+            .await
+            .map_err(EngineError::internal)??;
             result
         }
     };
@@ -119,9 +126,10 @@ fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
     let task = Task::Discover(DiscoverTask {
         files: sources.files,
     });
+    let inputs = cache::input_hashes(&inner.root, &spec, &task).map_err(EngineError::internal)?;
     let cached = match inner.known_runtime()? {
         Some(runtime) => {
-            let fingerprint = cache::fingerprint(&inner.root, &spec, &runtime, &task)
+            let fingerprint = cache::Fingerprint::new(&runtime, &task, inputs.clone())
                 .map_err(EngineError::internal)?;
             let entry = inner
                 .store
@@ -137,6 +145,7 @@ fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
     Ok(PreparedDiscover {
         task,
         spec,
+        inputs,
         cached,
         files,
         truncated,
@@ -144,18 +153,24 @@ fn prepare_discover(inner: &Inner) -> Result<PreparedDiscover, EngineError> {
     })
 }
 
-/// Caches a scan under the identity of the worker that just ran it.
+/// Caches a scan under the identity of the worker that just ran it, unless a
+/// scanned file changed meanwhile: the scan may then describe either version,
+/// so the next discover must look again.
 fn cache_discover(
     inner: &Inner,
     spec: &DirectorSpec,
     task: &Task,
+    inputs: BTreeMap<String, String>,
     result: &OperationResult,
 ) -> Result<(), EngineError> {
     let Some(runtime) = inner.known_runtime()? else {
         return Ok(());
     };
+    if cache::input_hashes(&inner.root, spec, task).ok().as_ref() != Some(&inputs) {
+        return Ok(());
+    }
     let fingerprint =
-        cache::fingerprint(&inner.root, spec, &runtime, task).map_err(EngineError::internal)?;
+        cache::Fingerprint::new(&runtime, task, inputs).map_err(EngineError::internal)?;
     inner
         .store
         .cache_put(&fingerprint.value, None, result, Operation::Discover)
@@ -163,14 +178,27 @@ fn cache_discover(
 }
 
 /// Creates a project in `target` from a template, or adds one scene template
-/// to the project there.
+/// to the project there. A failure removes `target` if this call created it
+/// and it is still empty.
 pub async fn init_project(
     bridge: &BridgeConfig,
     target: &Path,
     params: InitParams,
 ) -> Result<InitResult, EngineError> {
     OperationRequest::Init(params.clone()).validate()?;
-    let target = target.to_path_buf();
+    let created = !target.exists();
+    let result = init(bridge, target.to_path_buf(), params).await;
+    if result.is_err() && created {
+        let _ = fs::remove_dir(target);
+    }
+    result
+}
+
+async fn init(
+    bridge: &BridgeConfig,
+    target: PathBuf,
+    params: InitParams,
+) -> Result<InitResult, EngineError> {
     let (root, task) = tokio::task::spawn_blocking(move || preflight(&target, &params))
         .await
         .map_err(EngineError::internal)??;
@@ -189,6 +217,9 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
     let task = match &params.scene_template {
         Some(scene_template) => {
             let spec = DirectorSpec::load(&root).map_err(EngineError::from)?;
+            let source_dir = &spec.project.source_dir;
+            // The runtime opens the scene file itself and would follow a link there.
+            write_target(&root, &format!("{source_dir}/{scene_template}.py"))?;
             InitTask {
                 mode: InitMode::AddScene,
                 name: None,
@@ -196,14 +227,15 @@ fn preflight(target: &Path, params: &InitParams) -> Result<(PathBuf, InitTask), 
                 scene_template: Some(scene_template.clone()),
                 theme: None,
                 seed: None,
-                source_dir: Some(root.join(&spec.project.source_dir)),
+                source_dir: Some(write_target(&root, source_dir)?),
                 force: params.force,
             }
         }
         None => {
             let entries = project_entries(&root).map_err(EngineError::internal)?;
             if !entries.is_empty() && !params.force {
-                return Err(EngineError::ProjectNotEmpty { entries });
+                let project = root.join(SPEC_FILE).is_file();
+                return Err(EngineError::ProjectNotEmpty { entries, project });
             }
             let directory_name = root
                 .file_name()
@@ -239,7 +271,7 @@ fn project_entries(root: &Path) -> std::io::Result<Vec<String>> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let engine_state_only = name == ".manim-director" && holds_only_state(&entry.path())?;
+        let engine_state_only = name == files::STATE_DIR && holds_only_state(&entry.path())?;
         if name != ".git" && !engine_state_only {
             entries.push(name);
         }
@@ -303,6 +335,34 @@ mod tests {
         let (root, added) = preflight(root, &forced(Some("graph"))).unwrap();
         assert_eq!((added.mode, added.force), (InitMode::AddScene, true));
         assert_eq!(added.source_dir, Some(root.join("scenes")));
+        #[cfg(unix)]
+        {
+            let outside = tempfile::NamedTempFile::new().unwrap();
+            fs::create_dir(root.join("scenes")).unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join("scenes/graph.py")).unwrap();
+            let error = preflight(&root, &forced(Some("graph"))).unwrap_err();
+            assert_eq!(
+                error,
+                EngineError::InvalidPath {
+                    path: "scenes/graph.py".into(),
+                    reason: "outside_project"
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_init_removes_the_directory_it_created() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("film");
+        let unreachable = BridgeConfig {
+            python: "/nonexistent/python".into(),
+            module: "missing".into(),
+        };
+        init_project(&unreachable, &target, InitParams::default())
+            .await
+            .unwrap_err();
+        assert!(!target.exists());
     }
 
     #[tokio::test]
@@ -319,8 +379,14 @@ mod tests {
         assert_eq!(
             error,
             EngineError::ProjectNotEmpty {
-                entries: vec!["notes.txt".into()]
+                entries: vec!["notes.txt".into()],
+                project: false,
             }
         );
+        fs::write(directory.path().join("director.yaml"), "version: 1\n").unwrap();
+        let error = init_project(&unreachable, directory.path(), InitParams::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("already a project"), "{error}");
     }
 }

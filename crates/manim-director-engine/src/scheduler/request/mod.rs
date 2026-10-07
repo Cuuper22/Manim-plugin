@@ -12,7 +12,8 @@ pub use paths::cli_project_path;
 pub(crate) use paths::{project_path, PathUse};
 pub(crate) use source::SelectedSource;
 
-use crate::{cache, scheduler::artifacts, Store};
+use super::{artifacts, env_number};
+use crate::{cache, Store};
 use manim_director_core::{
     files, python_sources, relative_posix, Budget, CaptionsTask, ContactSheetTask, DiagnoseTask,
     DirectorSpec, DoctorTask, EngineError, FrameTask, Limits, LogStream, MediaFormat, Operation,
@@ -31,7 +32,6 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
 const DEFAULT_OUTPUT_MB: u64 = 2048;
 const DEFAULT_SEED: u64 = 1729;
 const MAX_DIAGNOSE_TEXT_BYTES: usize = 64 * 1024;
-const DEFAULT_MEDIA_DIR: &str = ".manim-director/media";
 
 /// A frontend that accepts tagged `OperationRequest` bodies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,12 +69,6 @@ pub fn parse_request(frontend: Frontend, body: Value) -> Result<OperationRequest
         });
     }
     OperationRequest::from_json(body)
-}
-
-/// Parses the params of an operation the caller already chose (a dedicated
-/// route or tool).
-pub fn parse_params(operation: Operation, params: Value) -> Result<OperationRequest, EngineError> {
-    OperationRequest::from_params(operation, params)
 }
 
 pub(crate) struct ProjectContext<'a> {
@@ -138,11 +132,11 @@ impl ResolvedJob {
 /// `budgets` in `director.yaml` (OPS §1.2).
 pub(crate) fn limits(spec: Option<&DirectorSpec>) -> Limits {
     let budgets = spec.map(|spec| &spec.budgets);
-    let timeout_seconds = env_u64("MANIM_DIRECTOR_TIMEOUT_SECONDS")
+    let timeout_seconds = env_number("MANIM_DIRECTOR_TIMEOUT_SECONDS")
         .or(budgets.and_then(|budgets| budgets.render_seconds))
         .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
         .clamp(10, 86_400);
-    let memory_mb = env_u64("MANIM_DIRECTOR_MEMORY_MB")
+    let memory_mb = env_number("MANIM_DIRECTOR_MEMORY_MB")
         .or(budgets.and_then(|budgets| budgets.memory_mb))
         .filter(|megabytes| *megabytes > 0);
     Limits {
@@ -155,10 +149,6 @@ fn artifact_budget(spec: Option<&DirectorSpec>) -> u64 {
     spec.and_then(|spec| spec.budgets.output_mb)
         .unwrap_or(DEFAULT_OUTPUT_MB)
         .saturating_mul(1024 * 1024)
-}
-
-fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name).ok()?.trim().parse().ok()
 }
 
 /// Resolves a job request. Direct operations never reach here.
@@ -352,7 +342,7 @@ pub(crate) fn resolve(
 }
 
 fn media_dir(spec: Option<&DirectorSpec>) -> &str {
-    spec.map_or(DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir)
+    spec.map_or(files::DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir)
 }
 
 /// Which scene a name refers to, per `director.yaml` (no disk access).
@@ -506,14 +496,7 @@ fn failure_text(ctx: &ProjectContext<'_>, id: Uuid) -> Result<String, EngineErro
 
 /// The last `max` bytes of `text`, starting on a character boundary.
 fn keep_tail(text: &str, max: usize) -> &str {
-    if text.len() <= max {
-        return text;
-    }
-    let mut start = text.len() - max;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    &text[start..]
+    &text[text.ceil_char_boundary(text.len().saturating_sub(max))..]
 }
 
 /// blake3 of the scene file, from the fingerprint when it was hashed there.

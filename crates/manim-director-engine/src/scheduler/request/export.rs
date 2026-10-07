@@ -8,9 +8,9 @@ use super::{
 };
 use crate::scheduler::artifacts;
 use manim_director_core::{
-    files, relative_posix, Budget, DirectorSpec, EngineError, ExportEntry, ExportFormat,
-    ExportParams, ExportTask, GifSettings, MediaExportFormat, MediaExportTask, Task, ZipExportTask,
-    ZipFormat,
+    files, path_rule_violation, relative_posix, Budget, DirectorSpec, EngineError, ExportEntry,
+    ExportFormat, ExportParams, ExportTask, GifSettings, MediaExportFormat, MediaExportTask, Task,
+    ZipExportTask, ZipFormat,
 };
 use std::{
     collections::BTreeSet,
@@ -129,7 +129,7 @@ fn output_path(
         "output",
         &relative,
         PathUse::Output {
-            media_dir: spec.map_or(super::DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir),
+            media_dir: spec.map_or(files::DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir),
             extensions: &[params.format.as_str()],
         },
     )
@@ -172,20 +172,33 @@ fn project_entries(root: &Path, spec: &DirectorSpec) -> Vec<ExportEntry> {
         }
     }
     // An output or media dir of "." would exclude the whole project.
-    let excluded: Vec<PathBuf> = [".manim-director", &project.output_dir, &project.media_dir]
+    let excluded: Vec<PathBuf> = [files::STATE_DIR, &project.output_dir, &project.media_dir]
         .into_iter()
         .map(|dir| root.join(dir))
         .filter(|dir| dir != root)
         .collect();
     paths
         .into_iter()
-        .filter(|path| !excluded.iter().any(|dir| path.starts_with(dir)))
-        .filter(|path| !files::is_secret_like(path))
+        .filter(|path| bundleable(root, &excluded, path))
         .map(|path| ExportEntry {
             archive_path: relative_posix(root, &path),
             path,
         })
         .collect()
+}
+
+/// Judged where the bytes live too: a symlinked `assets/` or `sources/` must
+/// not carry `~/.aws`, `.git` or engine state into a zip meant for sharing.
+fn bundleable(root: &Path, excluded: &[PathBuf], path: &Path) -> bool {
+    let Ok(real) = crate::confine(root, &relative_posix(root, path)) else {
+        return false;
+    };
+    if real != path && path_rule_violation(&relative_posix(root, &real), false).is_some() {
+        return false;
+    }
+    [path, real.as_path()].iter().all(|path| {
+        !excluded.iter().any(|dir| path.starts_with(dir)) && !files::is_secret_like(path)
+    })
 }
 
 fn is_root_bundle_file(name: &str) -> bool {
@@ -337,5 +350,36 @@ mod tests {
             archive.contains(&"scenes/main.py".to_owned()),
             "{archive:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_bundle_dirs_stay_inside_the_visible_project() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("project");
+        let outside = directory.path().join("aws");
+        for path in [
+            root.join("director.yaml"),
+            root.join("code/main.py"),
+            root.join(".git/config"),
+            outside.join("credentials"),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        fs::write(
+            root.join("director.yaml"),
+            "version: 1\nproject:\n  name: Demo\n",
+        )
+        .unwrap();
+        let root = root.canonicalize().unwrap();
+        symlink(root.join("code"), root.join("scenes")).unwrap();
+        symlink(&outside, root.join("assets")).unwrap();
+        symlink(root.join(".git"), root.join("sources")).unwrap();
+        let spec = DirectorSpec::load(&root).unwrap();
+        let entries = project_entries(&root, &spec);
+        let archive: Vec<_> = entries.iter().map(|entry| &entry.archive_path).collect();
+        assert_eq!(archive, ["director.yaml", "scenes/main.py"]);
     }
 }

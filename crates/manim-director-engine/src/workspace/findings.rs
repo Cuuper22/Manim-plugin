@@ -10,8 +10,8 @@ use super::{
 use crate::{confine, JobFilter, Store};
 use anyhow::Result;
 use manim_director_core::{
-    Catalog, ErrorBody, Finding, JobRecord, JobStatus, Operation, OperationResult, Severity,
-    SourceLocation, ThemeSetting, SPEC_FILE,
+    named_enum, Catalog, ErrorBody, Finding, JobRecord, JobStatus, Operation, OperationResult,
+    Severity, SourceLocation, ThemeSetting, SPEC_FILE,
 };
 use serde::Serialize;
 use std::{collections::BTreeMap, path::Path};
@@ -19,25 +19,13 @@ use uuid::Uuid;
 
 const MAX_FINDINGS: usize = 200;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FindingSource {
-    Spec,
-    Index,
-    Render,
-    Qa,
-    Doctor,
-}
-
-impl FindingSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Spec => "spec",
-            Self::Index => "index",
-            Self::Render => "render",
-            Self::Qa => "qa",
-            Self::Doctor => "doctor",
-        }
+named_enum! {
+    pub enum FindingSource {
+        Spec = "spec",
+        Index = "index",
+        Render = "render",
+        Qa = "qa",
+        Doctor = "doctor",
     }
 }
 
@@ -236,15 +224,11 @@ fn from_error_code(code: &str, error: &ErrorBody) -> Finding {
 }
 
 /// Errors, warnings, info; then by file and line, location-less last.
-fn order_key(finding: &Finding) -> (u8, bool, &str, u32) {
-    let rank = match finding.severity {
-        Severity::Error => 0,
-        Severity::Warning => 1,
-        Severity::Info => 2,
-    };
+fn order_key(finding: &Finding) -> (Severity, bool, &str, u32) {
+    let severity = finding.severity;
     match &finding.location {
-        Some(location) => (rank, false, location.file.as_str(), location.line),
-        None => (rank, true, "", 0),
+        Some(location) => (severity, false, location.file.as_str(), location.line),
+        None => (severity, true, "", 0),
     }
 }
 
@@ -288,7 +272,7 @@ impl Collector<'_> {
             });
             self.views.push(FindingView {
                 finding,
-                id: format!("{}:{key}:{n}", source.as_str()),
+                id: format!("{source}:{key}:{n}"),
                 source,
                 scene_id: scene_id.clone(),
                 job_id,
@@ -305,9 +289,8 @@ mod tests {
     use super::*;
     use crate::{db::testing, workspace::SpecTracker, NewJob};
     use manim_director_core::{
-        DiscoverResult, DiscoveredScene, DoctorParams, DoctorTask, JobOrigin, Limits, MediaFormat,
-        OperationRequest, QaParams, QaResult, QaStatus, QaTask, RenderParams, RenderSettings,
-        RenderTask, Renderer, SafeArea, SourceKind, Task,
+        DiscoverResult, DiscoveredScene, DoctorParams, DoctorTask, JobOrigin, OperationRequest,
+        QaParams, QaResult, QaStatus, QaTask, RenderParams, RenderTask, SafeArea, SourceKind, Task,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -316,21 +299,11 @@ mod tests {
         let id = Uuid::new_v4();
         store
             .insert_job(&NewJob {
-                id,
                 origin: JobOrigin::Http,
-                owner: Uuid::new_v4(),
-                request: &request,
-                task: &task,
-                limits: Limits {
-                    timeout_seconds: 60,
-                    memory_mb: None,
-                },
-                fingerprint: None,
                 source_job_id: source,
                 scene_class: Some("Intro"),
                 scene_file: Some("scenes/main.py"),
-                scene_revision: None,
-                profile: None,
+                ..testing::new_job(id, &request, &task)
             })
             .unwrap();
         store.set_running(id).unwrap();
@@ -360,16 +333,9 @@ mod tests {
             files: 1,
             truncated: false,
             scenes: vec![DiscoveredScene {
-                name: "Intro".into(),
-                file: "scenes/main.py".into(),
-                line: 4,
                 end_line: 20,
                 construct_line: Some(5),
-                bases: vec!["Scene".into()],
-                doc: None,
-                theme: None,
-                sections: vec![],
-                beats: vec![],
+                ..testing::scene("Intro", "scenes/main.py", 4)
             }],
             findings: vec![],
             artifacts: vec![],
@@ -378,15 +344,7 @@ mod tests {
         let render = Task::Render(RenderTask {
             scene: Some("Intro".into()),
             files: vec![root.join("scenes/main.py")],
-            settings: RenderSettings {
-                profile: "draft".into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
-                format: MediaFormat::Mp4,
-                transparent: false,
-            },
+            settings: testing::draft(),
             media_dir: root.join("media"),
             out_dir: root.join("out"),
             sections: false,

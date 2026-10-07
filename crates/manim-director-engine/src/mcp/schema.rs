@@ -1,6 +1,7 @@
 //! The ten MCP tools as `tools/list` advertises them (OPS §1.7). Arguments
 //! are the operation's params; job tools add `wait_seconds`.
 
+use manim_director_core::Operation;
 use serde_json::{json, Map, Value};
 
 pub(super) const TOOLS: [&str; 10] = [
@@ -139,7 +140,7 @@ pub(super) fn tool_list() -> Value {
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "enum": ["doctor", "render", "still", "frame", "contact_sheet", "qa", "diagnose", "validate_math", "captions", "ingest", "export"]
+                        "enum": Operation::job_operations().map(Operation::as_str).collect::<Vec<_>>()
                     },
                     "wait_seconds": wait_seconds()
                 },

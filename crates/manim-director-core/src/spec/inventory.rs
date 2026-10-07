@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 pub const MAX_PYTHON_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 pub const MAX_PYTHON_SOURCES: usize = 500;
 
-/// Walks up from `start` to the nearest directory holding `director.yaml`.
+/// Walks up from `start` to the nearest directory holding `director.yaml`,
+/// never into one anyone may write to (`/tmp`): a spec planted there by
+/// another user must not become this user's project.
 pub fn find_project(start: impl AsRef<Path>) -> Result<PathBuf, SpecError> {
     let start = start.as_ref();
     let mut current = if start.is_file() {
@@ -23,8 +25,21 @@ pub fn find_project(start: impl AsRef<Path>) -> Result<PathBuf, SpecError> {
         }
         current = current
             .parent()
+            .filter(|parent| !world_writable(parent))
             .ok_or_else(|| SpecError::NotFound(start.to_path_buf()))?;
     }
+}
+
+#[cfg(unix)]
+fn world_writable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.permissions().mode() & 0o002 != 0)
+}
+
+#[cfg(not(unix))]
+fn world_writable(_: &Path) -> bool {
+    false
 }
 
 /// Project-relative file lists of the source, asset and output trees.
@@ -189,5 +204,20 @@ mod tests {
         let (directory, _) = project("version: 1\nproject:\n  name: Demo\n", &["scenes/a.py"]);
         let found = find_project(directory.path().join("scenes/a.py")).unwrap();
         assert_eq!(found, directory.path().canonicalize().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_project_never_climbs_into_a_world_writable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let (directory, _) = project("version: 1\nproject:\n  name: Planted\n", &[]);
+        let shared = directory.path();
+        fs::set_permissions(shared, fs::Permissions::from_mode(0o1777)).unwrap();
+        fs::create_dir(shared.join("work")).unwrap();
+        assert!(matches!(
+            find_project(shared.join("work")),
+            Err(SpecError::NotFound(_))
+        ));
+        assert!(find_project(shared).is_ok(), "asked for by name");
     }
 }

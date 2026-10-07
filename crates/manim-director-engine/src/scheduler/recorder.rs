@@ -93,16 +93,11 @@ impl Recorder {
     }
 
     /// Progress the engine itself reports (`starting`, `validate`).
-    pub(super) fn engine_phase(
-        &self,
-        phase: ProgressPhase,
-        total: Option<u64>,
-        message: Option<&str>,
-    ) {
+    pub(super) fn engine_phase(&self, phase: ProgressPhase, message: Option<&str>) {
         self.progress(Progress {
             phase,
             current: 0,
-            total,
+            total: None,
             scene_seconds: None,
             message: message.map(str::to_owned),
             updated_at: Timestamp::now(),

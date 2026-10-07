@@ -1,12 +1,11 @@
 //! Turning project-relative paths into filesystem paths that provably stay
 //! inside the canonical project root, symlinks included.
 
+use manim_director_core::{files::STATE_DIR, EngineError};
 use std::{
     fs, io,
     path::{Component, Path, PathBuf},
 };
-
-const STATE_DIR: &str = ".manim-director";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confinement {
@@ -58,6 +57,22 @@ pub fn resolve_existing_prefix(root: &Path, path: &Path) -> Option<PathBuf> {
     }
     resolved.extend(tail.iter().rev());
     Some(resolved)
+}
+
+/// Where the runtime may write `relative`, a path from the spec or the engine
+/// rather than a request: resolved through symlinks, and refused when that
+/// leaves the project or reaches engine state.
+pub fn write_target(root: &Path, relative: &str) -> Result<PathBuf, EngineError> {
+    let invalid = |reason| EngineError::InvalidPath {
+        path: relative.to_owned(),
+        reason,
+    };
+    let resolved =
+        resolve_existing_prefix(root, &root.join(relative)).ok_or(invalid("outside_project"))?;
+    match resolved.starts_with(root.join(STATE_DIR)) {
+        true => Err(invalid("denied")),
+        false => Ok(resolved),
+    }
 }
 
 /// `<root>/.manim-director/<name>`, created when `create` is set. Either level

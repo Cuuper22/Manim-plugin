@@ -2,11 +2,15 @@ use std::fmt;
 
 /// Declares a fieldless enum whose serde name, `Display` and `FromStr` are one
 /// and the same string, so the spelling cannot drift between the wire, the
-/// database and the command line.
+/// database and the command line. Variants order as declared.
+#[macro_export]
 macro_rules! named_enum {
     ($(#[$meta:meta])* pub enum $name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
+            serde::Serialize, serde::Deserialize,
+        )]
         pub enum $name {
             $(#[serde(rename = $text)] $variant),+
         }
@@ -45,7 +49,7 @@ macro_rules! named_enum {
     };
 }
 
-pub(crate) use named_enum;
+pub(crate) use crate::named_enum;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownName {

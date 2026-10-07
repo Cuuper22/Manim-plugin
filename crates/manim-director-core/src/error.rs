@@ -105,7 +105,7 @@ named_enum! {
 /// code and one HTTP status.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EngineError {
-    #[error("{}", invalid_params_message(field.as_deref(), reason))]
+    #[error("{}", invalid_params_message(field.as_deref(), reason, allowed))]
     InvalidParams {
         field: Option<String>,
         reason: String,
@@ -129,8 +129,12 @@ pub enum EngineError {
         scene: Option<String>,
         profile: Option<String>,
     },
-    #[error("The target directory is not empty; pass force to overwrite its template files.")]
-    ProjectNotEmpty { entries: Vec<String> },
+    #[error("{}", project_not_empty_message(*project))]
+    ProjectNotEmpty {
+        entries: Vec<String>,
+        /// The directory already holds a `director.yaml`.
+        project: bool,
+    },
     #[error("The request is {} bytes; the limit is {limit_bytes}.", actual_bytes.map_or("too many".to_owned(), |n| n.to_string()))]
     RequestTooLarge {
         limit_bytes: u64,
@@ -144,7 +148,7 @@ pub enum EngineError {
     },
     #[error("The job queue is full ({capacity} jobs); retry when a job finishes.")]
     QueueFull { capacity: usize },
-    #[error("{path} is not an editable project path ({reason}).")]
+    #[error("{path} {}.", reason_text(reason))]
     InvalidPath { path: String, reason: &'static str },
     #[error("{path}: .{extension} files are not accepted here.")]
     UnsupportedFileType { path: String, extension: String },
@@ -183,10 +187,29 @@ pub enum EngineError {
     Internal(String),
 }
 
-fn invalid_params_message(field: Option<&str>, reason: &str) -> String {
-    match field {
-        Some(field) => format!("Invalid {field}: {reason}."),
-        None => format!("Invalid request: {reason}."),
+fn invalid_params_message(field: Option<&str>, reason: &str, allowed: &[String]) -> String {
+    let choices = match allowed.is_empty() {
+        true => String::new(),
+        false => format!("; expected one of {}", allowed.join(", ")),
+    };
+    format!(
+        "Invalid {}: {}{choices}.",
+        field.unwrap_or("request"),
+        reason_text(reason)
+    )
+}
+
+/// The path rule's reason codes (kept as `data.reason`) as words.
+fn reason_text(reason: &str) -> &str {
+    match reason {
+        "absolute" => "must be a project-relative path",
+        "traversal" => "must not have empty, . or .. segments",
+        "hidden" => "must not have a hidden (dot) segment",
+        "outside_project" => "is outside the project",
+        "denied" => "is not allowed here",
+        "missing" => "does not exist",
+        "extension" => "has an extension not accepted here",
+        reason => reason,
     }
 }
 
@@ -198,6 +221,13 @@ fn source_not_found_message(scene: Option<&str>, profile: Option<&str>) -> Strin
         .map(|profile| format!(" at {profile}"))
         .unwrap_or_default();
     format!("No successful render{scene}{profile}; render it first.")
+}
+
+fn project_not_empty_message(project: bool) -> &'static str {
+    match project {
+        true => "This directory is already a project; add a scene with scene_template (--scene-template). force (--force) would replace director.yaml and scenes/main.py, and keeps no copy.",
+        false => "The target directory is not empty; force (--force) writes the template into it, replacing any of its files with the same names.",
+    }
 }
 
 fn source_invalid_message(
@@ -224,6 +254,15 @@ impl EngineError {
     pub fn invalid(field: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::InvalidParams {
             field: Some(field.into()),
+            reason: reason.into(),
+            allowed: Vec::new(),
+        }
+    }
+
+    /// A problem with the request as a whole rather than one field.
+    pub fn invalid_request(reason: impl Into<String>) -> Self {
+        Self::InvalidParams {
+            field: None,
             reason: reason.into(),
             allowed: Vec::new(),
         }
@@ -325,7 +364,7 @@ impl EngineError {
             Self::SourceNotFound { scene, profile } => {
                 json!({ "scene": scene, "profile": profile })
             }
-            Self::ProjectNotEmpty { entries } => json!({ "entries": entries }),
+            Self::ProjectNotEmpty { entries, .. } => json!({ "entries": entries }),
             Self::RequestTooLarge {
                 limit_bytes,
                 actual_bytes,
@@ -390,6 +429,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn messages_spell_out_reason_codes_and_choices() {
+        let traversal = EngineError::invalid("file", "traversal");
+        assert_eq!(
+            traversal.to_string(),
+            "Invalid file: must not have empty, . or .. segments."
+        );
+        assert_eq!(traversal.data().unwrap()["reason"], "traversal");
+        let profile =
+            EngineError::invalid_choice("profile", "unknown profile", ["draft", "preview"]);
+        assert_eq!(
+            profile.to_string(),
+            "Invalid profile: unknown profile; expected one of draft, preview."
+        );
+        let outside = EngineError::InvalidPath {
+            path: "assets".into(),
+            reason: "outside_project",
+        };
+        assert_eq!(outside.to_string(), "assets is outside the project.");
+    }
+
+    #[test]
     fn every_kind_has_its_contract_code_and_status() {
         let cases = [
             (
@@ -424,7 +484,10 @@ mod tests {
                 404,
             ),
             (
-                EngineError::ProjectNotEmpty { entries: vec![] },
+                EngineError::ProjectNotEmpty {
+                    entries: vec![],
+                    project: false,
+                },
                 "project_not_empty",
                 409,
             ),
