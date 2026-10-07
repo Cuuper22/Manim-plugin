@@ -67,7 +67,7 @@ class CompletingTheSquare(DirectedScene):
                 (r"\left(x + \frac{b}{2a}\right)^2 = \frac{b^2 - 4ac}{4a^2}", "complete the square"),
                 replaces=claim,
             )
-        self.highlight(steps.lines[-1], r"b^2 - 4ac", box=True)
+        self.highlight(steps.lines[-1], r"b^2 - 4ac", color="success", box=True)
         self.wait()
 ```
 
