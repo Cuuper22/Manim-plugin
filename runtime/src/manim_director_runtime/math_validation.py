@@ -225,7 +225,8 @@ _FLOAT_OPS = {
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
     ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
+    # math.pow, unlike **, refuses to leave the reals: (-8)^(1/3) is outside the domain.
+    ast.Pow: math.pow,
 }
 _FLOAT_FUNCTIONS: dict[str, Callable[..., float]] = {
     "abs": abs,
@@ -260,8 +261,8 @@ def evaluate(tree: ast.expr, values: Mapping[str, float]) -> float:
         return _FLOAT_CONSTANTS[node.id] if node.id in _FLOAT_CONSTANTS else values[node.id]
 
     result = _build(tree, leaf, _FLOAT_OPS, lambda name, args: _FLOAT_FUNCTIONS[name](*args))
-    if isinstance(result, complex) or not math.isfinite(result):
-        raise ValueError("the value is not a finite real number")
+    if not math.isfinite(result):
+        raise ValueError("the value is not finite")
     return float(result)
 
 
@@ -333,7 +334,7 @@ def _symbolic(
         "min": sympy.Min,
         "max": sympy.Max,
     }
-    ops = {**_FLOAT_OPS, ast.Mod: sympy.Mod}
+    ops = {**_FLOAT_OPS, ast.Mod: sympy.Mod, ast.Pow: operator.pow}
 
     def leaf(node: ast.Name | ast.Constant) -> Any:
         if isinstance(node, ast.Constant):

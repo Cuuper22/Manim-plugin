@@ -1,13 +1,17 @@
-"""The flagship example's files agree with each other and with the recurrence they show."""
+"""The flagship example: its files agree with each other and every scene renders."""
 
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
+from conftest import requires_latex, requires_manim
 from manim_director_runtime.captions import parse
 from manim_director_runtime.inspection import discover
 from manim_director_runtime.tasks import DiscoverTask
@@ -57,3 +61,44 @@ def test_recorded_sequences_follow_their_recurrence() -> None:
         assert values[:2] == [float(first["x0"]), float(first["x1"])]
         triples = zip(values, values[1:], values[2:], strict=False)
         assert all(c == p * b + q * a for a, b, c in triples)
+
+
+@pytest.fixture(scope="module")
+def tex_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Shared by the scenes so common TeX is compiled once."""
+
+    return tmp_path_factory.mktemp("tex")
+
+
+@requires_manim
+@requires_latex
+@pytest.mark.parametrize(
+    "scene", [entry["class"] for entry in yaml.safe_load(load("director.yaml"))["scenes"]]
+)
+def test_every_scene_renders_under_plain_manim(
+    scene: str, tmp_path: Path, tex_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from manim import tempconfig
+
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)  # keep the example tree clean
+    spec = importlib.util.spec_from_file_location(f"_example_{scene}", EXAMPLE / "scenes.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    settings = {
+        "media_dir": str(tmp_path / "media"),
+        "tex_dir": str(tex_dir),
+        "pixel_width": 320,
+        "pixel_height": 180,
+        "frame_rate": 10,
+        "save_last_frame": True,
+        "write_to_movie": False,
+        "disable_caching": True,
+        "progress_bar": "none",
+        "verbosity": "ERROR",
+    }
+    with tempconfig(settings):
+        rendered = getattr(module, scene)()
+        rendered.render()
+    luminance = rendered.renderer.get_frame()[..., :3].mean(axis=2)
+    assert luminance.max() - luminance.min() > 100, "the last frame is blank"

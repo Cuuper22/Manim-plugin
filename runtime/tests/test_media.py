@@ -151,3 +151,21 @@ def test_qa_on_images(project: Path, ctx) -> None:
         "clean.png": ("pass", []),
     }
     assert not (project / "unused").exists()
+
+
+def test_qa_rejects_an_unreadable_image(project: Path, ctx) -> None:
+    from manim_director_runtime.errors import DirectorError
+
+    broken = project / "broken.png"
+    broken.write_bytes(b"not a png")
+    task = QaTask(
+        source=broken,
+        source_kind="image",
+        frames=1,
+        safe_area=SAFE_AREA_DEFAULT,
+        timeline=None,
+        out_dir=project / "unused",
+    )
+    with pytest.raises(DirectorError) as raised:
+        qa(task, ctx)
+    assert (raised.value.code, raised.value.data) == ("invalid_source", {"path": str(broken)})

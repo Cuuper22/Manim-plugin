@@ -237,6 +237,18 @@ def test_export_union_is_discriminated_by_format() -> None:
     assert zipped.entries[0].path == Path(f"{P}/director.yaml")
 
 
+@pytest.mark.parametrize("archive_path", ["../escape.py", "/etc/passwd", "a//b", "a\\b", ""])
+def test_zip_entries_stay_inside_the_archive(archive_path: str) -> None:
+    raw = {
+        "format": "zip",
+        "output": f"{P}/out.zip",
+        "project_name": "Film",
+        "source_job_id": None,
+        "entries": [{"path": f"{P}/director.yaml", "archive_path": archive_path}],
+    }
+    assert error_of("export", raw)["field"] == "entries[0].archive_path"
+
+
 def test_ranges_parse_to_float_pairs() -> None:
     task = parse("validate_math", VALID["validate_math"])
     assert task.ranges == {"a": (-3.0, 3.0)}

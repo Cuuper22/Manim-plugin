@@ -80,7 +80,14 @@ def test_each_template_fills_a_consistent_project(template: str, project: Path, 
 
 
 def test_values_that_yaml_would_misread_are_quoted(project: Path, ctx) -> None:
-    for name in ("Sequences: a tour", "yes", "1729", "Plain Title"):
+    for name in (
+        "Sequences: a tour",
+        "yes",
+        "1729",
+        "{{theme}} notes",
+        "@handle [draft",
+        "Plain Title",
+    ):
         init(create(name, mode="overwrite"), ctx)
         assert yaml.safe_load((project / "director.yaml").read_text())["project"]["name"] == name
     assert "name: Plain Title\n" in (project / "director.yaml").read_text()

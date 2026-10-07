@@ -62,3 +62,9 @@ def dependency_missing(dependency: str, hint: str) -> DirectorError:
         f"{dependency} is not available in the runtime environment.",
         {"dependency": dependency, "hint": hint},
     )
+
+
+def invalid_source(path: Path, reason: str) -> DirectorError:
+    return DirectorError(
+        "invalid_source", f"Cannot read {path.name}: {reason}.", {"path": str(path)}
+    )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import re
 import traceback
 from collections.abc import Callable
@@ -193,6 +194,9 @@ def exception_findings(exc: BaseException, root: Path) -> tuple[list[Finding], s
 def location_from_exception(exc: BaseException, root: Path) -> SourceLocation | None:
     if isinstance(exc, SyntaxError) and exc.filename and not exc.filename.startswith("<"):
         return SourceLocation(public_path(exc.filename, root), exc.lineno or 1, exc.offset)
+    if isinstance(exc, configparser.Error) and getattr(exc, "source", None):
+        # A malformed manim.cfg: point at the file, not at the configparser frame.
+        return SourceLocation(public_path(exc.source, root), getattr(exc, "lineno", None) or 1)
     frames = [(f.filename, f.lineno or 1) for f in traceback.extract_tb(exc.__traceback__)]
     return _innermost(frames, root)
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from functools import cache
 from importlib import resources
@@ -36,6 +37,7 @@ SCENE_FILE = "scenes/main.py"
 _SHARED = "_shared"
 _FILLED_SUFFIXES = frozenset({".yaml", ".md"})
 _GITIGNORE_LINES = (".manim-director/", "__pycache__/")
+_PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,14 +182,19 @@ def _fill(path: str, text: str, values: dict[str, str | int]) -> str:
     if Path(path).suffix not in _FILLED_SUFFIXES:
         return text
     spell = _yaml_scalar if path.endswith(".yaml") else str
-    for key, value in values.items():
-        text = text.replace(f"{{{{{key}}}}}", spell(value))
-    return text
+    # One pass, so a value that itself reads like a placeholder is written as given.
+    return _PLACEHOLDER.sub(
+        lambda match: spell(values[match[1]]) if match[1] in values else match[0], text
+    )
 
 
 def _yaml_scalar(value: str | int) -> str:
     plain = str(value)
-    return plain if yaml.safe_load(plain) == value else json.dumps(value, ensure_ascii=False)
+    try:
+        round_trips = yaml.safe_load(plain) == value
+    except yaml.YAMLError:
+        round_trips = False
+    return plain if round_trips else json.dumps(value, ensure_ascii=False)
 
 
 def _seed_for(project_slug: str) -> int:

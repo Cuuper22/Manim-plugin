@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import importlib.util
 import platform
@@ -19,16 +20,16 @@ if TYPE_CHECKING:
     from .protocol import Context
 
 LOW_DISK_BYTES = 512 * 1024 * 1024
-# Import name -> distribution name, in report order.
+# Check name -> (module that must import, distribution name), in report order.
 PACKAGES = {
-    "manim": "manim",
-    "numpy": "numpy",
-    "PIL": "Pillow",
-    "av": "av",
-    "yaml": "PyYAML",
-    "sympy": "sympy",
-    "pypdf": "pypdf",
-    "moderngl": "moderngl",
+    "manim": ("manim", "manim"),
+    "numpy": ("numpy", "numpy"),
+    "PIL": ("PIL.Image", "Pillow"),
+    "av": ("av", "av"),
+    "yaml": ("yaml", "PyYAML"),
+    "sympy": ("sympy", "sympy"),
+    "pypdf": ("pypdf", "pypdf"),
+    "moderngl": ("moderngl", "moderngl"),
 }
 EXECUTABLES = ("ffmpeg", "ffprobe", "latex", "pdflatex", "xelatex", "lualatex", "dvisvgm")
 TEX_ENGINES = ("latex", "pdflatex", "xelatex", "lualatex")
@@ -81,7 +82,9 @@ class DoctorResult:
 
 
 def doctor(task: DoctorTask, ctx: Context) -> DoctorResult:
-    checks = [_package(name, dist) for name, dist in PACKAGES.items()]
+    packages = {name: _package(name, *spec) for name, spec in PACKAGES.items()}
+    broken = {name: error for name, (_, error) in packages.items() if error}
+    checks = [check for check, _ in packages.values()]
     checks += [_executable(name) for name in EXECUTABLES]
     have = {check.name: check.available for check in checks}
     render = all(have[name] for name in ("manim", "numpy", "PIL", "av", "yaml"))
@@ -108,20 +111,28 @@ def doctor(task: DoctorTask, ctx: Context) -> DoctorResult:
         checks=checks,
         capabilities=capabilities,
         disk=Disk(free_bytes=usage.free, total_bytes=usage.total),
-        findings=_findings(have, capabilities, opengl_error, usage.free),
+        findings=_findings(have, broken, capabilities, opengl_error, usage.free),
         artifacts=[],
     )
 
 
-def _package(name: str, distribution: str) -> Check:
-    available = importlib.util.find_spec(name) is not None
-    version = None
-    if available:
-        try:
-            version = importlib.metadata.version(distribution)
-        except importlib.metadata.PackageNotFoundError:
-            version = None  # importable without distribution metadata, e.g. a source checkout
-    return Check(name=name, kind="package", available=available, version=version, path=None)
+def _package(name: str, module: str, distribution: str) -> tuple[Check, str | None]:
+    """The check, plus the import error of a package that is installed but broken."""
+
+    if importlib.util.find_spec(module.partition(".")[0]) is None:
+        return Check(name=name, kind="package", available=False, version=None, path=None), None
+    try:
+        version = importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        version = None  # importable without distribution metadata, e.g. a source checkout
+    try:
+        importlib.import_module(module)
+    except Exception as exc:  # present but unusable, e.g. a missing system library
+        error = f"{type(exc).__name__}: {exc}".splitlines()[0][:200]
+    else:
+        error = None
+    check = Check(name=name, kind="package", available=error is None, version=version, path=None)
+    return check, error
 
 
 def _executable(name: str) -> Check:
@@ -135,9 +146,9 @@ def _executable(name: str) -> Check:
 
 
 def _opengl_error() -> str | None:
-    import moderngl
-
     try:
+        import moderngl
+
         context = moderngl.create_standalone_context()
     except Exception as exc:  # any backend failure means no headless OpenGL here
         return str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
@@ -146,12 +157,21 @@ def _opengl_error() -> str | None:
 
 
 def _findings(
-    have: dict[str, bool], capabilities: Capabilities, opengl_error: str | None, free: int
+    have: dict[str, bool],
+    broken: dict[str, str],
+    capabilities: Capabilities,
+    opengl_error: str | None,
+    free: int,
 ) -> list[Finding]:
     findings = []
 
     def add(code: str, severity: Severity, message: str, hint: str) -> None:
         findings.append(Finding(code=code, severity=severity, message=message, hint=hint))
+
+    def absent(name: str, label: str) -> str:
+        if name in broken:
+            return f"{label} is installed but fails to import ({broken[name]})"
+        return f"{label} is not installed"
 
     required = {
         "manim": ("manim_missing", "Manim Community Edition", "pip install 'manim>=0.21,<0.22'"),
@@ -165,7 +185,7 @@ def _findings(
             add(
                 code,
                 Severity.ERROR,
-                f"{label} is not installed; scenes cannot render.",
+                f"{absent(name, label)}; scenes cannot render.",
                 f"Run {command}.",
             )
     if not capabilities.video_tools:
@@ -193,14 +213,14 @@ def _findings(
         add(
             "sympy_missing",
             Severity.INFO,
-            "SymPy is not installed; validate_math checks numerically only.",
+            f"{absent('sympy', 'SymPy')}; validate_math checks numerically only.",
             "Run pip install sympy.",
         )
     if not have["pypdf"]:
         add(
             "pypdf_missing",
             Severity.INFO,
-            "pypdf is not installed; PDF sources cannot be ingested.",
+            f"{absent('pypdf', 'pypdf')}; PDF sources cannot be ingested.",
             "Run pip install pypdf.",
         )
     if opengl_error:

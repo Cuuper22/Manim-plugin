@@ -154,3 +154,36 @@ def test_malformed_sources_fail_without_leaving_files(tmp_path: Path, project: P
         run(ctx, project, [source(bad, "json", project / "sources")])
     assert raised.value.code == "invalid_source"
     assert list((project / "sources").iterdir()) == []
+
+
+def test_table_rows_are_counted_beyond_the_text_sample(tmp_path: Path, project: Path, ctx) -> None:
+    from manim_director_runtime.summaries import TEXT_SAMPLE_BYTES
+
+    table = tmp_path / "long.csv"
+    rows = TEXT_SAMPLE_BYTES // 4 + 1000  # four bytes per row
+    table.write_text("n,v\n" + "".join(f"{i % 10},{i % 7}\n" for i in range(rows)))
+    (summary,) = run(ctx, project, [source(table, "csv", project / "sources")])["sources"]
+    assert (summary["columns"], summary["rows"]) == (["n", "v"], rows)
+
+
+def test_a_malformed_pdf_is_an_invalid_source(tmp_path: Path, project: Path, ctx) -> None:
+    import io
+
+    import pytest
+
+    from manim_director_runtime.errors import DirectorError
+
+    pypdf = pytest.importorskip("pypdf")
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(100, 100)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    # A number where a dictionary belongs makes pypdf raise a TypeError while extracting text.
+    broken = buffer.getvalue().replace(b"/Resources <<\n>>", b"/Resources 7    ")
+    assert broken != buffer.getvalue()
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(broken)
+    with pytest.raises(DirectorError) as raised:
+        run(ctx, project, [source(pdf, "pdf", project / "sources")])
+    assert raised.value.code == "invalid_source"
+    assert list((project / "sources").iterdir()) == []

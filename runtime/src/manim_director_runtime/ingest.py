@@ -11,14 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .errors import io_error
+from .errors import invalid_source, io_error
 from .jsonio import write_json
 from .media import require_pillow
 from .model import ArtifactKind, RuntimeArtifact
 from .paths import atomic_target, create_exclusive, ensure_dir, slug
 from .summaries import (
     compact,
-    invalid_source,
     local_name,
     media_tool,
     parse_svg,
@@ -199,7 +198,7 @@ def _downscale(source: Path, target: Path) -> bool:
             if target.suffix.lower() in (".jpg", ".jpeg") and image.mode not in ("RGB", "L"):
                 image = image.convert("RGB")
             image.save(target, format=loaded.format)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, pil.DecompressionBombError) as exc:
         raise invalid_source(source, "it is not a readable image") from exc
     return True
 

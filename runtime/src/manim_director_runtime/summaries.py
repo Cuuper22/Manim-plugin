@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import csv
-import io
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -13,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import process
-from .errors import DirectorError, dependency_missing, io_error
+from .errors import DirectorError, dependency_missing, invalid_source, io_error
 from .inspection import ParsedFile, scene_class_names
 from .media import require_pillow
 
@@ -77,14 +76,20 @@ def _text_summary(text: str, kind: str) -> Summary:
 
 
 def _csv_summary(path: Path) -> Summary:
-    text = _read_text(path)
     try:
-        dialect: Any = csv.Sniffer().sniff(text[:8192])
+        dialect: Any = csv.Sniffer().sniff(_read_text(path)[:8192])
     except csv.Error:
         dialect = csv.excel_tab if path.suffix.lower() == ".tsv" else csv.excel
-    reader = csv.reader(io.StringIO(text), dialect)
-    header = next(reader, [])
-    rows = sum(1 for _ in reader)
+    # Rows are counted over the whole file, not just the sample the dialect came from.
+    try:
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            reader = csv.reader(handle, dialect)
+            header = next(reader, [])
+            rows = sum(1 for _ in reader)
+    except OSError as exc:
+        raise io_error(path, exc) from exc
+    except csv.Error as exc:
+        raise invalid_source(path, f"the table is malformed ({exc})") from exc
     columns = [column.strip()[:120] for column in header]
     return Summary(
         summary=f"Table with {rows} rows and {len(columns)} columns: {', '.join(columns[:12])}.",
@@ -140,7 +145,6 @@ def _notebook_summary(path: Path) -> Summary:
 def _pdf_summary(path: Path) -> Summary:
     try:
         from pypdf import PdfReader
-        from pypdf.errors import PyPdfError
     except ImportError:
         raise dependency_missing("pypdf", "Install pypdf in the runtime environment.") from None
     try:
@@ -151,8 +155,10 @@ def _pdf_summary(path: Path) -> Summary:
             if sum(map(len, text)) >= SUMMARY_CHARS:
                 break
         pages = len(reader.pages)
-    except (PyPdfError, ValueError, KeyError) as exc:
-        raise invalid_source(path, str(exc)) from exc
+    except OSError as exc:
+        raise io_error(path, exc) from exc
+    except Exception as exc:  # malformed PDFs surface as arbitrary errors deep inside pypdf
+        raise invalid_source(path, f"the PDF is malformed ({type(exc).__name__}: {exc})") from exc
     return Summary(summary=" ".join(text), pages=pages)
 
 
@@ -171,7 +177,7 @@ def _image_summary(path: Path) -> Summary:
     try:
         with pil.open(path) as image:
             width, height, mode = image.width, image.height, image.mode
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, pil.DecompressionBombError) as exc:
         raise invalid_source(path, "it is not a readable image") from exc
     return Summary(summary=f"{width}x{height} {mode} image.", width=width, height=height)
 
@@ -242,9 +248,3 @@ def read_json(path: Path, *, strict: bool = False) -> Any:
 def compact(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text if len(text) <= SUMMARY_CHARS else text[: SUMMARY_CHARS - 1].rstrip() + "…"
-
-
-def invalid_source(path: Path, reason: str) -> DirectorError:
-    return DirectorError(
-        "invalid_source", f"Cannot read {path.name}: {reason}.", {"path": str(path)}
-    )

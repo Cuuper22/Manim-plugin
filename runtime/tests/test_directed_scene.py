@@ -99,7 +99,9 @@ def inside(mobject: Any, area: Any) -> bool:
     )
 
 
-def test_theme_applies_to_the_camera_and_plain_manim_objects(render: Render) -> None:
+def test_theme_applies_to_the_camera_and_plain_manim_objects(
+    render: Render, tmp_path: Path
+) -> None:
     seen: dict[str, str] = {}
 
     class Plain(DirectedScene):
@@ -114,7 +116,8 @@ def test_theme_applies_to_the_camera_and_plain_manim_objects(render: Render) -> 
     scene = render(Plain)
     assert scene.camera.background_color == PAPER.background
     assert seen == {"text": PAPER.foreground, "line": PAPER.foreground, "primary": PAPER.primary}
-    assert Text("x")[0].get_color().to_hex() == "#FFFFFF"  # defaults restored after the render
+    with tempconfig({"media_dir": str(tmp_path / "media")}):  # Text caches its SVG there
+        assert Text("x")[0].get_color().to_hex() == "#FFFFFF"  # defaults restored after render
 
 
 def test_project_settings_come_from_the_nearest_director_yaml(render: Render, tmp_path: Path):

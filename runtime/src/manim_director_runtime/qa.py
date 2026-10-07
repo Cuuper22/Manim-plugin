@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from .errors import invalid_source
 from .media import grab_frame, load_timeline, probe_video, require_pillow, sample_times
 from .model import ArtifactKind, Finding, RuntimeArtifact, Severity, SourceLocation
 from .paths import atomic_target, ensure_dir
@@ -72,8 +73,11 @@ def qa(task: QaTask, ctx: Context) -> QaResult:
     frames: list[QaFrame] = []
     findings: list[Finding] = []
     for number, (at, path) in enumerate(samples, start=1):
-        with pil.open(path) as image:
-            metrics = measure(image.convert("RGB"), task.safe_area)
+        try:
+            with pil.open(path) as image:
+                metrics = measure(image.convert("RGB"), task.safe_area)
+        except (OSError, pil.DecompressionBombError) as exc:
+            raise invalid_source(path, "it is not a readable image") from exc
         frame = QaFrame(at_seconds=at, path=ctx.relative(path), metrics=metrics)
         frames.append(frame)
         findings += _findings(frame, beats)

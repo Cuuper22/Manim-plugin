@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from . import timeline
 from .diagnostics import exception_findings
-from .errors import DirectorError, io_error
+from .errors import DirectorError, dependency_missing, io_error
 from .inspection import ParsedFile, scene_class_names
 from .jsonio import write_json
 from .model import ArtifactKind, RuntimeArtifact, SceneRef
@@ -184,21 +184,23 @@ def _run_manim(
     sections: bool,
     fresh: bool,
 ) -> _Run:
-    from manim import Scene, tempconfig
-
     def apply_task_values() -> None:
         _apply_settings(target, settings, media_dir, movie=movie, sections=sections, fresh=fresh)
 
     ctx.progress("import", 0, message=ctx.relative(target.path))
-    with tempconfig({}), timeline.recording(ctx.project_root) as recorder:
-        _digest_config_files(ctx.project_root, target.path.parent, settings)
-        apply_task_values()
+    manim = _import_manim(target, ctx)
+    with manim.tempconfig({}), timeline.recording(ctx.project_root) as recorder:
+        try:
+            _digest_config_files(ctx.project_root, target.path.parent, settings)
+            apply_task_values()
+        except Exception as exc:  # a malformed manim.cfg is the project's error, like its code
+            raise _render_failed("setup", target, ctx, exc) from None
         try:
             module = _import_module(target.path, ctx.project_root)
         except (Exception, SystemExit) as exc:
             raise _render_failed("import", target, ctx, exc) from None
         scene_class = getattr(module, target.name, None)
-        if not (isinstance(scene_class, type) and issubclass(scene_class, Scene)):
+        if not (isinstance(scene_class, type) and issubclass(scene_class, manim.Scene)):
             raise DirectorError(
                 "scene_not_found",
                 f"{target.name} in {ctx.relative(target.path)} is not a Manim Scene subclass.",
@@ -214,6 +216,19 @@ def _run_manim(
         except (Exception, SystemExit) as exc:
             raise _render_failed(run.stage, target, ctx, exc) from None
     return run
+
+
+def _import_manim(target: SceneTarget, ctx: Context) -> Any:
+    try:
+        import manim
+    except ModuleNotFoundError as exc:
+        if exc.name != "manim":
+            raise _render_failed("setup", target, ctx, exc) from None
+        hint = "Install Manim Community Edition: pip install 'manim>=0.21,<0.22'."
+        raise dependency_missing("manim", hint) from None
+    except Exception as exc:  # importing Manim reads manim.cfg from the project root
+        raise _render_failed("setup", target, ctx, exc) from None
+    return manim
 
 
 def _digest_config_files(project_root: Path, scene_dir: Path, settings: RenderSettings) -> None:

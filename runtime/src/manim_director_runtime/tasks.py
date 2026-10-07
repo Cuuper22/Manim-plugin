@@ -246,6 +246,15 @@ class ExportEntry:
     path: Path
     archive_path: str
 
+    def __post_init__(self) -> None:
+        # The archive must unpack inside its target directory wherever it is extracted.
+        parts = self.archive_path.split("/")
+        check(
+            "\\" not in self.archive_path and all(p not in ("", ".", "..") for p in parts),
+            "archive_path",
+            "must be a relative POSIX path without empty, . or .. segments",
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ZipExportTask:

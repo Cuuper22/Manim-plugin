@@ -77,3 +77,11 @@ def test_domain_failures_are_skipped_not_counted(ctx) -> None:
     numeric = result["pairs"][0]["numeric"]
     assert numeric["samples_skipped"] > 0
     assert numeric["samples_valid"] + numeric["samples_skipped"] == 40
+
+
+def test_powers_stay_real(ctx) -> None:
+    # Python's ** would return a complex root for x < 3, and abs() would make it look real.
+    result = check(ctx, "abs((x - 3)^0.5)", "abs(x - 3)^0.5", ranges={"x": (-1, 5)}, samples=40)
+    numeric = result["pairs"][0]["numeric"]
+    assert numeric["samples_skipped"] > 0
+    assert numeric["samples_valid"] + numeric["samples_skipped"] == 40

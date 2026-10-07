@@ -229,3 +229,30 @@ def test_syntax_errors_fail_resolution_with_the_exact_location(project: Path, ct
     assert (error.data["stage"], error.data["exception"]) == ("import", "SyntaxError")
     location = error.data["findings"][0].location
     assert (location.file, location.line, location.column) == ("scenes/main.py", 3, 18)
+
+
+@requires_manim
+def test_a_malformed_manim_cfg_fails_the_setup_stage(project: Path) -> None:
+    scene = write_scene(project, DIRECTED)
+    (project / "manim.cfg").write_text("frame_rate = 30\n")  # no [CLI] section header
+    frames, _ = run_bridge(project, render_request(project, "Shapes", [scene]))
+    error = frames[-1]["error"]
+    assert (error["code"], error["data"]["stage"]) == ("render_failed", "setup")
+    assert error["data"]["exception"] == "MissingSectionHeaderError"
+    location = error["data"]["findings"][0]["location"]
+    assert location == {"file": "manim.cfg", "line": 1, "column": None}
+
+
+@requires_manim
+def test_a_missing_asset_is_named_at_the_scene_line(project: Path) -> None:
+    source = (
+        "from manim import *\n\nclass Badge(Scene):\n    def construct(self):\n"
+        "        badge = SVGMobject('missing-badge.svg')\n        self.play(FadeIn(badge))\n"
+    )
+    frames, _ = run_bridge(
+        project, render_request(project, "Badge", [write_scene(project, source)])
+    )
+    finding = frames[-1]["error"]["data"]["findings"][0]
+    assert finding["code"] == "asset_missing"
+    assert "missing-badge.svg" in finding["message"]
+    assert finding["location"] == {"file": "scenes/main.py", "line": 5, "column": None}

@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .errors import DirectorError
+from .errors import invalid_source
 from .paths import public_path
 
 TIMELINE_VERSION = 1
@@ -110,6 +110,4 @@ def load(path: Path) -> Timeline:
         beats = [TimelineBeat(**beat) for beat in raw["beats"]]
         return Timeline(raw["version"], raw["scene"], raw["duration_seconds"], beats)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise DirectorError(
-            "invalid_source", f"Cannot read the beat timeline {path}: {exc}.", {"path": str(path)}
-        ) from exc
+        raise invalid_source(path, f"it is not a beat timeline ({exc})") from exc
