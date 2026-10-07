@@ -617,7 +617,7 @@ mod tests {
     use super::*;
     use manim_director_core::{
         CaptionsResult, CaptionsTask, MediaFormat, RenderResult, RenderSettings, RenderTask,
-        Renderer, SceneRef, ARTIFACTS_DIR,
+        SceneRef, ARTIFACTS_DIR,
     };
 
     fn probe(json: Value) -> ProbeOutput {
@@ -663,13 +663,8 @@ mod tests {
             scene: Some("A".into()),
             files: vec![],
             settings: RenderSettings {
-                profile: "draft".into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
-                format: MediaFormat::Mp4,
                 transparent,
+                ..crate::db::testing::draft()
             },
             media_dir: root.join("media"),
             out_dir: root.join(".manim-director/artifacts/job"),

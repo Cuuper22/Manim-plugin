@@ -940,23 +940,7 @@ async fn reaping_a_copied_projects_jobs_never_touches_the_original_artifacts() {
         profile: None,
     });
     store
-        .insert_job(&crate::NewJob {
-            id,
-            origin: JobOrigin::Cli,
-            owner: Uuid::new_v4(),
-            request: &request,
-            task: &task,
-            limits: manim_director_core::Limits {
-                timeout_seconds: 60,
-                memory_mb: None,
-            },
-            fingerprint: None,
-            source_job_id: None,
-            scene_class: None,
-            scene_file: None,
-            scene_revision: None,
-            profile: None,
-        })
+        .insert_job(&crate::db::testing::new_job(id, &request, &task))
         .unwrap();
     for dir in [&foreign_dir, &artifacts::job_dir(&copy.root, id)] {
         artifacts::create_out_dir(dir.ancestors().nth(3).unwrap(), dir).unwrap();

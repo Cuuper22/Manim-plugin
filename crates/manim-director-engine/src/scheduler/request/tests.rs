@@ -1,11 +1,13 @@
 use super::*;
-use crate::NewJob;
+use crate::{
+    db::testing::{new_job, scene},
+    NewJob,
+};
 use manim_director_core::{
     Artifact, ArtifactKind, CaptionsParams, ContactSheetParams, DiagnoseParams, DiscoverResult,
-    DiscoveredScene, DoctorParams, ErrorBody, ExportFormat, ExportParams, ExportTask, FrameParams,
-    JobOrigin, JobStatus, LogLevel, MediaInfo, OperationResult, QaParams, RenderParams,
-    RenderResult, Resource, SceneRef, SourceKind, SourceRef, StillParams, StillResult,
-    ValidateMathParams, ARTIFACTS_DIR,
+    DoctorParams, ErrorBody, ExportFormat, ExportParams, ExportTask, FrameParams, JobStatus,
+    LogLevel, MediaInfo, OperationResult, QaParams, RenderParams, RenderResult, Resource, SceneRef,
+    SourceKind, SourceRef, StillParams, StillResult, ValidateMathParams, ARTIFACTS_DIR,
 };
 use std::fs;
 
@@ -88,21 +90,11 @@ impl Project {
         let id = Uuid::new_v4();
         self.store
             .insert_job(&NewJob {
-                id,
-                origin: JobOrigin::Cli,
-                owner: Uuid::new_v4(),
-                request: &request,
-                task: &task,
-                limits: Limits {
-                    timeout_seconds: 60,
-                    memory_mb: None,
-                },
-                fingerprint: None,
-                source_job_id: None,
                 scene_class: class,
                 scene_file: file,
                 scene_revision: Some("rev"),
                 profile,
+                ..new_job(id, &request, &task)
             })
             .unwrap();
         self.store.set_running(id).unwrap();
@@ -272,18 +264,7 @@ fn the_discover_index_only_associates_a_job_with_a_file() {
     let index = DiscoverResult {
         files: 2,
         truncated: false,
-        scenes: vec![DiscoveredScene {
-            name: "Wave".into(),
-            file: "scenes/b.py".into(),
-            line: 1,
-            end_line: 2,
-            construct_line: None,
-            bases: vec![],
-            doc: None,
-            theme: None,
-            sections: vec![],
-            beats: vec![],
-        }],
+        scenes: vec![scene("Wave", "scenes/b.py", 1)],
         findings: vec![],
         artifacts: vec![],
     };
@@ -465,23 +446,7 @@ fn diagnosing_a_job_reads_its_error_and_logs() {
     let task = Task::Diagnose(DiagnoseTask { text: "x".into() });
     project
         .store
-        .insert_job(&NewJob {
-            id: failed,
-            origin: JobOrigin::Cli,
-            owner: Uuid::new_v4(),
-            request: &request,
-            task: &task,
-            limits: Limits {
-                timeout_seconds: 60,
-                memory_mb: None,
-            },
-            fingerprint: None,
-            source_job_id: None,
-            scene_class: None,
-            scene_file: None,
-            scene_revision: None,
-            profile: None,
-        })
+        .insert_job(&new_job(failed, &request, &task))
         .unwrap();
     project
         .store

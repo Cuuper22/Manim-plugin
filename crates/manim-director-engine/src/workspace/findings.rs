@@ -289,9 +289,8 @@ mod tests {
     use super::*;
     use crate::{db::testing, workspace::SpecTracker, NewJob};
     use manim_director_core::{
-        DiscoverResult, DiscoveredScene, DoctorParams, DoctorTask, JobOrigin, Limits, MediaFormat,
-        OperationRequest, QaParams, QaResult, QaStatus, QaTask, RenderParams, RenderSettings,
-        RenderTask, Renderer, SafeArea, SourceKind, Task,
+        DiscoverResult, DiscoveredScene, DoctorParams, DoctorTask, JobOrigin, OperationRequest,
+        QaParams, QaResult, QaStatus, QaTask, RenderParams, RenderTask, SafeArea, SourceKind, Task,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -300,21 +299,11 @@ mod tests {
         let id = Uuid::new_v4();
         store
             .insert_job(&NewJob {
-                id,
                 origin: JobOrigin::Http,
-                owner: Uuid::new_v4(),
-                request: &request,
-                task: &task,
-                limits: Limits {
-                    timeout_seconds: 60,
-                    memory_mb: None,
-                },
-                fingerprint: None,
                 source_job_id: source,
                 scene_class: Some("Intro"),
                 scene_file: Some("scenes/main.py"),
-                scene_revision: None,
-                profile: None,
+                ..testing::new_job(id, &request, &task)
             })
             .unwrap();
         store.set_running(id).unwrap();
@@ -344,16 +333,9 @@ mod tests {
             files: 1,
             truncated: false,
             scenes: vec![DiscoveredScene {
-                name: "Intro".into(),
-                file: "scenes/main.py".into(),
-                line: 4,
                 end_line: 20,
                 construct_line: Some(5),
-                bases: vec!["Scene".into()],
-                doc: None,
-                theme: None,
-                sections: vec![],
-                beats: vec![],
+                ..testing::scene("Intro", "scenes/main.py", 4)
             }],
             findings: vec![],
             artifacts: vec![],
@@ -362,15 +344,7 @@ mod tests {
         let render = Task::Render(RenderTask {
             scene: Some("Intro".into()),
             files: vec![root.join("scenes/main.py")],
-            settings: RenderSettings {
-                profile: "draft".into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
-                format: MediaFormat::Mp4,
-                transparent: false,
-            },
+            settings: testing::draft(),
             media_dir: root.join("media"),
             out_dir: root.join("out"),
             sections: false,

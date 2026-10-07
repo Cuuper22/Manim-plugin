@@ -1,5 +1,4 @@
 use super::*;
-use manim_director_core::DiscoveredScene;
 use serde_json::json;
 use std::sync::{Arc, Barrier};
 
@@ -433,18 +432,7 @@ fn python_is_checked_with_the_configured_interpreter() {
     let index = DiscoverResult {
         files: 1,
         truncated: false,
-        scenes: vec![DiscoveredScene {
-            name: "Intro".into(),
-            file: "scenes/a.py".into(),
-            line: 1,
-            end_line: 2,
-            construct_line: None,
-            bases: vec!["Scene".into()],
-            doc: None,
-            theme: None,
-            sections: vec![],
-            beats: vec![],
-        }],
+        scenes: vec![crate::db::testing::scene("Intro", "scenes/a.py", 1)],
         findings: vec![],
         artifacts: vec![],
     };

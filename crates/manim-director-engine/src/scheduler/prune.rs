@@ -179,11 +179,13 @@ fn prune_snapshots(undo: &Path, keep: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db::testing::queued_job, Finish, NewJob};
+    use crate::{
+        db::testing::{draft, new_job, queued_job},
+        Finish, NewJob,
+    };
     use manim_director_core::{
-        Artifact, ArtifactKind, ErrorBody, JobOrigin, JobStatus, Limits, MediaFormat, Operation,
-        OperationRequest, OperationResult, RenderParams, RenderResult, RenderSettings, RenderTask,
-        Renderer, SceneRef, Task, ARTIFACTS_DIR,
+        Artifact, ArtifactKind, ErrorBody, JobStatus, Operation, OperationRequest, OperationResult,
+        RenderParams, RenderResult, RenderSettings, RenderTask, SceneRef, Task, ARTIFACTS_DIR,
     };
 
     fn finished(store: &Store, root: &Path, status: JobStatus) -> Uuid {
@@ -244,12 +246,7 @@ mod tests {
             files: vec![],
             settings: RenderSettings {
                 profile: profile.into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
-                format: MediaFormat::Mp4,
-                transparent: false,
+                ..draft()
             },
             media_dir: root.join("media"),
             out_dir: out_dir.clone(),
@@ -274,21 +271,10 @@ mod tests {
             }],
         });
         let job = NewJob {
-            id,
-            origin: JobOrigin::Cli,
-            owner: Uuid::new_v4(),
-            request: &request,
-            task: &task,
-            limits: Limits {
-                timeout_seconds: 60,
-                memory_mb: None,
-            },
-            fingerprint: None,
-            source_job_id: None,
             scene_class: Some("Intro"),
             scene_file: Some("scenes/main.py"),
-            scene_revision: None,
             profile: Some(profile),
+            ..new_job(id, &request, &task)
         };
         match cached_from {
             Some(origin) => {

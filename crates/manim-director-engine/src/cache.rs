@@ -106,7 +106,7 @@ pub fn file_revision(path: &Path) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manim_director_core::{DiscoverTask, MediaFormat, RenderSettings, Renderer, StillTask};
+    use manim_director_core::{DiscoverTask, MediaFormat, RenderSettings, StillTask};
     use std::fs;
 
     fn still(out_dir: &str, fresh: bool) -> Task {
@@ -114,13 +114,8 @@ mod tests {
             scene: Some("A".into()),
             files: vec![],
             settings: RenderSettings {
-                profile: "draft".into(),
-                width: 854,
-                height: 480,
-                fps: 15,
-                renderer: Renderer::Cairo,
                 format: MediaFormat::Png,
-                transparent: false,
+                ..crate::db::testing::draft()
             },
             media_dir: "/m".into(),
             out_dir: out_dir.into(),
