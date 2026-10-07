@@ -21,7 +21,11 @@ pub const SPEC_FILE: &str = "director.yaml";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SpecError {
-    #[error("no {SPEC_FILE} in {} or any parent directory", .0.display())]
+    #[error(
+        "no {SPEC_FILE} in {} or any parent directory; create a project with \
+         `manim-director init`, or point --project at one",
+        .0.display()
+    )]
     NotFound(PathBuf),
     #[error("could not read {}: {source}", path.display())]
     Read { path: PathBuf, source: io::Error },
@@ -44,7 +48,7 @@ impl From<SpecError> for EngineError {
         let reason = match &error {
             SpecError::NotFound(_) => error.to_string(),
             SpecError::Read { source, .. } if source.kind() == io::ErrorKind::NotFound => {
-                format!("{SPEC_FILE} is missing")
+                format!("{SPEC_FILE} is missing; init creates a project here")
             }
             SpecError::Read { source, .. } => format!("could not read {SPEC_FILE}: {source}"),
             SpecError::Parse { message, .. } => format!("{SPEC_FILE}: {message}"),
@@ -456,6 +460,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let error = EngineError::from(DirectorSpec::load(directory.path()).unwrap_err());
         assert_eq!(error.code(), "invalid_spec");
-        assert!(error.to_string().contains("director.yaml is missing"));
+        assert!(error
+            .to_string()
+            .contains("director.yaml is missing; init creates a project here"));
+        let nowhere = SpecError::NotFound(directory.path().into()).to_string();
+        assert!(nowhere.ends_with(
+            "or any parent directory; create a project with `manim-director init`, \
+             or point --project at one"
+        ));
     }
 }
