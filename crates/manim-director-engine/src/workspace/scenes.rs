@@ -3,7 +3,7 @@
 
 use manim_director_core::{
     BeatIntent, DirectorSpec, DiscoverResult, DiscoveredScene, ErrorBody, Finding, SceneSpec,
-    Timestamp, Transition,
+    SectionMark, Timestamp, Transition,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -140,12 +140,6 @@ pub struct LineSpan {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SceneSection {
-    pub name: Option<String>,
-    pub line: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SceneBeat {
     pub name: Option<String>,
     pub span: LineSpan,
@@ -168,7 +162,7 @@ pub struct Scene {
     pub bases: Vec<String>,
     pub theme: Option<String>,
     pub summary: Option<String>,
-    pub sections: Vec<SceneSection>,
+    pub sections: Vec<SectionMark>,
     pub beats: Vec<SceneBeat>,
     pub declared: Option<DeclaredScene>,
     pub parse_failed: bool,
@@ -214,14 +208,7 @@ fn scene(found: &DiscoveredScene, entry: Option<&SceneSpec>, parse_failed: bool)
         bases: found.bases.clone(),
         theme: found.theme.clone(),
         summary: found.doc.clone(),
-        sections: found
-            .sections
-            .iter()
-            .map(|section| SceneSection {
-                name: section.name.clone(),
-                line: section.line,
-            })
-            .collect(),
+        sections: found.sections.clone(),
         beats: found
             .beats
             .iter()
