@@ -126,6 +126,10 @@ def test_unknown_template_or_theme_lists_the_choices(project: Path, ctx) -> None
         "reason": "unknown template",
         "allowed": list(TEMPLATES),
     }
+    # The message names the choices too: the CLI's human output shows no error data.
+    assert (
+        raised.value.message == f"Unknown template 'slides'; choose one of {', '.join(TEMPLATES)}."
+    )
     with pytest.raises(DirectorError) as raised:
         init(add_scene(project, "equation_derivation"), ctx)
     assert raised.value.data["field"] == "scene_template"

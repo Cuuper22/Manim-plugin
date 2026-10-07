@@ -20,7 +20,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .errors import DirectorError, invalid_params, io_error
+from .errors import DirectorError, io_error
 from .inspection import DIRECTOR_SCENE_BASES
 from .model import ArtifactKind, RuntimeArtifact, SceneRef
 from .paths import atomic_target, slug
@@ -84,10 +84,10 @@ def _create(task: InitTask, ctx: Context) -> InitResult:
     root = ctx.project_root
     template = task.template or DEFAULT_TEMPLATE
     if template not in templates():
-        raise invalid_params("template", "unknown template", allowed=list(templates()))
+        raise _unknown("template", template, list(templates()))
     theme = task.theme or next(iter(themes()))
     if theme not in themes():
-        raise invalid_params("theme", "unknown theme", allowed=list(themes()))
+        raise _unknown("theme", theme, list(themes()))
     name = (task.name or root.name or "Manim Project").strip()
     project_slug = slug(name, fallback="manim-project")
     seed = task.seed if task.seed is not None else _seed_for(project_slug)
@@ -124,7 +124,7 @@ def _create(task: InitTask, ctx: Context) -> InitResult:
 def _add_scene(task: InitTask, ctx: Context) -> InitResult:
     assert task.scene_template is not None and task.source_dir is not None
     if task.scene_template not in templates():
-        raise invalid_params("scene_template", "unknown scene template", allowed=list(templates()))
+        raise _unknown("scene_template", task.scene_template, list(templates()))
     source = scene_source(task.scene_template)
     source_dir = ctx.require_inside(task.source_dir, "source_dir")
     target = source_dir / f"{task.scene_template}.py"
@@ -150,6 +150,17 @@ def _add_scene(task: InitTask, ctx: Context) -> InitResult:
         theme=None,
         scene=SceneRef(name=scene_class(source), file=ctx.relative(target)),
         artifacts=[ctx.artifact(ArtifactKind.FILE, target)],
+    )
+
+
+def _unknown(field: str, value: str, allowed: list[str]) -> DirectorError:
+    """invalid_params whose message itself names the choices (CLI output shows no data)."""
+
+    what = field.replace("_", " ")
+    return DirectorError(
+        "invalid_params",
+        f"Unknown {what} {value!r}; choose one of {', '.join(allowed)}.",
+        {"field": field, "reason": f"unknown {what}", "allowed": allowed},
     )
 
 
