@@ -717,6 +717,31 @@ async fn renders_of_one_scene_wait_for_each_other() {
     );
 }
 
+#[tokio::test]
+async fn a_job_waiting_for_a_scene_lock_leaves_its_worker_to_other_jobs() {
+    let project = Project::new("");
+    let scheduler = project.scheduler("stub", 2, 8).await;
+    let render = || {
+        OperationRequest::Render(RenderParams {
+            scene: Some("SlowScene".into()),
+            fresh: true,
+            ..Default::default()
+        })
+    };
+    let mut renders = Vec::new();
+    for _ in 0..2 {
+        let job = scheduler.submit(JobOrigin::Cli, render()).await.unwrap();
+        wait_until_running(&scheduler, job.job().id).await;
+        renders.push(job.into_job().id);
+    }
+    let other = run(&scheduler, diagnose("x")).await;
+    assert_eq!(other.status, JobStatus::Succeeded, "{:?}", other.error);
+    for id in renders {
+        scheduler.cancel(id).await.unwrap();
+        scheduler.wait(id).await.unwrap();
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn the_memory_ceiling_comes_from_the_budget_only_when_set() {

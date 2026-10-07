@@ -37,7 +37,7 @@ use std::{
     sync::{Arc, Weak},
     time::Duration,
 };
-use tokio::sync::{broadcast, mpsc, watch, Semaphore};
+use tokio::sync::{broadcast, mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -381,29 +381,49 @@ impl Scheduler {
     }
 }
 
-/// Hands queued jobs to at most `workers` concurrent runs, in order. A worker
-/// is reserved before the next job is taken, so the channel holds exactly the
-/// jobs still waiting.
+/// Hands queued jobs to at most `workers` concurrent runs, in order. A
+/// worker is taken only for a job in hand, so a job that gave its worker
+/// back while it waits for a scene lock can always get one again.
 fn dispatch(inner: &Arc<Inner>, mut receiver: mpsc::UnboundedReceiver<Queued>, workers: usize) {
     let workers = Arc::new(Semaphore::new(workers));
     let dispatcher: Weak<Inner> = Arc::downgrade(inner);
     tokio::spawn(async move {
         loop {
-            let Ok(permit) = workers.clone().acquire_owned().await else {
+            let Some(queued) = receiver.recv().await else {
                 break;
             };
-            let Some(queued) = receiver.recv().await else {
+            let Ok(permit) = workers.clone().acquire_owned().await else {
                 break;
             };
             let Some(inner) = dispatcher.upgrade() else {
                 break;
             };
-            tokio::spawn(async move {
-                let _permit = permit;
-                inner.run(queued).await;
-            });
+            let mut slot = Slot {
+                workers: workers.clone(),
+                permit: Some(permit),
+            };
+            tokio::spawn(async move { inner.run(queued, &mut slot).await });
         }
     });
+}
+
+/// A running job's claim on a worker, given back while the job only waits
+/// for a scene lock so unrelated jobs can run meanwhile.
+struct Slot {
+    workers: Arc<Semaphore>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Slot {
+    async fn take(&mut self) {
+        if self.permit.is_none() {
+            self.permit = self.workers.clone().acquire_owned().await.ok();
+        }
+    }
+
+    fn give_back(&mut self) {
+        self.permit = None;
+    }
 }
 
 enum Plan {
