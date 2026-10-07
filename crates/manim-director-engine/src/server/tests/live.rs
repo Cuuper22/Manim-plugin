@@ -340,6 +340,19 @@ async fn a_bound_server_answers_real_sockets_on_its_tokenized_url() {
         .unwrap()
         .to_owned();
     assert_eq!(token.len(), 43);
+    let taken = ServeConfig {
+        address,
+        workbench_dir: None,
+        allow_remote: false,
+    };
+    let refused = Server::bind(taken, harness.state.scheduler.clone()).await;
+    assert_eq!(
+        refused.err().unwrap().to_string(),
+        format!(
+            "port {} is in use, probably by a running engine: open the workbench link it printed, or pass --port",
+            address.port()
+        )
+    );
     let serving = tokio::spawn(server.run());
     let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
     let request = format!(
