@@ -82,3 +82,15 @@ def test_gif_export_uses_a_representable_frame_delay(project: Path, ctx) -> None
 
 def test_gif_delays_are_whole_centiseconds() -> None:
     assert [gif_delay_centiseconds(fps) for fps in (1, 15, 30, 50)] == [100, 7, 3, 2]
+
+
+@requires_ffmpeg
+def test_transcodes_report_progress_up_to_done(project: Path, ctx, writer) -> None:
+    source = make_video(project / "render.mp4", seconds=1.0, size="320x180", fps=10)
+    task = MediaExportTask(
+        format="webm", output=project / "output/final.webm", source=source, alpha=False, gif=None
+    )
+    assert as_json(export(task, ctx))["transcoded"] is True
+    ctx.flush()
+    steps = [(f["current"], f["total"]) for f in writer.frames if f.get("phase") == "transcode"]
+    assert steps[0] == (0, None) and steps[-1] == (100, 100)

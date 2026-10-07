@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 from . import __version__, process
 from .errors import io_error
+from .media import probe_video
 from .model import ArtifactKind, RuntimeArtifact
 from .paths import atomic_target
 from .tasks import ExportTask, MediaExportTask, ZipExportTask
@@ -112,7 +113,9 @@ def _export_media(task: MediaExportTask, ctx: Context) -> ExportResult:
                     "aac",
                 ]
             elif task.format == "webm":
-                args += ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus"]
+                # libvpx defaults to its slowest settings (cpu-used 0, one thread per row).
+                args += ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-row-mt", "1"]
+                args += ["-deadline", "good", "-cpu-used", "4", "-c:a", "libopus"]
                 if task.alpha:
                     args += ["-pix_fmt", "yuva420p"]
             else:
@@ -124,7 +127,18 @@ def _export_media(task: MediaExportTask, ctx: Context) -> ExportResult:
                     "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a"
                 )
                 args += ["-filter_complex", graph, "-loop", "0"]
-            process.run("ffmpeg", [*args, "-f", task.format, str(temp)])
+            seconds = probe_video(task.source).duration_seconds
+
+            def progress(line: str) -> None:  # key=value lines from -progress pipe:1
+                key, _, value = line.partition("=")
+                if key == "out_time_us" and value.isdigit() and seconds > 0:
+                    done = min(99, round(int(value) / 1e6 / seconds * 100))
+                    ctx.progress("transcode", done, 100)
+                elif line == "progress=end":
+                    ctx.progress("transcode", 100, 100)
+
+            args += ["-progress", "pipe:1", "-nostats"]
+            process.run("ffmpeg", [*args, "-f", task.format, str(temp)], lines=progress)
     return ExportResult(
         format=task.format,
         transcoded=transcoded,

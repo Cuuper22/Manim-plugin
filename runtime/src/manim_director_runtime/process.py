@@ -12,6 +12,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable
 
 from .errors import DirectorError, dependency_missing
 
@@ -31,21 +33,38 @@ def require(executable: str) -> str:
     return path
 
 
-def run(tool: str, args: list[str]) -> bytes:
-    """Run `tool` with `args`; return stdout or raise `media_error` with the stderr tail."""
+def run(tool: str, args: list[str], *, lines: Callable[[str], None] | None = None) -> bytes:
+    """Run `tool` with `args`; return stdout or raise `media_error` with the stderr tail.
+    `lines` receives stdout line by line while the tool runs (ffmpeg's -progress pipe:1)."""
 
-    completed = subprocess.run(
-        [require(tool), *args], stdin=subprocess.DEVNULL, capture_output=True, check=False
-    )
-    if completed.returncode != 0:
-        tail = completed.stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
+    command = [require(tool), *args]
+    if lines is None:
+        completed = subprocess.run(
+            command, stdin=subprocess.DEVNULL, capture_output=True, check=False
+        )
+        code, stdout, stderr = completed.returncode, completed.stdout, completed.stderr
+    else:
+        # stderr goes to a file: a pipe nobody reads while stdout streams could fill and block.
+        with tempfile.TemporaryFile() as errors:
+            with subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors
+            ) as child:
+                assert child.stdout is not None
+                chunks = []
+                for raw in child.stdout:
+                    chunks.append(raw)
+                    lines(raw.decode("utf-8", errors="replace").strip())
+            errors.seek(0)
+            code, stdout, stderr = child.returncode, b"".join(chunks), errors.read()
+    if code != 0:
+        tail = stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
         last_line = next((line for line in reversed(tail.splitlines()) if line.strip()), "")
         raise DirectorError(
             "media_error",
-            f"{tool} exited with status {completed.returncode}: {last_line[:300] or 'no output'}",
-            {"tool": tool, "exit_code": completed.returncode, "stderr_tail": tail},
+            f"{tool} exited with status {code}: {last_line[:300] or 'no output'}",
+            {"tool": tool, "exit_code": code, "stderr_tail": tail},
         )
-    return completed.stdout
+    return stdout
 
 
 _VERSION = re.compile(r"\d+(?:\.\d+)+[\w.+-]*")
