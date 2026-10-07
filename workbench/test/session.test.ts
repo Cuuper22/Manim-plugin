@@ -307,3 +307,27 @@ test("the minimal change keeps the common start and end", () => {
   });
   assert.equal(minimalChange(Text.of(["same"]), Text.of(["same"])), null);
 });
+
+test("closing a file brings up its neighbour, and reopening it reads the disk again", async () => {
+  const { access, external } = engine({ "a.py": "a\n", "b.py": "b\n", "c.py": "c\n" });
+  const session = new EditorSession(access, () => []);
+  const view = port(session);
+  session.attach(view);
+  for (const path of ["a.py", "b.py", "c.py"]) await session.open(path, null);
+  session.switchTo("b.py");
+  view.type("unsaved\n");
+
+  assert.equal(session.close("b.py"), true);
+  assert.equal(session.getSnapshot().active, "c.py");
+  assert.equal(view.state.sliceDoc(), "c\n");
+  session.close("c.py");
+  assert.deepEqual(session.getSnapshot().docs.map((doc) => doc.path), ["a.py"]);
+  assert.equal(session.getSnapshot().active, "a.py");
+
+  external("b.py", "theirs\n");
+  await session.open("b.py", null);
+  assert.equal(view.state.sliceDoc(), "theirs\n", "the dropped edits are gone");
+  session.close("a.py");
+  session.close("b.py");
+  assert.deepEqual(session.getSnapshot(), { active: null, docs: [], opening: null, openError: null });
+});

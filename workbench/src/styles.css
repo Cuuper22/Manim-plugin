@@ -915,6 +915,21 @@ kbd {
   overflow-x: auto;
 }
 
+.tab-close {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  & svg {
+    width: 12px;
+    height: 12px;
+  }
+  &:hover {
+    background: var(--surface-muted);
+    color: var(--text);
+  }
+}
+
 .code-host {
   flex: 1;
   min-height: 0;

@@ -141,6 +141,27 @@ export class EditorSession {
   }
 
   /**
+   * Closes a document, dropping any unsaved edits; the next one, else the previous, becomes active.
+   * `false` while it is being saved.
+   */
+  close(path: string): boolean {
+    const doc = this.#docs.get(path);
+    if (!doc) return true;
+    if (doc.write) return false;
+    const paths = [...this.#docs.keys()];
+    const index = paths.indexOf(path);
+    const neighbour = paths[index + 1] ?? paths[index - 1];
+    this.#docs.delete(path);
+    this.#disk.delete(path);
+    if (this.#active === doc) {
+      this.#active = null;
+      if (neighbour !== undefined) this.#activate(this.#docs.get(neighbour)!);
+    }
+    this.#emit();
+    return true;
+  }
+
+  /**
    * Saves the active document if it has anything to save.
    * `false` when it was not saved (the reason is on the document or a toast).
    */

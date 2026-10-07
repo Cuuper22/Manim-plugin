@@ -301,7 +301,12 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
           onTab={setTab}
           active={region === "inspector"}
           findingCount={findingCount}
-          editor={{ request: openRequest, api: editor, onPreview: () => void run("preview") }}
+          editor={{
+            request: openRequest,
+            api: editor,
+            onPreview: () => void run("preview"),
+            home: scene ? { path: scene.file, line: scene.span.start } : null,
+          }}
         >
           <FindingsPane
             findings={shownFindings}
