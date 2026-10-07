@@ -151,18 +151,12 @@ export interface ErrorBody {
   data: Record<string, unknown> | null;
 }
 
-// ── operation results ───────────────────────────────────────────────────────
-
-export interface SceneRef {
-  name: string;
-  file: ProjectPath;
+export interface SheetFrame {
+  at_seconds: number;
+  beat: string | null;
 }
 
-export interface MediaSource {
-  path: ProjectPath;
-  job_id: JobId | null;
-  scene: string | null;
-}
+// ── operation results (only those read here) ────────────────────────────────
 
 export interface DoctorResult {
   ok: boolean;
@@ -188,136 +182,10 @@ export interface DoctorResult {
   artifacts: OpsArtifact[];
 }
 
-export interface RenderResult {
-  scene: SceneRef;
-  duration_seconds: number;
-  animations: number;
-  artifacts: OpsArtifact[];
-}
-
-export interface StillResult {
-  scene: SceneRef;
-  artifacts: OpsArtifact[];
-}
-
-export interface FrameResult {
-  at_seconds: number;
-  source: MediaSource | null;
-  artifacts: OpsArtifact[];
-}
-
-export interface SheetFrame {
-  at_seconds: number;
-  beat: string | null;
-}
-
-export interface ContactSheetResult {
-  frames: SheetFrame[];
-  columns: number;
-  rows: number;
-  source: MediaSource | null;
-  artifacts: OpsArtifact[];
-}
-
-export interface QaResult {
-  status: "pass" | "warn" | "fail";
-  frames: {
-    at_seconds: number | null;
-    path: ProjectPath;
-    metrics: {
-      mean_luminance: number;
-      luminance_stddev: number;
-      contrast_ratio: number;
-      foreground_fraction: number;
-      unsafe_fraction: number;
-      edge_activity: number;
-      foreground_bbox: [number, number, number, number] | null;
-      background_rgb: [number, number, number];
-    };
-  }[];
-  findings: OpsFinding[];
-  source: MediaSource | null;
-  artifacts: OpsArtifact[];
-}
-
 export interface DiagnoseResult {
   recognized: boolean;
   findings: OpsFinding[];
   artifacts: OpsArtifact[];
-}
-
-export interface ValidateMathResult {
-  /** `null` when no pair could be decided. */
-  valid: boolean | null;
-  variables: string[];
-  pairs: {
-    index: number;
-    equivalent: boolean | null;
-    symbolic: { available: boolean; equivalent: boolean | null; difference: string | null };
-    numeric: {
-      samples_valid: number;
-      samples_skipped: number;
-      max_abs_error: number | null;
-      max_rel_error: number | null;
-      counterexample: { variables: Record<string, number>; left: number | null; right: number | null } | null;
-    };
-  }[];
-  artifacts: OpsArtifact[];
-}
-
-export interface CaptionsResult {
-  cue_count: number;
-  duration_seconds: number;
-  valid: boolean;
-  findings: OpsFinding[];
-  artifacts: OpsArtifact[];
-}
-
-export interface IngestResult {
-  sources: {
-    id: string;
-    kind: string;
-    path: ProjectPath;
-    bytes: number;
-    sha256: string;
-    origin: string;
-    summary: string | null;
-    headings: string[];
-    columns: string[];
-    rows: number | null;
-    pages: number | null;
-    scenes: string[];
-    width: number | null;
-    height: number | null;
-    duration_seconds: number | null;
-    normalized: boolean;
-  }[];
-  artifacts: OpsArtifact[];
-}
-
-export interface ExportResult {
-  format: ExportFormat;
-  transcoded: boolean;
-  effective_fps: number | null;
-  files: number | null;
-  uncompressed_bytes: number | null;
-  missing: string[] | null;
-  source: MediaSource | null;
-  artifacts: OpsArtifact[];
-}
-
-export interface OperationResults {
-  doctor: DoctorResult;
-  render: RenderResult;
-  still: StillResult;
-  frame: FrameResult;
-  contact_sheet: ContactSheetResult;
-  qa: QaResult;
-  diagnose: DiagnoseResult;
-  validate_math: ValidateMathResult;
-  captions: CaptionsResult;
-  ingest: IngestResult;
-  export: ExportResult;
 }
 
 // ── jobs ────────────────────────────────────────────────────────────────────
@@ -348,10 +216,10 @@ export interface JobSummary {
   artifacts_total: number;
 }
 
-/** One job with every artifact still on disk; `result` is non-null iff succeeded. */
-export type Job = {
-  [Operation in JobOperation]: JobSummary & { operation: Operation; result: OperationResults[Operation] | null };
-}[JobOperation];
+/** One job with every artifact still on disk; `result` is non-null iff succeeded. Only a diagnosis's is read. */
+export type Job =
+  | (JobSummary & { operation: "diagnose"; result: DiagnoseResult | null })
+  | (JobSummary & { operation: Exclude<JobOperation, "diagnose">; result: unknown });
 
 export interface JobPage {
   items: JobSummary[];
