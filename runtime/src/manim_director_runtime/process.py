@@ -6,8 +6,12 @@ whole group on cancel, so nothing here waits with a timeout or detaches a sessio
 
 from __future__ import annotations
 
+import os
+import re
+import shlex
 import shutil
 import subprocess
+import sys
 
 from .errors import DirectorError, dependency_missing
 
@@ -44,7 +48,12 @@ def run(tool: str, args: list[str]) -> bytes:
     return completed.stdout
 
 
-def version_line(path: str, flag: str) -> str | None:
+_VERSION = re.compile(r"\d+(?:\.\d+)+[\w.+-]*")
+
+
+def version(path: str, flag: str) -> str | None:
+    """The first version-like token of the tool's banner ("6.1.1" of "ffmpeg version 6.1.1 ...")."""
+
     try:
         completed = subprocess.run(
             [path, flag], stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False
@@ -52,4 +61,13 @@ def version_line(path: str, flag: str) -> str | None:
     except OSError:
         return None
     lines = (completed.stdout or completed.stderr).strip().splitlines()
-    return lines[0].strip() if lines else None
+    match = _VERSION.search(lines[0]) if lines else None
+    return match.group() if match else None
+
+
+def pip_install(*requirements: str) -> str:
+    """The pip command for the interpreter running the runtime: a bare `pip` on PATH usually
+    belongs to another environment than the installer's venv."""
+
+    args = [sys.executable, "-m", "pip", "install", *requirements]
+    return subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args)

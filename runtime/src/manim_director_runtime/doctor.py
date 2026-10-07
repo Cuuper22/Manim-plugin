@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .protocol import Context
 
 LOW_DISK_BYTES = 512 * 1024 * 1024
+MANIM_REQUIREMENT = "manim>=0.21,<0.22"
 # Check name -> (module that must import, distribution name), in report order.
 PACKAGES = {
     "manim": ("manim", "manim"),
@@ -139,7 +140,7 @@ def _executable(name: str) -> Check:
     path = shutil.which(name)
     # FFmpeg tools reject GNU-style --version.
     flag = "-version" if name in ("ffmpeg", "ffprobe") else "--version"
-    version = process.version_line(path, flag) if path else None
+    version = process.version(path, flag) if path else None
     return Check(
         name=name, kind="executable", available=path is not None, version=version, path=path
     )
@@ -174,19 +175,19 @@ def _findings(
         return f"{label} is not installed"
 
     required = {
-        "manim": ("manim_missing", "Manim Community Edition", "pip install 'manim>=0.21,<0.22'"),
-        "numpy": ("numpy_missing", "NumPy", "pip install numpy"),
-        "PIL": ("pillow_missing", "Pillow", "pip install Pillow"),
-        "av": ("av_missing", "PyAV", "pip install av"),
-        "yaml": ("yaml_missing", "PyYAML", "pip install PyYAML"),
+        "manim": ("manim_missing", "Manim Community Edition", MANIM_REQUIREMENT),
+        "numpy": ("numpy_missing", "NumPy", "numpy"),
+        "PIL": ("pillow_missing", "Pillow", "Pillow"),
+        "av": ("av_missing", "PyAV", "av"),
+        "yaml": ("yaml_missing", "PyYAML", "PyYAML"),
     }
-    for name, (code, label, command) in required.items():
+    for name, (code, label, requirement) in required.items():
         if not have[name]:
             add(
                 code,
                 Severity.ERROR,
                 f"{absent(name, label)}; scenes cannot render.",
-                f"Run {command}.",
+                f"Run {process.pip_install(requirement)}",
             )
     if not capabilities.video_tools:
         add(
@@ -214,14 +215,14 @@ def _findings(
             "sympy_missing",
             Severity.INFO,
             f"{absent('sympy', 'SymPy')}; validate_math checks numerically only.",
-            "Run pip install sympy.",
+            f"Run {process.pip_install('sympy')}",
         )
     if not have["pypdf"]:
         add(
             "pypdf_missing",
             Severity.INFO,
             f"{absent('pypdf', 'pypdf')}; PDF sources cannot be ingested.",
-            "Run pip install pypdf.",
+            f"Run {process.pip_install('pypdf')}",
         )
     if opengl_error:
         add(

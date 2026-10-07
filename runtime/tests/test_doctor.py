@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import shlex
+import sys
+
 from conftest import as_json
 from manim_director_runtime.doctor import doctor
 from manim_director_runtime.tasks import DoctorTask
@@ -73,3 +76,14 @@ def test_a_package_that_fails_to_import_is_reported_as_broken(ctx, tmp_path, mon
         "SymPy is installed but fails to import (ImportError: libfoo.so: cannot open); "
         "validate_math checks numerically only."
     )
+    # pip for this interpreter: a bare `pip` on PATH installs into another environment.
+    assert finding["hint"] == f"Run {shlex.quote(sys.executable)} -m pip install sympy"
+
+
+def test_executable_versions_are_version_numbers(tmp_path) -> None:
+    from manim_director_runtime import process
+
+    tool = tmp_path / "ffmpeg"
+    tool.write_text("#!/bin/sh\necho 'ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023'\n")
+    tool.chmod(0o755)
+    assert process.version(str(tool), "-version") == "6.1.1-3ubuntu5"

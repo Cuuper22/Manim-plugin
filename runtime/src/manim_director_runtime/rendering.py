@@ -25,6 +25,7 @@ from .inspection import ParsedFile, scene_class_names
 from .jsonio import write_json
 from .model import ArtifactKind, RuntimeArtifact, SceneRef, SourceLocation
 from .paths import ensure_dir, slug
+from .process import pip_install
 from .tasks import RenderSettings, RenderTask, StillTask
 
 if TYPE_CHECKING:
@@ -227,7 +228,7 @@ def _import_manim(target: SceneTarget, ctx: Context) -> Any:
     except ModuleNotFoundError as exc:
         if exc.name != "manim":
             raise _render_failed("setup", target, ctx, exc) from None
-        hint = "Install Manim Community Edition: pip install 'manim>=0.21,<0.22'."
+        hint = f"Install Manim Community Edition: {pip_install('manim>=0.21,<0.22')}"
         raise dependency_missing("manim", hint) from None
     except Exception as exc:  # importing Manim reads manim.cfg from the project root
         raise _render_failed("setup", target, ctx, exc) from None
