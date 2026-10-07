@@ -1,21 +1,23 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "allowJs": false,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "strict": true,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "isolatedModules": true,
+    // `npm test` runs these sources with Node's type stripping, which needs
+    // explicit `.ts` imports and syntax that erases without a transform.
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": []
   },
-  "include": ["src"],
-  "references": []
+  "include": ["src"]
 }
