@@ -176,7 +176,7 @@ class ArchiveExtractionTests(unittest.TestCase):
                 else:
                     bundle.addfile(member)
 
-    def test_extracts_binary_from_exact_signed_release_layout(self) -> None:
+    def test_extracts_binary_from_the_release_layout(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             directory = Path(raw_tmp)
             zip_path = directory / "release.zip"
@@ -249,7 +249,7 @@ class ArchiveExtractionTests(unittest.TestCase):
             self._write_tar(
                 multiple, [*self._tar_release_members("manim-director", b"x"), (extra, b"x")]
             )
-            with self.assertRaisesRegex(RuntimeError, "exact signed release layout"):
+            with self.assertRaisesRegex(RuntimeError, "expected release layout"):
                 install.extract_binary(
                     multiple, "tar.gz", "manim-director", directory / "multiple-output"
                 )

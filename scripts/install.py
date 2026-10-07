@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -152,9 +153,7 @@ def extract_binary(archive: Path, archive_kind: str, binary_name: str, destinati
                 members = bundle.infolist()
                 names = [member.filename for member in members]
                 if len(names) != len(expected_names) or set(names) != expected_names:
-                    raise RuntimeError(
-                        "Release archive does not contain the exact signed release layout"
-                    )
+                    raise RuntimeError("Release archive does not have the expected release layout")
                 for member in members:
                     _validate_member_name(member.filename, expected_names)
                     unix_mode = (member.external_attr >> 16) & 0xFFFF
@@ -175,9 +174,7 @@ def extract_binary(archive: Path, archive_kind: str, binary_name: str, destinati
                 members = bundle.getmembers()
                 names = [member.name for member in members]
                 if len(names) != len(expected_names) or set(names) != expected_names:
-                    raise RuntimeError(
-                        "Release archive does not contain the exact signed release layout"
-                    )
+                    raise RuntimeError("Release archive does not have the expected release layout")
                 for member in members:
                     _validate_member_name(member.name, expected_names)
                     if not member.isfile():
@@ -196,14 +193,26 @@ def extract_binary(archive: Path, archive_kind: str, binary_name: str, destinati
         raise RuntimeError("Release archive is invalid") from exc
 
 
-def download_binary(destination: Path) -> None:
-    version = release_version()
-    target, archive_kind = release_target()
-    asset = f"manim-director-v{version}-{target}.{archive_kind}"
+def release_base(version: str) -> str:
+    """Where the release archive and its SHA256SUMS come from.
+
+    The checksum only proves the archive matches what that origin published, so
+    both must arrive over HTTPS (or from a local mirror).
+    """
     base = os.environ.get(
         "MANIM_DIRECTOR_RELEASE_BASE",
         f"https://github.com/Cuuper22/Manim-plugin/releases/download/v{version}",
     ).rstrip("/")
+    if urllib.parse.urlsplit(base).scheme.lower() not in {"https", "file"}:
+        raise SystemExit(f"MANIM_DIRECTOR_RELEASE_BASE must be an https:// or file:// URL: {base}")
+    return base
+
+
+def download_binary(destination: Path) -> None:
+    version = release_version()
+    target, archive_kind = release_target()
+    asset = f"manim-director-v{version}-{target}.{archive_kind}"
+    base = release_base(version)
     archive_url = f"{base}/{asset}"
     checksum_url = f"{base}/SHA256SUMS"
     print(f"+ download {archive_url}", flush=True)

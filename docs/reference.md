@@ -57,7 +57,7 @@ verdict.
 | `MANIM_DIRECTOR_KEEP_JOBS`, `MANIM_DIRECTOR_KEEP_DAYS` | Pruning of finished jobs and their artifacts (500 jobs, 30 days); the latest artifacts of every scene are kept. |
 | `MANIM_DIRECTOR_WORKBENCH` | Same as `--workbench-dir`. |
 | `MANIM_DIRECTOR_PREFIX` | Install prefix for `install.py`, and a place the MCP launcher looks for `bin/manim-director`. |
-| `MANIM_DIRECTOR_RELEASE_BASE` | Where `install.py` downloads release archives from. |
+| `MANIM_DIRECTOR_RELEASE_BASE` | Where `install.py` downloads release archives and `SHA256SUMS` from: an `https://` or `file://` URL. |
 | `RUST_LOG` | Engine log filter (default `warn`). |
 
 ## director.yaml
