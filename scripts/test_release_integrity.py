@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
+import shutil
 import stat
 import sys
 import tarfile
@@ -19,12 +20,48 @@ import package_release  # noqa: E402
 import release_integrity  # noqa: E402
 
 
+RELEASE_FILES = (
+    *release_integrity.PLUGIN_MANIFESTS,
+    *release_integrity.MARKETPLACES,
+    "Cargo.toml",
+    "Cargo.lock",
+    "THIRD_PARTY_NOTICES.md",
+    "runtime/pyproject.toml",
+    "runtime/src/manim_director_runtime/__init__.py",
+    "scripts/mcp_launcher.py",
+    "workbench/package.json",
+    "workbench/package-lock.json",
+)
+
+
 class VersionAndChecksumTests(unittest.TestCase):
     def test_repository_versions_match_release_tag(self) -> None:
         version = release_integrity.validate_versions()
         self.assertEqual(release_integrity.validate_versions(tag=f"v{version}"), version)
         with self.assertRaisesRegex(ValueError, "must exactly equal"):
             release_integrity.validate_versions(tag=version)
+
+    def test_every_release_reference_is_checked(self) -> None:
+        version = release_integrity.validate_versions()
+        drifts = {
+            ".claude-plugin/plugin.json": ("versions differ", f'"version": "{version}"', '"version": "9.9.9"'),
+            "scripts/mcp_launcher.py": ("versions differ", f'VERSION = "{version}"', 'VERSION = "9.9.9"'),
+            ".claude-plugin/marketplace.json": ("immutable release ref", f'"v{version}"', '"main"'),
+            ".agents/plugins/marketplace.json": ("immutable release ref", f'"v{version}"', '"main"'),
+            "THIRD_PARTY_NOTICES.md": ("source tree", f"/tree/v{version}", "/tree/main"),
+            ".codex-plugin/plugin.json": ("must name the plugin", '"name": "manim-plugin"', '"name": "other"'),
+        }
+        for relative, (message, old, new) in drifts.items():
+            with self.subTest(file=relative), tempfile.TemporaryDirectory() as raw_tmp:
+                root = Path(raw_tmp)
+                for name in RELEASE_FILES:
+                    (root / name).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(release_integrity.ROOT / name, root / name)
+                self.assertEqual(release_integrity.validate_versions(root), version)
+                drifted = root / relative
+                drifted.write_text(drifted.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    release_integrity.validate_versions(root)
 
     def test_component_drift_is_rejected(self) -> None:
         versions = {"plugin": "1.1.0", "workbench": "1.1.1"}
