@@ -55,11 +55,11 @@ pub struct Server {
 
 impl Server {
     pub async fn bind(config: ServeConfig, scheduler: Scheduler) -> Result<Self> {
-        if !config.address.ip().is_loopback() && !config.allow_remote {
-            bail!(
-                "{} is not a loopback address; pass --allow-remote to serve other machines",
-                config.address.ip()
-            );
+        // The Host check knows loopback only by these names, so a browser
+        // could not sign in on any other address.
+        let ip = config.address.ip();
+        if ip != Ipv4Addr::LOCALHOST && ip != Ipv6Addr::LOCALHOST && !config.allow_remote {
+            bail!("{ip} is not 127.0.0.1 or ::1; pass --allow-remote to serve another address");
         }
         let listener = TcpListener::bind(config.address).await?;
         let port = listener.local_addr()?.port();
