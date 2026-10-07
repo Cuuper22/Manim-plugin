@@ -1,5 +1,5 @@
 //! Per-scene latest artifacts (HTTP §6.1.7) from the one OPS `latest` rule,
-//! with the beat and section marks of the latest video.
+//! with the beat and section marks and the caption files of the latest video.
 
 use super::{
     artifacts::{artifact_view, ArtifactView},
@@ -32,6 +32,8 @@ pub struct LatestVideo {
     pub base: LatestBase,
     pub profile: Option<String>,
     pub timeline: Vec<TimelineMark>,
+    /// The render's caption files (Manim subcaptions) still on disk.
+    pub captions: Vec<ArtifactView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -127,6 +129,13 @@ pub fn scene_latest(
             base: base(job, ArtifactKind::Video)?,
             profile: job.profile.clone(),
             timeline: marks(root, job, scene),
+            captions: job
+                .result
+                .iter()
+                .flat_map(OperationResult::artifacts)
+                .filter(|artifact| artifact.kind == ArtifactKind::Captions)
+                .filter_map(|artifact| artifact_view(root, artifact, job.scene_id.as_deref()))
+                .collect(),
         })
     });
     let still = found.still.as_ref().and_then(|job| {
@@ -233,4 +242,104 @@ fn read_timeline(root: &Path, artifact: &Artifact) -> Option<Timeline> {
 /// A timeline `file` is a jump target only when it is project-relative.
 fn relative(file: &str) -> Option<String> {
     (!Path::new(file).is_absolute()).then(|| file.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{sections, SceneIndex, Section, SpecTracker, ViewInputs};
+    use super::*;
+    use crate::{db::testing, NewJob};
+    use manim_director_core::{
+        DiscoverResult, OperationRequest, RenderParams, RenderResult, RenderTask, SceneRef, Task,
+    };
+
+    #[test]
+    fn the_latest_video_carries_its_renders_caption_files() {
+        let (_db, store) = testing::store();
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
+        fs::write(
+            root.join("director.yaml"),
+            "version: 1\nproject:\n  name: D\n",
+        )
+        .unwrap();
+        let out = ".manim-director/artifacts/r";
+        fs::create_dir_all(root.join(out)).unwrap();
+        for file in ["Intro.mp4", "Intro.srt"] {
+            fs::write(root.join(out).join(file), "1\n").unwrap();
+        }
+        let mut index = SceneIndex::default();
+        index.finish_refresh(Ok(DiscoverResult {
+            files: 1,
+            truncated: false,
+            scenes: vec![testing::scene("Intro", "scenes/main.py", 1)],
+            findings: vec![],
+            artifacts: vec![],
+        }));
+
+        let request = OperationRequest::Render(RenderParams::default());
+        let task = Task::Render(RenderTask {
+            scene: Some("Intro".into()),
+            files: vec![root.join("scenes/main.py")],
+            settings: testing::draft(),
+            media_dir: root.join("media"),
+            out_dir: root.join(out),
+            sections: false,
+            fresh: false,
+        });
+        let id = Uuid::new_v4();
+        store
+            .insert_job(&NewJob {
+                scene_class: Some("Intro"),
+                scene_file: Some("scenes/main.py"),
+                ..testing::new_job(id, &request, &task)
+            })
+            .unwrap();
+        store.set_running(id).unwrap();
+        let artifact = |kind, name: &str| Artifact {
+            kind,
+            path: format!("{out}/{name}"),
+            label: None,
+            bytes: 2,
+            media: None,
+        };
+        let result = OperationResult::Render(RenderResult {
+            scene: SceneRef {
+                name: "Intro".into(),
+                file: "scenes/main.py".into(),
+            },
+            duration_seconds: 1.0,
+            animations: 1,
+            artifacts: vec![
+                artifact(ArtifactKind::Video, "Intro.mp4"),
+                artifact(ArtifactKind::Captions, "Intro.srt"),
+                artifact(ArtifactKind::Captions, "Removed.vtt"),
+            ],
+        });
+        store.finish_success(id, &result, None).unwrap();
+
+        let spec = SpecTracker::default().load(&root);
+        let inputs = ViewInputs {
+            root: &root,
+            spec: &spec,
+            index: &index,
+            catalog: None,
+            store: &store,
+        };
+        let latest = sections(&inputs, &[Section::Latest])
+            .unwrap()
+            .latest
+            .unwrap();
+        let video = serde_json::to_value(&latest["scenes/main.py#Intro"].video).unwrap();
+        let captions = video["captions"].as_array().unwrap();
+        assert_eq!(captions.len(), 1, "{captions:?}");
+        assert_eq!(captions[0]["kind"], "captions");
+        assert_eq!(captions[0]["path"], format!("{out}/Intro.srt"));
+        assert_eq!(captions[0]["content_type"], "text/plain; charset=utf-8");
+        let url = captions[0]["url"].as_str().unwrap();
+        assert!(
+            url.starts_with(&format!("/api/files/{out}/Intro.srt?v=")),
+            "{url}"
+        );
+    }
 }
