@@ -216,6 +216,65 @@ test("invalid source stays unsaved with the engine's line; a deleted file is rec
   assert.equal(disk.get("a.py")?.content, "fixed\n");
 });
 
+test("a file already saved is not written again, but a checked overwrite of a clean buffer is", async () => {
+  const { access, writes, external, disk } = engine({ "a.py": "a\n" });
+  const session = new EditorSession(access, () => []);
+  const view = port(session);
+  session.attach(view);
+  await session.open("a.py", null);
+  assert.equal(await session.save(), true);
+  view.type("b\n");
+  view.dispatch({ changes: { from: 2, to: 4, insert: "" } });
+  assert.equal(await session.save(), true);
+  assert.equal(writes.length, 0, "nothing to save");
+
+  // Edits undone after someone else changed the file: overwriting must still write the buffer.
+  view.type("b\n");
+  session.diskChanged("a.py", external("a.py", "theirs\n"));
+  view.dispatch({ changes: { from: 2, to: 4, insert: "" } });
+  assert.equal(session.getSnapshot().docs[0]?.dirty, false);
+  assert.equal(await session.overwrite(), true);
+  assert.equal(writes.length, 1);
+  assert.equal(disk.get("a.py")?.content, "a\n");
+});
+
+test("a save asked for during a save waits for it, then saves only what it did not", async () => {
+  const { access, writes, disk } = engine({ "a.py": "a\n" });
+  const session = new EditorSession(access, () => []);
+  const view = port(session);
+  session.attach(view);
+  await session.open("a.py", null);
+  view.type("b\n");
+  const results = [session.save(), session.save()];
+  view.type("c\n");
+  results.push(session.saveAll(), session.save());
+  assert.deepEqual(await Promise.all(results), [true, true, true, true]);
+  assert.deepEqual(writes.map((write) => write.expected_revision), ["r1", "r2"]);
+  assert.equal(disk.get("a.py")?.content, "a\nb\nc\n");
+  assert.deepEqual(session.getSnapshot().docs[0], { path: "a.py", dirty: false, saving: false, issue: null });
+});
+
+test("saving every file brings up the first one that could not be saved", async () => {
+  const { access, external, disk } = engine({ "a.py": "a\n", "b.py": "b\n", "c.py": "c\n" });
+  const session = new EditorSession(access, () => []);
+  const view = port(session);
+  session.attach(view);
+  await session.open("a.py", null);
+  view.type("syntax error\n");
+  await session.open("b.py", null);
+  view.type("mine\n");
+  await session.open("c.py", null);
+  view.type("fine\n");
+  session.diskChanged("b.py", external("b.py", "theirs\n"));
+
+  assert.equal(await session.saveAll(), false);
+  const { active, docs } = session.getSnapshot();
+  assert.equal(active, "a.py");
+  assert.deepEqual(docs.map((doc) => doc.issue?.kind ?? null), ["invalid", "changed", null]);
+  assert.equal(disk.get("c.py")?.content, "c\nfine\n");
+  assert.equal(view.state.sliceDoc(), "a\nsyntax error\n", "the view shows the file brought up");
+});
+
 test("verify catches changes whose events were missed", async () => {
   const { access, external } = engine({ "a.py": "a\n" });
   const session = new EditorSession(access, () => []);

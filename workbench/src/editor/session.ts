@@ -46,7 +46,9 @@ export interface EditorPort {
 
 export type ExtensionsFor = (source: SourceDocument) => Extension;
 
-interface OpenDoc extends DocStatus {
+interface OpenDoc extends Omit<DocStatus, "saving"> {
+  /** The save in flight; `saving` while set. */
+  write: Promise<unknown> | null;
   /** The disk revision the buffer is based on; `null` when the file is gone. */
   revision: string | null;
   /** The buffer's text at `revision`. */
@@ -138,18 +140,29 @@ export class EditorSession {
     this.#emit();
   }
 
-  /** Saves the active document. `false` when it was not saved (the reason is on the document or a toast). */
+  /**
+   * Saves the active document if it has anything to save.
+   * `false` when it was not saved (the reason is on the document or a toast).
+   */
   save(): Promise<boolean> {
-    return this.#active ? this.#save(this.#active) : Promise.resolve(true);
+    const doc = this.#active;
+    return doc && (doc.dirty || doc.issue) ? this.#save(doc) : Promise.resolve(true);
   }
 
-  /** Saves every document with unsaved edits, e.g. before a render reads the files. */
+  /**
+   * Saves every document with unsaved edits, e.g. before a render reads the files.
+   * The first one that could not be saved becomes the active one, so its banner says why.
+   */
   async saveAll(): Promise<boolean> {
-    let saved = true;
+    let failed: OpenDoc | null = null;
     for (const doc of this.#docs.values()) {
-      if (doc.dirty) saved = (await this.#save(doc)) && saved;
+      if (doc.dirty && !(await this.#save(doc))) failed ??= doc;
     }
-    return saved;
+    if (failed) {
+      this.#activate(failed);
+      this.#emit();
+    }
+    return failed === null;
   }
 
   /** Replaces the buffer with the file on disk; undo brings the edits back. */
@@ -160,7 +173,7 @@ export class EditorSession {
   /** Saves the buffer over whatever is on disk now, checked against its current revision. */
   async overwrite(): Promise<boolean> {
     const doc = this.#active;
-    if (!doc || doc.saving) return false;
+    if (!doc || doc.write) return false;
     const current = await this.#access.revision(doc.path);
     if (!current.ok) return false;
     this.#disk.set(doc.path, current.value);
@@ -192,7 +205,7 @@ export class EditorSession {
     return {
       path: source.path,
       dirty: false,
-      saving: false,
+      write: null,
       issue: null,
       revision: source.revision,
       saved: state.doc,
@@ -222,18 +235,28 @@ export class EditorSession {
   }
 
   async #save(doc: OpenDoc): Promise<boolean> {
-    if (doc.saving || doc.issue?.kind === "changed") return false;
+    if (doc.write) {
+      // One write per file at a time: wait for the one in flight, which may have written this very text.
+      while (doc.write) await doc.write;
+      if (!doc.dirty && doc.issue === null) return true;
+    }
+    if (doc.issue?.kind === "changed") return false;
     const text = doc.state.doc;
     // Recreating a deleted file must not find one there.
     const expected = doc.issue?.kind === "deleted" ? null : doc.revision;
-    doc.saving = true;
-    this.#emit();
-    const outcome = await this.#access.write({
+    const write = this.#access.write({
       path: doc.path,
       expected_revision: expected,
       edit: { kind: "replace_all", content: doc.state.sliceDoc() },
     });
-    doc.saving = false;
+    doc.write = write;
+    this.#emit();
+    let outcome: Outcome<SourceWriteResult>;
+    try {
+      outcome = await write;
+    } finally {
+      doc.write = null;
+    }
     if (outcome.ok) {
       // The disk now holds this save, unless an event already reported it or a newer write. Only indexed files
       // get `file` events, and they may come after the response.
@@ -257,7 +280,7 @@ export class EditorSession {
 
   #reconcile(doc: OpenDoc): void {
     const disk = this.#disk.get(doc.path);
-    if (doc.saving || disk === undefined) return;
+    if (doc.write || disk === undefined) return;
     if (disk === doc.revision) {
       if (doc.issue?.kind === "changed" || doc.issue?.kind === "deleted") this.#setIssue(doc, null);
     } else if (disk === null) {
@@ -311,7 +334,7 @@ export class EditorSession {
   #emit(): void {
     this.#snapshot = {
       active: this.#active?.path ?? null,
-      docs: [...this.#docs.values()].map(({ path, dirty, saving, issue }) => ({ path, dirty, saving, issue })),
+      docs: [...this.#docs.values()].map(({ path, dirty, write, issue }) => ({ path, dirty, saving: write !== null, issue })),
       opening: this.#opening,
       openError: this.#openError,
     };

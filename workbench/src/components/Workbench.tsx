@@ -143,7 +143,7 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
     if (!scene) return;
     const readsSource = action === "preview" || action === "render" || action === "still";
     if (readsSource && !(await (editor.current?.saveAll() ?? true))) {
-      // The open file's banner says why it was not saved.
+      // The editor now shows the first file it could not save, and its banner says why.
       setTab("code");
       setRegion("inspector");
       return;

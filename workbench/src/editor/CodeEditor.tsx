@@ -143,7 +143,7 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
         {active ? <span className="meta">{active.saving ? "Saving…" : active.dirty ? "Unsaved" : "Saved"}</span> : null}
         <button
           type="button"
-          disabled={!active || active.saving}
+          disabled={!active || active.saving || (!active.dirty && active.issue === null)}
           aria-keyshortcuts="Meta+S Control+S"
           onClick={() => void session.save()}
         >
