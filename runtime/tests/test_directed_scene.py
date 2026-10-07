@@ -550,6 +550,21 @@ def test_derive_puts_notes_under_their_lines_when_the_region_is_tall(tmp_path, t
 
 
 @requires_latex
+def test_derive_aligns_latex_style_steps_on_their_relation(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Aligned(DirectedScene):
+        def construct(self):
+            steps = self.derive(r"(a+b)^2 &= (a+b)(a+b)", r"&= a^2 + 2ab + b^2", pause=0)
+            columns = [relation_x(line) for line in steps.lines]
+            seen["aligned"] = columns[0] - columns[1]
+            seen["atoms"] = len(steps.lines[0].submobjects) > 1  # still matchable terms
+
+    render(Aligned)
+    assert seen["aligned"] == pytest.approx(0, abs=1e-6) and seen["atoms"]
+
+
+@requires_latex
 def test_derive_in_place_ends_on_the_last_step(render: Render) -> None:
     seen: dict[str, Any] = {}
 

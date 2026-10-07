@@ -222,6 +222,24 @@ def atoms(tex: str) -> list[str]:
     return pieces or [tex]
 
 
+def without_alignment(tex: str) -> str:
+    """`tex` without its top-level `&` (an align* column mark), which would keep the step one
+    unsplittable atom; inside environments (`pmatrix`) and groups `&` stays."""
+
+    tokens = tokenize(tex)
+    marks, i = [], 0
+    try:
+        while i < len(tokens):
+            if tokens[i].text == "&":
+                marks.append(tokens[i])
+            i = _unit_end(tokens, i)
+    except _Unsplittable:
+        return tex
+    for mark in reversed(marks):
+        tex = tex[: mark.start] + tex[mark.end :]
+    return tex
+
+
 def is_relation(atom: str) -> bool:
     return unpaint(atom).strip() in RELATIONS
 

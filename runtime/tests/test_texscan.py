@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 
 from manim_director_runtime.errors import CompositionError
-from manim_director_runtime.texscan import atoms, colorize, is_relation, occurrences, paint
+from manim_director_runtime.texscan import (
+    atoms,
+    colorize,
+    is_relation,
+    occurrences,
+    paint,
+    without_alignment,
+)
 
 RED, GREEN = "#FF0000", "#00FF00"
 PUSH_RED = r"\special{color push rgb 1.0000 0.0000 0.0000}"
@@ -119,3 +126,11 @@ def test_colored_symbols_stay_inside_their_atoms() -> None:
 def test_relations() -> None:
     assert all(is_relation(r) for r in ["=", r"\le", r" \approx ", r"\Rightarrow"])
     assert not any(is_relation(r) for r in ["+", "x", r"\cdot"])
+
+
+def test_alignment_marks_are_dropped_only_at_the_top_level() -> None:
+    assert without_alignment(r"(a+b)^2 &= a^2") == r"(a+b)^2 = a^2"
+    assert without_alignment(r"&= b") == "= b"
+    matrix = r"\begin{pmatrix} a & b \end{pmatrix} &= M"
+    assert without_alignment(matrix) == r"\begin{pmatrix} a & b \end{pmatrix} = M"
+    assert without_alignment(r"{a & b}") == r"{a & b}"

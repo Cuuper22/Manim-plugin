@@ -95,7 +95,7 @@ replaces=None, min_scale=0.5) -> Derivation`
 - Steps are TeX strings or `MathTex`, optionally `(tex, "note")`. The first is written (or morphed
   from `replaces=`), each next line transforms from a copy of the previous one with
   `TransformMatchingTex`, lines stack with their first relation (`=`, `<`, `\le`, ...) in one
-  column. Notes are `label`-role text; `$...$` in a note is TeX (`r"divide by $\lambda^n$"`).
+  column, so `&` is not needed (a top-level `&` is dropped; continue with `= ...`). Notes are `label`-role text; `$...$` in a note is TeX (`r"divide by $\lambda^n$"`).
   `notes="right"` puts them in a column beside the lines, `"below"` under each line, and `"auto"`
   picks whichever needs less shrinking (below in a 9:16 frame).
 - `in_place=True` transforms one line through all steps (notes appear below and swap).

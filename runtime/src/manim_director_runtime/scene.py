@@ -73,7 +73,7 @@ from .staging import (
     within,
 )
 from .terms import term_groups
-from .texscan import atoms, colorize
+from .texscan import atoms, colorize, without_alignment
 from .themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme, theme
 
 MIN_SCALE = 0.5
@@ -362,7 +362,8 @@ class Directed:
         lines, labels = [], []
         for number, step in enumerate(steps, start=1):
             tex, note = step if isinstance(step, tuple) else (step, None)
-            line = self.math(tex) if isinstance(tex, str) else tex
+            # Relations align by themselves, so an align*-style `&=` is not needed.
+            line = self.math(without_alignment(tex)) if isinstance(tex, str) else tex
             if not isinstance(line, SingleStringMathTex):
                 raise CompositionError(
                     "derive() steps are TeX strings or MathTex, optionally paired with a note "
