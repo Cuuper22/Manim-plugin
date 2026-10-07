@@ -46,6 +46,7 @@ from manim import (
     ThreeDScene,
     TracedPath,
     TransformMatchingTex,
+    ValueTracker,
     VGroup,
     VMobject,
     Write,
@@ -295,7 +296,7 @@ class Directed:
         spared = {id(leaf) for m in mobjects for leaf in m.get_family()}
         animations = []
         for top in self.mobjects:
-            if self._stage.region_of(top) in LANES:
+            if self._stage.region_of(top) in LANES or self._backstage(top):
                 continue
             _, base = self._stage.dimmed.get(id(top), (top, motion.opacities(top)))
             animation = motion.dim(top, base, spared)
@@ -473,7 +474,9 @@ class Directed:
         beat.before = [
             m
             for m in self.mobjects
-            if m.family_members_with_points() and (chapter or self._stage.region_of(m) not in LANES)
+            if m.family_members_with_points()
+            and not self._backstage(m)
+            and (chapter or self._stage.region_of(m) not in LANES)
         ]
         beat.carried = {id(leaf) for m in beat.keep for leaf in m.get_family()}
         self.next_section(beat.id)
@@ -668,6 +671,19 @@ class Directed:
         return VGroup(*(self.text(half, Role.CAPTION, **kwargs) for half in halves)).arrange(
             DOWN, buff=0.14
         )
+
+    def _backstage(self, mobject: Mobject) -> bool:
+        """Scene machinery that Manim keeps among the mobjects but that is not content: a
+        moving camera's frame, a ZoomedScene's display, value trackers (their value is a
+        point, so a transition would shift it)."""
+
+        zoomed = getattr(self, "zoomed_camera", None)
+        machinery = (
+            getattr(self.camera, "frame", None),
+            getattr(zoomed, "frame", None),
+            getattr(self, "zoomed_display", None),
+        )
+        return isinstance(mobject, ValueTracker) or any(mobject is m for m in machinery)
 
     def _visible_ids(self) -> set[int]:
         return {id(m) for m in self.get_mobject_family_members()}

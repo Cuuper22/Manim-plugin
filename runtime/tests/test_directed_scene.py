@@ -24,6 +24,7 @@ from manim import (  # noqa: E402
     RIGHT,
     YELLOW,
     Circle,
+    DecimalNumber,
     Dot,
     FadeIn,
     Group,
@@ -36,12 +37,16 @@ from manim import (  # noqa: E402
     Text,
     ThreeDAxes,
     Triangle,
+    ValueTracker,
     VGroup,
+    ZoomedScene,
+    always_redraw,
     tempconfig,
 )
 
 from manim_director_runtime import (  # noqa: E402
     CompositionError,
+    Directed,
     DirectedMovingCameraScene,
     DirectedScene,
     DirectedThreeDScene,
@@ -581,3 +586,37 @@ def test_moving_camera_scenes_keep_title_and_caption_on_screen(render: Render) -
     assert scene.camera.background_color == MIDNIGHT.background
     assert seen["after"][0] == seen["before"][0]
     assert seen["after"][1] == pytest.approx(2 * seen["before"][1])
+
+
+def test_beats_leave_cameras_zoom_displays_and_trackers_alone(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Machinery(DirectedMovingCameraScene):
+        def construct(self):
+            frame, tracker = self.camera.frame, ValueTracker(1.0)
+            readout = always_redraw(lambda: DecimalNumber(tracker.get_value()))
+            self.add(tracker)
+            with self.beat("pan"):
+                self.place(readout)
+            self.play(frame.animate.shift(RIGHT))
+            centers: list[float] = []
+            frame.add_updater(lambda m: centers.append(float(m.get_x())))
+            with self.beat("contrast", transition="contrast", keep=[readout]):
+                self.place(Square(), region=Region.RIGHT)
+            seen["frame"] = (set(centers), frame in self.mobjects)
+            seen["tracker"] = (tracker.get_value(), tracker in self.mobjects)
+
+    class Zoomed(Directed, ZoomedScene):
+        def construct(self):
+            with self.beat("one"):
+                self.place(Square())
+            self.activate_zooming(animate=False)
+            with self.beat("two"):
+                self.place(Circle())
+            seen["zoom"] = self.zoomed_display in self.mobjects
+
+    render(Machinery)
+    render(Zoomed)
+    assert seen["frame"] == ({1.0}, True)  # the camera did not pan with the departures
+    assert seen["tracker"] == (1.0, True)
+    assert seen["zoom"] is True
