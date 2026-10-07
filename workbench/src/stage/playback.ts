@@ -13,6 +13,8 @@ export interface PlaybackState {
   time: number;
   /** 0 while paused; negative plays backwards. */
   rate: number;
+  /** `false` once the browser could not play the source: the playhead still moves by hand, but does not run. */
+  playable: boolean;
 }
 
 const FALLBACK_FPS = 30;
@@ -25,7 +27,7 @@ const FALLBACK_FPS = 30;
 export class PlaybackController {
   readonly #listeners = new Set<() => void>();
   #video: HTMLVideoElement | null = null;
-  #state: PlaybackState = { source: null, time: 0, rate: 0 };
+  #state: PlaybackState = { source: null, time: 0, rate: 0, playable: true };
   #frame: number | null = null;
   /** Bumped per run; a late `play()` rejection of an older run is ignored. */
   #run = 0;
@@ -41,7 +43,13 @@ export class PlaybackController {
   load(source: PlaybackSource | null, keepTime: boolean): void {
     this.#halt();
     const time = keepTime && source ? Math.min(this.#state.time, source.duration) : 0;
-    this.#set({ source, time, rate: 0 });
+    this.#set({ source, time, rate: 0, playable: true });
+  }
+
+  /** The browser cannot decode or load the source; until the next `load`, play does nothing. */
+  cannotPlay(): void {
+    this.#halt();
+    this.#set({ ...this.#state, rate: 0, playable: false });
   }
 
   /** Ref callback for the stage's `<video>`. */
@@ -92,8 +100,8 @@ export class PlaybackController {
   }
 
   #play(rate: number): void {
-    const { source } = this.#state;
-    if (!source) return;
+    const { source, playable } = this.#state;
+    if (!source || (rate !== 0 && !playable)) return;
     const wasPlaying = this.#state.rate > 0 && this.#video !== null;
     this.#halt();
     // Forward play updates the playhead once per animation frame; the video knows exactly where it stopped.
@@ -101,7 +109,7 @@ export class PlaybackController {
     if (rate > 0 && time >= source.duration - 1e-3) time = 0;
     if (rate < 0 && time <= 1e-3) rate = 0;
     if (this.#video) this.#video.currentTime = time;
-    this.#set({ source, time, rate });
+    this.#set({ ...this.#state, time, rate });
     if (this.#video && rate !== 0) this.#start(this.#video, rate);
   }
 
@@ -141,12 +149,13 @@ export class PlaybackController {
   readonly #ended = (): void => {
     this.#halt();
     const { source } = this.#state;
-    if (source) this.#set({ source, time: source.duration, rate: 0 });
+    if (source) this.#set({ ...this.#state, time: source.duration, rate: 0 });
   };
 
   #set(state: PlaybackState): void {
     const current = this.#state;
-    if (state.source === current.source && state.time === current.time && state.rate === current.rate) return;
+    const same = state.source === current.source && state.time === current.time && state.rate === current.rate;
+    if (same && state.playable === current.playable) return;
     this.#state = state;
     for (const listener of this.#listeners) listener();
   }

@@ -1,7 +1,6 @@
 import type { AppliedEvent } from "../api/events.ts";
 import type {
   EngineInfo,
-  ErrorBody,
   JobPage,
   JobStatus,
   JobSummary,
@@ -28,15 +27,11 @@ export interface Workspace extends WorkspaceSections {
   engine: EngineInfo;
 }
 
-export interface ActionState {
-  pending: boolean;
-  error: ErrorBody | null;
-}
-
 export interface Toast {
   id: number;
-  code: string;
   message: string;
+  /** `info`: why something cannot be done yet, not an error. */
+  tone: "danger" | "info";
 }
 
 export interface WorkbenchState {
@@ -51,8 +46,6 @@ export interface WorkbenchState {
   fileRevisions: Readonly<Record<string, string | null>>;
   /** Counts snapshots (start, resync, reconnect): events may have been missed before each. */
   snapshots: number;
-  /** Absent key = idle. */
-  actions: Readonly<Record<string, ActionState>>;
   toasts: readonly Toast[];
   nextToastId: number;
 }
@@ -63,10 +56,7 @@ export type StoreAction =
   | { type: "job"; job: JobSummary }
   | { type: "older_jobs"; page: JobPage }
   | { type: "connection"; connection: Connection }
-  | { type: "action_started"; key: string }
-  | { type: "action_succeeded"; key: string }
-  | { type: "action_failed"; key: string; error: ErrorBody; toast: boolean }
-  | { type: "error_reported"; error: ErrorBody }
+  | { type: "toasted"; message: string; tone: Toast["tone"] }
   | { type: "toast_dismissed"; id: number };
 
 export const initialState: WorkbenchState = {
@@ -77,7 +67,6 @@ export const initialState: WorkbenchState = {
   jobsNextBefore: null,
   fileRevisions: {},
   snapshots: 0,
-  actions: {},
   toasts: [],
   nextToastId: 1,
 };
@@ -107,18 +96,8 @@ export function reduce(state: WorkbenchState, action: StoreAction): WorkbenchSta
     }
     case "connection":
       return sameConnection(state.connection, action.connection) ? state : { ...state, connection: action.connection };
-    case "action_started":
-      return { ...state, actions: { ...state.actions, [action.key]: { pending: true, error: null } } };
-    case "action_succeeded": {
-      const { [action.key]: _done, ...actions } = state.actions;
-      return { ...state, actions };
-    }
-    case "action_failed": {
-      const failed = { ...state, actions: { ...state.actions, [action.key]: { pending: false, error: action.error } } };
-      return action.toast ? withToast(failed, action.error) : failed;
-    }
-    case "error_reported":
-      return withToast(state, action.error);
+    case "toasted":
+      return withToast(state, action.message, action.tone);
     case "toast_dismissed":
       return { ...state, toasts: state.toasts.filter((toast) => toast.id !== action.id) };
   }
@@ -180,8 +159,10 @@ function capJobs(state: WorkbenchState): WorkbenchState {
   return { ...state, jobs, jobsNextBefore: String(jobs[jobs.length - 1]!.sequence) };
 }
 
-function withToast(state: WorkbenchState, error: ErrorBody): WorkbenchState {
-  const toast = { id: state.nextToastId, code: error.code, message: error.message };
+/** A message already on screen is not shown twice. */
+function withToast(state: WorkbenchState, message: string, tone: Toast["tone"]): WorkbenchState {
+  if (state.toasts.some((toast) => toast.message === message)) return state;
+  const toast = { id: state.nextToastId, message, tone };
   return { ...state, toasts: [...state.toasts, toast].slice(-MAX_TOASTS), nextToastId: state.nextToastId + 1 };
 }
 

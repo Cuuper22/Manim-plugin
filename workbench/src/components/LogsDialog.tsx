@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JobId, JobSummary, LogEntry } from "../api/types.ts";
-import { isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
+import { clockTime } from "../model/format.ts";
+import { isActive, jobTitle, retryRequest, statusText } from "../model/jobs.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
-import { Progress } from "./Progress.tsx";
+import { JobProgress } from "./Progress.tsx";
 
 const PAGE_SIZE = 200;
 const LEVEL_CLASS: Record<LogEntry["level"], string | undefined> = { info: undefined, warning: "warning", error: "danger" };
@@ -53,7 +54,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
     do {
       refetch.current = false;
       const page = { after: cursor.current, limit: PAGE_SIZE };
-      const outcome = await store.perform(`logs:${jobId}`, (client) => client.jobLogs(jobId, page));
+      const outcome = await store.perform((client) => client.jobLogs(jobId, page));
       if (!outcome.ok) break;
       const { items, next_after } = outcome.value;
       cursor.current = items.at(-1)?.cursor ?? cursor.current;
@@ -94,7 +95,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
             </button>
           ) : null}
           {job && retry ? (
-            <button type="button" onClick={() => void store.submit(`retry:${job.id}`, retry)}>
+            <button type="button" onClick={() => void store.submit(retry)}>
               Retry
             </button>
           ) : null}
@@ -108,7 +109,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
           </form>
         </div>
       </header>
-      {job?.status === "running" ? <Progress fraction={progressFraction(job.progress)} label={`${title} progress`} /> : null}
+      {job?.status === "running" ? <JobProgress job={job} label={`${title} progress`} /> : null}
       {job?.error ? (
         <p className="card" data-tone="danger" role="alert">
           {job.error.message} <span className="muted">({job.error.code})</span>
@@ -126,7 +127,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
       >
         {entries.map((entry) => (
           <li key={entry.cursor} data-level={entry.level}>
-            <time className="muted" dateTime={entry.timestamp}>{entry.timestamp.slice(11, 19)}</time>
+            <time className="muted" dateTime={entry.timestamp}>{clockTime(entry.timestamp, true)}</time>
             <span className="muted">{entry.stream}</span>
             <span className={LEVEL_CLASS[entry.level]}>{entry.message}</span>
           </li>

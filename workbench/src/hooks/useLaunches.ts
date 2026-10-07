@@ -15,8 +15,8 @@ export interface Launches {
   launch: (action: string, sceneId: SceneId | null, request: OperationRequest) => Promise<boolean>;
   /** The newest job this button launched for that scene, while it is listed. */
   jobFor: (action: string, sceneId: SceneId | null) => JobSummary | null;
-  /** The pending/error key of `store.actions` for this button and scene. */
-  keyOf: (action: string, sceneId: SceneId | null) => string;
+  /** Its request is being sent, or the job it started has not ended. */
+  isBusy: (action: string, sceneId: SceneId | null) => boolean;
 }
 
 const keyOf = (action: string, sceneId: SceneId | null) => `${action}:${sceneId ?? ""}`;
@@ -26,6 +26,8 @@ export function useLaunches(onFinished: (launch: Launch, job: JobSummary) => voi
   const store = useStore();
   const jobs = useWorkbench((state) => state.jobs);
   const [launches, setLaunches] = useState<Readonly<Record<string, Launch>>>({});
+  /** Buttons whose request is on its way. */
+  const [sending, setSending] = useState<ReadonlySet<string>>(new Set());
   const finished = useRef(new Set<JobId>());
   const notify = useRef(onFinished);
   notify.current = onFinished;
@@ -33,7 +35,9 @@ export function useLaunches(onFinished: (launch: Launch, job: JobSummary) => voi
   const launch = useCallback(
     async (action: string, sceneId: SceneId | null, request: OperationRequest) => {
       const key = keyOf(action, sceneId);
-      const outcome = await store.submit(key, request);
+      setSending((current) => new Set(current).add(key));
+      const outcome = await store.submit(request);
+      setSending((current) => new Set([...current].filter((sent) => sent !== key)));
       if (outcome.ok) setLaunches((current) => ({ ...current, [key]: { action, sceneId, jobId: outcome.value.id } }));
       return outcome.ok;
     },
@@ -58,5 +62,10 @@ export function useLaunches(onFinished: (launch: Launch, job: JobSummary) => voi
     [jobs, launches],
   );
 
-  return { launch, jobFor, keyOf };
+  const isBusy = (action: string, sceneId: SceneId | null) => {
+    const job = jobFor(action, sceneId);
+    return sending.has(keyOf(action, sceneId)) || (job !== null && isActive(job));
+  };
+
+  return { launch, jobFor, isBusy };
 }

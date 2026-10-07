@@ -1,3 +1,7 @@
+import type { JobSummary } from "../api/types.ts";
+import { expectedSeconds, progressFraction } from "../model/jobs.ts";
+import { useWorkbench } from "../store/useWorkbench.ts";
+
 interface ProgressProps {
   /** In `[0, 1]`; `null` while indeterminate. */
   fraction: number | null;
@@ -19,4 +23,10 @@ export function Progress({ fraction, label }: ProgressProps) {
       <span style={percent === null ? undefined : { width: `${percent}%` }} />
     </span>
   );
+}
+
+/** A job's progress, estimated for a render from its scene's expected length. */
+export function JobProgress({ job, label }: { job: JobSummary; label: string }) {
+  const workspace = useWorkbench((state) => state.workspace);
+  return <Progress fraction={progressFraction(job.progress, expectedSeconds(job, workspace))} label={label} />;
 }

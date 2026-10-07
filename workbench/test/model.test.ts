@@ -3,8 +3,17 @@ import test from "node:test";
 import type { Artifact, Finding, Scene, SceneLatest, TimelineMark } from "../src/api/types.ts";
 import { planAction, planExport } from "../src/model/actions.ts";
 import { bySeverity, cleanQa, codeTarget, fromDiagnosis, fromWorkspace } from "../src/model/findings.ts";
-import { formatTime } from "../src/model/format.ts";
-import { activityText, deliverable, jobTitle, retryRequest, stageActivity, statusText } from "../src/model/jobs.ts";
+import { clockTime, formatTime } from "../src/model/format.ts";
+import {
+  activityText,
+  deliverable,
+  expectedSeconds,
+  jobTitle,
+  progressFraction,
+  retryRequest,
+  stageActivity,
+  statusText,
+} from "../src/model/jobs.ts";
 import { downloadUrl, playback } from "../src/model/media.ts";
 import { commandFor, type FocusZone, type KeyInput } from "../src/model/shortcuts.ts";
 import { lanes, markAt, markStep, rulerTicks, shuttleRate, stepFrames, tickLabel } from "../src/model/timeline.ts";
@@ -182,11 +191,25 @@ test("a finding repeated across frames is one card listing its moments", () => {
 });
 
 test("a passing QA is reported only while it is the scene's newest and found nothing", () => {
-  const qa = job({ id: "qa1", sequence: 3, operation: "qa", status: "succeeded", request: { operation: "qa", source: { job_id: "j1" } }, scene_id: scene.id });
-  assert.equal(cleanQa([qa], [], scene.id)?.id, "qa1");
-  assert.equal(cleanQa([qa], fromWorkspace([qaFinding("a", 1)]), scene.id), null);
-  assert.equal(cleanQa([{ ...qa, status: "running" }], [], scene.id), null);
-  assert.equal(cleanQa([qa], [], "scenes.py#Other"), null);
+  const qa = job({
+    id: "qa1",
+    sequence: 3,
+    operation: "qa",
+    status: "succeeded",
+    request: { operation: "qa", source: { job_id: "j1" } },
+    source_job_id: "j1",
+    scene_id: scene.id,
+  });
+  assert.deepEqual(cleanQa([qa], [], scene.id, rendered), { job: qa, outdated: false });
+  assert.equal(cleanQa([qa], fromWorkspace([qaFinding("a", 1)]), scene.id, rendered), null);
+  assert.equal(cleanQa([{ ...qa, status: "running" }], [], scene.id, rendered), null);
+  assert.equal(cleanQa([qa], [], "scenes.py#Other", rendered), null);
+
+  // It passed on a render that a newer one replaced, or whose scene changed since.
+  const rerendered = { ...rendered, video: { ...rendered.video!, job_id: "j2" } };
+  assert.equal(cleanQa([qa], [], scene.id, rerendered)?.outdated, true);
+  assert.equal(cleanQa([qa], [], scene.id, { ...rendered, video: { ...rendered.video!, outdated: true } })?.outdated, true);
+  assert.equal(cleanQa([qa], [], scene.id, null)?.outdated, true);
 });
 
 test("the stage reports its scene's newest job while active or failed", () => {
@@ -223,6 +246,21 @@ test("jobs read as one line and retry only what HTTP accepts", () => {
   assert.equal(deliverable(job({ status: "succeeded", artifacts: [zip] })), null);
 });
 
+test("a render without a total measures its progress against the scene's expected length", () => {
+  const at = (seconds: number | null) => ({ ...progress(4, "2026-10-07T10:00:00.000Z"), total: null, scene_seconds: seconds });
+  assert.equal(progressFraction(progress(5, "2026-10-07T10:00:00.000Z"), 100), 0.5, "a total wins");
+  assert.equal(progressFraction(at(2.15), 8.6), 0.25);
+  assert.equal(progressFraction(at(12), 8.6), 0.99, "an estimate never reads done");
+  assert.equal(progressFraction(at(2.15), null), null);
+  assert.equal(progressFraction(at(null), 8.6), null);
+
+  const render = job({ scene_id: scene.id });
+  const declared = { ...scene, declared: { id: "recurrence", purpose: null, duration_seconds: 12 } };
+  assert.equal(expectedSeconds(render, { scenes: [declared], latest: { [scene.id]: rendered } }), 8.6, "the last render");
+  assert.equal(expectedSeconds(render, { scenes: [declared], latest: {} }), 12, "else the declared length");
+  assert.equal(expectedSeconds({ ...render, operation: "qa" }, { scenes: [declared], latest: {} }), null);
+});
+
 test("keys map to commands only where focus does not need them", () => {
   const key = (k: string, extra: Partial<KeyInput> = {}): KeyInput => ({
     key: k, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, ...extra,
@@ -245,4 +283,15 @@ test("times read as m:ss.cc", () => {
   assert.equal(formatTime(63.456), "1:03.46");
   assert.equal(formatTime(59.999), "1:00.00");
   assert.equal(formatTime(Number.NaN), "0:00.00");
+});
+
+test("clock times are local, like the rest of the page", (t) => {
+  const zone = process.env.TZ;
+  t.after(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+  process.env.TZ = "America/Los_Angeles";
+  assert.match(clockTime("2026-10-07T17:19:05.282Z", true), /^10:19:05\b/);
+  assert.match(clockTime("2026-10-07T17:19:05.282Z"), /^10:19\b(?!:)/);
 });

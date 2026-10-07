@@ -7,7 +7,7 @@ const percent = (part: number, whole: number) => `${whole > 0 ? (part / whole) *
 
 /** Transport and a scrubbable track of the render's beats and sections; the track is a slider. */
 export function Timeline({ playback }: { playback: PlaybackController }) {
-  const { source, time, rate } = useSyncExternalStore(playback.subscribe, playback.getSnapshot);
+  const { source, time, rate, playable } = useSyncExternalStore(playback.subscribe, playback.getSnapshot);
   const ticks = useMemo(() => rulerTicks(source?.duration ?? 0), [source]);
   if (!source) return null;
   const { duration, marks } = source;
@@ -43,6 +43,7 @@ export function Timeline({ playback }: { playback: PlaybackController }) {
         className="transport"
         aria-label={rate === 0 ? "Play" : "Pause"}
         aria-keyshortcuts="Space"
+        disabled={!playable}
         onClick={() => playback.toggle()}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">

@@ -12,6 +12,11 @@ export function formatSeconds(seconds: number): string {
   return `${Number(seconds.toFixed(2))} s`;
 }
 
+/** The local time of day of an RFC 3339 timestamp, e.g. `10:19 AM`, or `10:19:05 AM` with `seconds`. */
+export function clockTime(timestamp: string, seconds = false): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: seconds ? "2-digit" : undefined });
+}
+
 /** The last segment of a POSIX path. */
 export function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);

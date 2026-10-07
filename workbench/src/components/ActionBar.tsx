@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ExportFormat } from "../api/types.ts";
 import type { StageAction } from "../model/actions.ts";
 import { useDismiss } from "../hooks/useShortcuts.ts";
+import { useStore } from "../store/useWorkbench.ts";
 import { Icon, type IconName } from "./Icon.tsx";
 
 export interface ActionState {
@@ -83,7 +84,9 @@ interface ActionButtonProps {
   onClick: () => void;
 }
 
+/** A disabled action stays focusable; pressing it says why it is disabled (its title shows only on hover). */
 function ActionButton({ label, icon, primary, keys, reason, state, onClick }: ActionButtonProps) {
+  const store = useStore();
   return (
     <button
       type="button"
@@ -92,7 +95,7 @@ function ActionButton({ label, icon, primary, keys, reason, state, onClick }: Ac
       aria-busy={state.busy || undefined}
       aria-keyshortcuts={keys}
       title={reason ?? undefined}
-      onClick={() => reason === null && onClick()}
+      onClick={() => (reason === null ? onClick() : store.hint(`${label}: ${reason}`))}
     >
       <Icon name={icon} />
       {label}
@@ -117,6 +120,7 @@ interface ExportMenuProps {
 }
 
 function ExportMenu({ reason, state, onExport }: ExportMenuProps) {
+  const store = useStore();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
@@ -171,7 +175,7 @@ function ExportMenu({ reason, state, onExport }: ExportMenuProps) {
                   aria-disabled={why ? true : undefined}
                   title={why ?? undefined}
                   onClick={() => {
-                    if (why) return;
+                    if (why) return store.hint(`${label}: ${why}`);
                     close();
                     onExport(format);
                   }}

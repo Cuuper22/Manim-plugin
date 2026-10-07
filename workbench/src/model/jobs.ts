@@ -1,4 +1,12 @@
-import type { Artifact, JobOperation, JobSummary, OperationRequest, Progress, SceneId } from "../api/types.ts";
+import type {
+  Artifact,
+  JobOperation,
+  JobSummary,
+  OperationRequest,
+  Progress,
+  SceneId,
+  WorkspaceSections,
+} from "../api/types.ts";
 import { formatTime } from "./format.ts";
 
 const OPERATION_LABELS: Record<JobOperation, string> = {
@@ -37,10 +45,22 @@ export function retryRequest(job: JobSummary): OperationRequest | null {
   return job.request.operation === "ingest" ? null : job.request;
 }
 
-/** Done fraction in `[0, 1]`, or `null` while indeterminate. */
-export function progressFraction(progress: Progress | null): number | null {
-  if (!progress || progress.total === null || progress.total <= 0) return null;
-  return Math.min(Math.max(progress.current / progress.total, 0), 1);
+/**
+ * Done fraction in `[0, 1]`, or `null` while indeterminate. Renders report no total: while one animates, it is
+ * measured against `expectedSeconds` of scene when known, an estimate that stops short of done.
+ */
+export function progressFraction(progress: Progress | null, expectedSeconds: number | null = null): number | null {
+  if (!progress) return null;
+  if (progress.total !== null && progress.total > 0) return Math.min(Math.max(progress.current / progress.total, 0), 1);
+  if (!expectedSeconds || progress.scene_seconds === null) return null;
+  return Math.min(Math.max(progress.scene_seconds / expectedSeconds, 0), 0.99);
+}
+
+/** How much scene a render job should get through: its scene's last render, else the length director.yaml declares. */
+export function expectedSeconds(job: JobSummary, workspace: Pick<WorkspaceSections, "scenes" | "latest"> | null): number | null {
+  if (job.operation !== "render" || job.scene_id === null || !workspace) return null;
+  const last = workspace.latest[job.scene_id]?.video?.artifact.media?.duration_seconds;
+  return last ?? workspace.scenes.find((scene) => scene.id === job.scene_id)?.declared?.duration_seconds ?? null;
 }
 
 /** `animate 40%`, or how far into the scene a render of unknown length got: `animate at 0:10.03`. */

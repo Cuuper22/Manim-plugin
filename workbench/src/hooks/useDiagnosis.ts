@@ -29,7 +29,7 @@ export function useNewestDiagnosis(): Diagnosis | null {
   useEffect(() => {
     if (jobId === null || loadedId === jobId) return;
     let current = true;
-    void store.perform(`diagnosis:${jobId}`, (client) => client.job(jobId), ["not_found"]).then((outcome) => {
+    void store.perform((client) => client.job(jobId), ["not_found"]).then((outcome) => {
       if (current && outcome.ok && outcome.value.operation === "diagnose" && outcome.value.result) {
         setLoaded({ jobId, findings: outcome.value.result.findings });
       }

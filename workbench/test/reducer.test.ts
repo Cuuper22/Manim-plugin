@@ -106,22 +106,19 @@ test("the job list keeps the newest and pages from the oldest kept", () => {
   assert.equal(state.jobsNextBefore, "2");
 });
 
-test("actions track pending and errors, and failures toast unless told not to", () => {
-  const error = { code: "queue_full", message: "The queue is full.", data: { capacity: 128 } };
-  let state = run({ type: "action_started", key: "render" });
-  assert.deepEqual(state.actions.render, { pending: true, error: null });
+test("toasts stack up to a limit, each message once, until dismissed", () => {
+  const toasted = (message: string, tone: "danger" | "info" = "danger"): StoreAction => ({ type: "toasted", message, tone });
+  let state = run(toasted("The queue is full."), toasted("QA: Needs a render first.", "info"));
+  assert.deepEqual(state.toasts, [
+    { id: 1, message: "The queue is full.", tone: "danger" },
+    { id: 2, message: "QA: Needs a render first.", tone: "info" },
+  ]);
+  assert.equal(reduce(state, toasted("QA: Needs a render first.", "info")), state, "shown once");
 
-  state = reduce(state, { type: "action_failed", key: "render", error, toast: true });
-  assert.deepEqual(state.actions.render, { pending: false, error });
-  assert.deepEqual(state.toasts, [{ id: 1, code: "queue_full", message: "The queue is full." }]);
-
-  state = reduce(state, { type: "action_failed", key: "save", error, toast: false });
-  assert.equal(state.toasts.length, 1);
-
-  state = reduce(state, { type: "action_succeeded", key: "render" });
-  assert.equal(state.actions.render, undefined);
-  state = reduce(state, { type: "toast_dismissed", id: 1 });
-  assert.deepEqual(state.toasts, []);
+  state = run(...["a", "b", "c", "d", "e"].map((message) => toasted(message)));
+  assert.deepEqual(state.toasts.map((toast) => toast.message), ["b", "c", "d", "e"]);
+  state = reduce(state, { type: "toast_dismissed", id: 2 });
+  assert.deepEqual(state.toasts.map((toast) => toast.message), ["c", "d", "e"]);
 });
 
 test("an unchanged connection status keeps the state object", () => {

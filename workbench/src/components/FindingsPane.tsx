@@ -33,13 +33,14 @@ const SOURCE_LABELS: Record<FindingCard["finding"]["source"], string> = {
 /** QA, render, doctor and spec findings plus the newest diagnosis, errors first. */
 export function FindingsPane({ findings, diagnosed, doctor, selected, onJump, onSeek, onDoctor, doctorBusy }: FindingsPaneProps) {
   const jobs = useWorkbench((state) => state.jobs);
+  const latest = useWorkbench((state) => (selected ? state.workspace?.latest[selected.id] : null) ?? null);
   const [onlySelected, setOnlySelected] = useState(false);
   const groups = useMemo(
     () => bySeverity(onlySelected && selected ? findings.filter((finding) => finding.scene_id === selected.id) : findings),
     [findings, onlySelected, selected],
   );
-  const passed = selected ? cleanQa(jobs, findings, selected.id) : null;
-  const checkedFrames = passed?.request.operation === "qa" ? passed.request.frames : undefined;
+  const passed = selected ? cleanQa(jobs, findings, selected.id, latest) : null;
+  const checkedFrames = passed?.job.request.operation === "qa" ? passed.job.request.frames : undefined;
 
   return (
     <div className="findings">
@@ -61,12 +62,17 @@ export function FindingsPane({ findings, diagnosed, doctor, selected, onJump, on
         </div>
       ) : null}
       {passed && selected ? (
-        <p className="card verdict" data-tone="success">
+        <p className="card verdict" data-tone={passed.outdated ? undefined : "success"}>
           <Icon name="check" />
           <span>
             QA found no issues in {selected.class_name}
             {checkedFrames ? ` (${checkedFrames} frames checked)` : ""}.
           </span>
+          {passed.outdated ? (
+            <span className="tag" data-tone="warning" title="It checked an earlier render, or the scene changed since.">
+              Outdated
+            </span>
+          ) : null}
         </p>
       ) : null}
       {groups.length === 0 && !passed ? (

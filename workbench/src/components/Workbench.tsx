@@ -8,7 +8,7 @@ import { useShortcuts } from "../hooks/useShortcuts.ts";
 import { useTheme } from "../hooks/useTheme.ts";
 import { planAction, planExport, type StageAction } from "../model/actions.ts";
 import { bySeverity, fromWorkspace, type CodeTarget } from "../model/findings.ts";
-import { isActive, progressFraction, stageActivity } from "../model/jobs.ts";
+import { expectedSeconds, progressFraction, stageActivity } from "../model/jobs.ts";
 import { PlaybackController } from "../stage/playback.ts";
 import type { Workspace } from "../store/reducer.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -50,7 +50,6 @@ interface WorkbenchProps {
 }
 
 export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps) {
-  const actions = useWorkbench((state) => state.actions);
   const jobs = useWorkbench((state) => state.jobs);
   const { project, scenes, profiles, latest, findings } = workspace;
   const { scene, selectScene, profile, selectProfile } = useSelection(project.root, scenes, profiles);
@@ -130,20 +129,20 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
     const shown = VIEW_AFTER[action];
     if (shown && launchedFor === sceneId) setView(shown);
   };
-  const { launch, jobFor, keyOf } = useLaunches(onFinished);
+  const { launch, jobFor, isBusy } = useLaunches(onFinished);
 
   const context = { scene, latest: sceneLatest, profile, playhead: 0 };
   const stateOf = (action: string, target: SceneId | null = sceneId): ActionState => {
     const job = jobFor(action, target);
-    const busy = actions[keyOf(action, target)]?.pending === true || (job !== null && isActive(job));
-    return { busy, fraction: busy && job ? progressFraction(job.progress) : null };
+    const busy = isBusy(action, target);
+    return { busy, fraction: busy && job ? progressFraction(job.progress, expectedSeconds(job, workspace)) : null };
   };
 
   const run = async (action: StageAction) => {
     if (!scene) return;
     const readsSource = action === "preview" || action === "render" || action === "still";
     if (readsSource && !(await (editor.current?.saveAll() ?? true))) {
-      // The open file's banner says why it was not saved.
+      // The editor now shows the first file it could not save, and its banner says why.
       setTab("code");
       setRegion("inspector");
       return;
@@ -301,7 +300,12 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
           onTab={setTab}
           active={region === "inspector"}
           findingCount={findingCount}
-          editor={{ request: openRequest, api: editor, onPreview: () => void run("preview") }}
+          editor={{
+            request: openRequest,
+            api: editor,
+            onPreview: () => void run("preview"),
+            home: scene ? { path: scene.file, line: scene.span.start } : null,
+          }}
         >
           <FindingsPane
             findings={shownFindings}

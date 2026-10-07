@@ -3,6 +3,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type Ref, type RefObject } from "react";
 import { CodeSkeleton } from "../components/CodeSkeleton.tsx";
 import { TabList, panelId, tabId } from "../components/TabList.tsx";
+import type { CodeTarget } from "../model/findings.ts";
 import { baseName } from "../model/format.ts";
 import type { WorkbenchStore } from "../store/store.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
@@ -27,6 +28,8 @@ interface CodeEditorProps {
   request: OpenRequest | null;
   api: Ref<EditorApi>;
   onPreview: () => void;
+  /** The selected scene's source, offered once every file is closed. */
+  home: CodeTarget | null;
 }
 
 /** Load failures shown inline instead of as a toast. */
@@ -34,11 +37,10 @@ const OPEN_ERRORS = ["not_found", "invalid_path", "not_utf8", "file_too_large", 
 
 function sourceAccess(store: WorkbenchStore): SourceAccess {
   return {
-    load: (path, quiet) => store.perform(`source:${path}`, (client) => client.loadSource(path), quiet ? OPEN_ERRORS : []),
-    write: (write) =>
-      store.perform(`save:${write.path}`, (client) => client.writeSource(write), ["revision_conflict", "source_invalid"]),
+    load: (path, quiet) => store.perform((client) => client.loadSource(path), quiet ? OPEN_ERRORS : []),
+    write: (write) => store.perform((client) => client.writeSource(write), ["revision_conflict", "source_invalid"]),
     revision: async (path) => {
-      const outcome = await store.perform(`revision:${path}`, (client) => client.sourcePage(path, 1, 1), ["not_found"]);
+      const outcome = await store.perform((client) => client.sourcePage(path, 1, 1), ["not_found"]);
       if (outcome.ok) return { ok: true, value: outcome.value.revision };
       return outcome.error.code === "not_found" ? { ok: true, value: null } : outcome;
     },
@@ -73,13 +75,14 @@ function portFor(view: EditorView): EditorPort {
         selection: { anchor: target.from },
         effects: EditorView.scrollIntoView(target.from, { y: "start", yMargin: 48 }),
       });
-      if (focus) view.focus();
+      // A document opened while no other was is shown only once React renders; focus it then.
+      if (focus) requestAnimationFrame(() => view.focus());
     },
   };
 }
 
 /** CodeMirror over the engine's source API: byte-exact loads, revision-checked saves, conflicts surfaced. */
-export default function CodeEditor({ request, api, onPreview }: CodeEditorProps) {
+export default function CodeEditor({ request, api, onPreview, home }: CodeEditorProps) {
   const store = useStore();
   const preview = useRef(onPreview);
   preview.current = onPreview;
@@ -136,6 +139,11 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
             }))}
             selected={active.path}
             onSelect={(path) => session.switchTo(path)}
+            onClose={(path) => {
+              const doc = snapshot.docs.find((candidate) => candidate.path === path);
+              if (doc?.dirty && !window.confirm(`Close ${baseName(path)} and discard its unsaved edits?`)) return false;
+              return session.close(path);
+            }}
           />
         ) : (
           <span className="muted">{snapshot.opening ? `Opening ${snapshot.opening}…` : "No file open"}</span>
@@ -143,7 +151,7 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
         {active ? <span className="meta">{active.saving ? "Saving…" : active.dirty ? "Unsaved" : "Saved"}</span> : null}
         <button
           type="button"
-          disabled={!active || active.saving}
+          disabled={!active || active.saving || (!active.dirty && active.issue === null)}
           aria-keyshortcuts="Meta+S Control+S"
           onClick={() => void session.save()}
         >
@@ -157,6 +165,13 @@ export default function CodeEditor({ request, api, onPreview }: CodeEditorProps)
         </p>
       ) : null}
       {!active && snapshot.opening ? <CodeSkeleton label={`Opening ${snapshot.opening}`} /> : null}
+      {!active && !snapshot.opening && home ? (
+        <p className="pane-note">
+          <button type="button" onClick={() => void session.open(home.path, home.line, true)}>
+            Open {baseName(home.path)}
+          </button>
+        </p>
+      ) : null}
       <div
         ref={host}
         className="code-host"

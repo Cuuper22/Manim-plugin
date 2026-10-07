@@ -1,8 +1,9 @@
 // The core flow against a real engine and runtime, in Chromium: npm run test:e2e.
 // Skipped without an engine binary (cargo build, or MANIM_DIRECTOR_BIN) or a
 // Playwright Chromium (PLAYWRIGHT_BROWSERS_PATH), and when the engine's doctor
-// says this machine cannot render. The engine finds Python and the runtime as
-// it always does (e.g. MANIM_DIRECTOR_PYTHON).
+// says this machine cannot render; with MANIM_DIRECTOR_E2E=required (CI) each
+// of those fails instead. The engine finds Python and the runtime as it always
+// does (e.g. MANIM_DIRECTOR_PYTHON).
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,19 +16,25 @@ const RENDER_MS = 240_000;
 const STEP_MS = 60_000;
 
 const binary = engineBinary();
-const skip = binary === null
+const missing = binary === null
   ? "no engine binary: run cargo build, or point MANIM_DIRECTOR_BIN at one"
   : existsSync(chromium.executablePath())
-    ? false
+    ? null
     : "no Playwright Chromium: set PLAYWRIGHT_BROWSERS_PATH";
+/** Where a skip would pass without testing anything. */
+const required = process.env.MANIM_DIRECTOR_E2E === "required";
+const skip = required ? false : missing ?? false;
 
 test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout: 15 * 60_000 }, async (t) => {
+  assert.equal(missing, null, "MANIM_DIRECTOR_E2E=required");
   const engine = await Engine.start(binary!);
   t.after(() => engine.stop());
 
   const doctor = await engine.doctor(STEP_MS);
   if (!doctor?.report.capabilities.render || !doctor.report.capabilities.video_tools) {
-    t.skip(`this machine cannot render: ${JSON.stringify(doctor?.report.capabilities ?? "no doctor report")}`);
+    const why = `this machine cannot render: ${JSON.stringify(doctor?.report.capabilities ?? "no doctor report")}`;
+    assert.ok(!required, why);
+    t.skip(why);
     return;
   }
   // Playwright's Chromium cannot decode H.264, so playback is checked on a WebM profile.
@@ -100,6 +107,20 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     assert.ok(stepped > seeked && stepped - seeked < 0.15, `one frame from ${seeked} is ${stepped}`);
   });
 
+  await t.test("a mid-width window keeps the stage's tabs, meta and track apart", async () => {
+    for (const width of [1024, 960]) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await page.evaluate(() => {
+        const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+        const [tab, meta] = [box(".stage-header [role=tab]:last-child"), box(".stage-meta")];
+        const overlaps = meta.left < tab.right && tab.left < meta.right && meta.top < tab.bottom && tab.top < meta.bottom;
+        return { overlaps, wideTrack: box(".track").width >= 200, overflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.deepEqual(layout, { overlaps: false, wideTrack: true, overflow: 0 }, `at ${width} px`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
   await t.test("frame at playhead and a contact sheet", async () => {
     await action("Frame at playhead").click();
     await until(page, async () => /Frame at \d:\d\d\.\d\d/.test(await stageMeta(page)), "a frame on the stage", STEP_MS);
@@ -115,7 +136,8 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
 
   await t.test("QA findings jump to their line", async () => {
     await action("QA").click();
-    const finding = page.locator(".finding", { hasText: "safe_area" });
+    // QA may report the overflow differently per frame; any one of them jumps.
+    const finding = page.locator(".finding", { hasText: "safe_area" }).first();
     await finding.waitFor({ timeout: STEP_MS });
     assert.equal(await page.locator("#inspector-tab-findings").getAttribute("aria-selected"), "true");
     const link = finding.locator("button.link");
@@ -150,6 +172,15 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
     await page.keyboard.press("Control+s");
     await page.getByRole("heading", { name: "Not connected to the engine" }).waitFor();
     assert.equal(await page.locator(".workbench").isVisible(), false);
+    // The command names the project's path, which may be long: it scrolls in its box, and Copy stays in view.
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const fits = await page.evaluate(() => {
+        const copy = document.querySelector(".command button")!.getBoundingClientRect();
+        return document.documentElement.scrollWidth <= innerWidth && copy.right <= innerWidth;
+      });
+      assert.equal(fits, true, `the not-connected screen fits ${width} px`);
+    }
     await page.unroute("**/api/**");
     await page.locator(".workbench").waitFor({ timeout: STEP_MS });
     outage = false;

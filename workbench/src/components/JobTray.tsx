@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { JobId, JobStatus, JobSummary } from "../api/types.ts";
 import { useDismiss } from "../hooks/useShortcuts.ts";
-import { deliverable, isActive, jobTitle, progressFraction, retryRequest, statusText } from "../model/jobs.ts";
+import { clockTime } from "../model/format.ts";
+import { deliverable, isActive, jobTitle, retryRequest, statusText } from "../model/jobs.ts";
 import { downloadUrl } from "../model/media.ts";
 import { useStore, useWorkbench } from "../store/useWorkbench.ts";
 import { Icon } from "./Icon.tsx";
-import { Progress } from "./Progress.tsx";
+import { JobProgress } from "./Progress.tsx";
 
 const PAGE = 25;
 
@@ -28,20 +29,44 @@ interface JobTrayProps {
 export function JobTray({ open, onOpenChange, onLogs, onDiagnose }: JobTrayProps) {
   const jobs = useWorkbench((state) => state.jobs);
   const root = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
   const running = jobs.filter(isActive).length;
   const announcement = useAnnouncement(jobs);
-  useDismiss(open, () => onOpenChange(false), root);
+  /** Focus inside the tray goes back to its button rather than to the page. */
+  const close = () => {
+    if (root.current?.contains(document.activeElement)) toggle.current?.focus();
+    onOpenChange(false);
+  };
+  useDismiss(open, close, root);
 
   return (
     <div className="menu-anchor" ref={root}>
-      <button type="button" aria-expanded={open} aria-controls={open ? "job-tray" : undefined} onClick={() => onOpenChange(!open)}>
+      <button
+        ref={toggle}
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? "job-tray" : undefined}
+        onClick={() => onOpenChange(!open)}
+      >
         Jobs
         {running > 0 ? <span className="muted"> · {running} active</span> : null}
       </button>
       <p className="visually-hidden" aria-live="polite">
         {announcement}
       </p>
-      {open ? <TrayPanel jobs={jobs} running={running} onClose={() => onOpenChange(false)} onLogs={onLogs} onDiagnose={onDiagnose} /> : null}
+      {open ? (
+        <TrayPanel
+          jobs={jobs}
+          running={running}
+          onClose={close}
+          onLogs={(jobId) => {
+            // The log dialog returns focus to what had it when it opened: the button, not a row of the closed tray.
+            toggle.current?.focus();
+            onLogs(jobId);
+          }}
+          onDiagnose={onDiagnose}
+        />
+      ) : null}
     </div>
   );
 }
@@ -96,10 +121,10 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
         <span className="dot" data-state={DOT_STATES[job.status]} aria-hidden="true" />
         <span className="job-title">{title}</span>
         <time className="meta" dateTime={job.created_at}>
-          {new Date(job.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          {clockTime(job.created_at)}
         </time>
       </div>
-      {job.status === "running" ? <Progress fraction={progressFraction(job.progress)} label={`${title} progress`} /> : null}
+      {job.status === "running" ? <JobProgress job={job} label={`${title} progress`} /> : null}
       {job.error && job.status === "failed" ? <p className="meta danger clamp">{job.error.message}</p> : null}
       <div className="row job-actions">
         <span className="meta job-status">{statusText(job)}</span>
@@ -112,7 +137,7 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
           </button>
         ) : null}
         {retry ? (
-          <button type="button" className="quiet small" onClick={() => void store.submit(`retry:${job.id}`, retry)}>
+          <button type="button" className="quiet small" onClick={() => void store.submit(retry)}>
             Retry
           </button>
         ) : null}
