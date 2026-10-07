@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "tsc --noEmit -p tsconfig.node.json && node --experimental-strip-types --test test/*.test.ts",
+    "test:e2e": "npm run build && node --experimental-strip-types --test test/e2e/*.e2e.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json"
   },
@@ -25,6 +26,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "~6.1.0",
+    "playwright-core": "~1.56.1",
     "typescript": "~5.9.3",
     "vite": "~8.2.2"
   }
