@@ -280,14 +280,15 @@ impl Store {
         Ok(CursorPage { items, next_cursor })
     }
 
-    /// The queued or running job computing `fingerprint`, for coalescing.
+    /// The queued or running job computing `fingerprint`, for coalescing; a
+    /// job being cancelled will not deliver, so it is not one.
     pub fn active_job_with_fingerprint(&self, fingerprint: &str) -> Result<Option<JobRecord>> {
         self.conn
             .lock()
             .query_row(
                 &format!(
                     "SELECT {JOB_COLUMNS} FROM jobs WHERE fingerprint=?1 AND status IN ('queued','running')
-                     ORDER BY sequence DESC LIMIT 1"
+                     AND cancel_requested=0 ORDER BY sequence DESC LIMIT 1"
                 ),
                 [fingerprint],
                 row_to_job,
@@ -557,6 +558,10 @@ mod tests {
         store.request_cancel(a).unwrap();
         store.request_cancel(b).unwrap();
         assert_eq!(store.cancel_requests(mine).unwrap(), [a]);
+        assert!(
+            store.active_job_with_fingerprint("fp").unwrap().is_none(),
+            "a resubmission does not join a job being cancelled"
+        );
         let cancelled = store
             .cancel_queued(a, &ErrorBody::new("cancelled", "x", None))
             .unwrap()
