@@ -64,8 +64,12 @@ impl SchedulerConfig {
             && std::env::var("MANIM_DIRECTOR_PREWARM").map_or(true, |value| value.trim() != "0");
         Self {
             mode,
-            workers: env_usize("MANIM_DIRECTOR_WORKERS", 2).clamp(1, 32),
-            queue_capacity: env_usize("MANIM_DIRECTOR_QUEUE", 128).clamp(1, 4096),
+            workers: env_number("MANIM_DIRECTOR_WORKERS")
+                .unwrap_or(2)
+                .clamp(1, 32),
+            queue_capacity: env_number("MANIM_DIRECTOR_QUEUE")
+                .unwrap_or(128)
+                .clamp(1, 4096),
             bridge: BridgeConfig::default(),
             prune: PrunePolicy::from_env(),
             prewarm: prewarm.then(PrewarmPolicy::default),
@@ -73,11 +77,9 @@ impl SchedulerConfig {
     }
 }
 
-fn env_usize(name: &str, fallback: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(fallback)
+/// A numeric setting from the environment; unset or unparsable is `None`.
+fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.trim().parse().ok()
 }
 
 /// How a submission was satisfied: HTTP answers 202 for `Queued`, 200 otherwise.

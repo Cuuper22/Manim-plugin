@@ -2,7 +2,7 @@
 //! are gone, and surplus undo snapshots. Blocking; long-lived engines run it
 //! at start and every ten minutes.
 
-use super::{artifacts, latest};
+use super::{artifacts, env_number, latest};
 use crate::{JobLinks, Store, UNDO_DIR};
 use anyhow::Result;
 use chrono::{TimeDelta, Utc};
@@ -26,11 +26,7 @@ pub struct PrunePolicy {
 
 impl PrunePolicy {
     pub fn from_env() -> Self {
-        let read = |name: &str| {
-            std::env::var(name)
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-        };
+        let read = env_number::<u64>;
         Self {
             keep_jobs: read("MANIM_DIRECTOR_KEEP_JOBS")
                 .map_or(500, |value| value.clamp(50, 100_000)) as usize,

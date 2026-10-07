@@ -12,7 +12,8 @@ pub use paths::cli_project_path;
 pub(crate) use paths::{project_path, PathUse};
 pub(crate) use source::SelectedSource;
 
-use crate::{cache, scheduler::artifacts, Store};
+use super::{artifacts, env_number};
+use crate::{cache, Store};
 use manim_director_core::{
     files, python_sources, relative_posix, Budget, CaptionsTask, ContactSheetTask, DiagnoseTask,
     DirectorSpec, DoctorTask, EngineError, FrameTask, Limits, LogStream, MediaFormat, Operation,
@@ -131,11 +132,11 @@ impl ResolvedJob {
 /// `budgets` in `director.yaml` (OPS §1.2).
 pub(crate) fn limits(spec: Option<&DirectorSpec>) -> Limits {
     let budgets = spec.map(|spec| &spec.budgets);
-    let timeout_seconds = env_u64("MANIM_DIRECTOR_TIMEOUT_SECONDS")
+    let timeout_seconds = env_number("MANIM_DIRECTOR_TIMEOUT_SECONDS")
         .or(budgets.and_then(|budgets| budgets.render_seconds))
         .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
         .clamp(10, 86_400);
-    let memory_mb = env_u64("MANIM_DIRECTOR_MEMORY_MB")
+    let memory_mb = env_number("MANIM_DIRECTOR_MEMORY_MB")
         .or(budgets.and_then(|budgets| budgets.memory_mb))
         .filter(|megabytes| *megabytes > 0);
     Limits {
@@ -148,10 +149,6 @@ fn artifact_budget(spec: Option<&DirectorSpec>) -> u64 {
     spec.and_then(|spec| spec.budgets.output_mb)
         .unwrap_or(DEFAULT_OUTPUT_MB)
         .saturating_mul(1024 * 1024)
-}
-
-fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name).ok()?.trim().parse().ok()
 }
 
 /// Resolves a job request. Direct operations never reach here.
