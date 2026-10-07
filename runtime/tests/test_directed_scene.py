@@ -627,6 +627,33 @@ def test_tags_number_equations_at_the_right_edge(render: Render) -> None:
     assert lit[0] == 1.0 and lit[1] < 1.0
 
 
+@requires_latex
+def test_tags_follow_their_equation_into_its_region(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Moving(DirectedScene):
+        def construct(self):
+            with self.beat("one"):
+                eq = self.math("a^2 + b^2 = c^2")
+                self.place(eq)
+                mark = self.tag(eq)
+            with self.beat("two", keep=[eq]):
+                self.place(eq, region=Region.LEFT)
+                self.place(Square(), region=Region.RIGHT)  # the tag is not in the way
+            seen["edge"] = mark.get_right()[0] - self.region("left").right
+            seen["row"] = mark.get_y() - eq.get_y()
+            with self.beat("three"):
+                note = (
+                    "a note so long that the derivation spans the whole width of the content region"
+                )
+                steps = self.derive("x = 1", ("y = 2", note), notes="right")
+                with pytest.raises(CompositionError, match="notes='below'"):
+                    self.tag(steps.lines[1])
+
+    render(Moving)
+    assert seen["edge"] == pytest.approx(0) and seen["row"] == pytest.approx(0)
+
+
 def test_a_still_shows_the_theme_and_the_content(render: Render, tmp_path: Path) -> None:
     from PIL import Image
 

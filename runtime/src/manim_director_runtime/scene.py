@@ -228,6 +228,7 @@ class Directed:
             for part in staged:
                 self._stage.glides.setdefault(id(part), (part, part.copy()))
                 self._carry(part)
+            followers = [(m, m.copy()) for m in self._followers(staged)]
             if replaces is None:
                 self._stage.entering += [m for m in new if m not in self._stage.entering]
             mobject.scale(layout.scale).move_to(center)
@@ -236,6 +237,9 @@ class Directed:
                 self._stage.placed.pop(id(member), None)
             self._stage.place(mobject, area_name)
             self._pin(mobject)
+            for follower, before in followers:  # tags glide along instead of jumping
+                follower.update(0)
+                self._stage.glides.setdefault(id(follower), (follower, before))
         if replaces is not None:
             self._stage.placed.pop(id(replaces), None)
             if replaces in self._stage.entering:
@@ -475,23 +479,34 @@ class Directed:
         return glyphs
 
     def tag(self, mobject: Mobject, label: str | None = None) -> MathTex:
-        """An equation tag at the right edge of the content region, following `mobject`."""
+        """An equation tag at the right edge of the region `mobject` is placed in (content if
+        it was not placed), level with it; it moves and leaves with `mobject`."""
 
         if label is None:
             self._tags += 1
             label = f"({self._tags})"
         mark = MathTex(label, font_size=MATH_FONT_SIZE * 0.72, color=self.theme.muted)
-        area = self._regions[Region.CONTENT]
-        mark.move_to((area.right - mark.width / 2, mobject.get_center()[1], 0))
-        if bounds(mark).overlaps(bounds(mobject)):
-            raise CompositionError(
-                f"Tag {label} would overlap {describe(mobject)}; place it narrower first.",
-                label=label,
-            )
-        mark.add_updater(lambda m: m.set_y(mobject.get_center()[1]))
+
+        def follow(m: Mobject) -> None:
+            area = self._regions[self._region_around(mobject)]
+            m.move_to((area.right - m.width / 2, mobject.get_center()[1], 0))
+
+        follow(mark)
+        root = self._placed_root(mobject)
+        notes = [note for note in getattr(root, "notes", []) if note is not None]
+        for other in [mobject, *notes]:  # a derivation's notes share the right side
+            if bounds(mark).overlaps(bounds(other)):
+                fix = "narrow the equation" if other is mobject else "use derive(notes='below')"
+                raise CompositionError(
+                    f"The tag {label} of {describe(mobject)} would overlap {describe(other)}; "
+                    f"{fix}, or place it in a wider region.",
+                    label=label,
+                )
+        follow.director = True  # type: ignore[attr-defined]
+        mark.add_updater(follow)
         self._stage.attached[id(mark)] = mobject
         self._stage.entering.append(mark)
-        self._stage.place(mark, Region.CONTENT)
+        self._stage.place(mark, self._region_around(mobject))
         self._pin(mark)
         return mark
 
@@ -657,6 +672,15 @@ class Directed:
         if self._beat is not None and not self._beat.transitioned:
             self._beat.carried.update(id(leaf) for leaf in mobject.get_family())
 
+    def _region_around(self, mobject: Mobject) -> Region:
+        return self._stage.region_of(self._placed_root(mobject)) or Region.CONTENT
+
+    def _followers(self, parts: Sequence[Mobject]) -> list[Mobject]:
+        """On-stage tags and highlight boxes attached to any of `parts`."""
+
+        ids = {id(member) for part in parts for member in part.get_family()}
+        return [m for m in self.mobjects if id(self._stage.attached.get(id(m))) in ids]
+
     def _placed_root(self, mobject: Mobject) -> Mobject:
         """The placed object that `mobject` is part of (a derivation line's block), if any."""
 
@@ -709,8 +733,10 @@ class Directed:
                 continue
             for part in self._staying(mobject):
                 if id(part) not in skipped and area.overlaps(bounds(part)):
+                    owner = self._stage.attached.get(id(part))
+                    what = describe(part) if owner is None else f"the tag of {describe(owner)}"
                     raise CompositionError(
-                        f"This placement in the {region} region would overlap {describe(part)}. "
+                        f"This placement in the {region} region would overlap {what}. "
                         "Place both in one call (self.place(a, b)), use another region, or let "
                         "the next beat retire it.",
                         region=region.value,
