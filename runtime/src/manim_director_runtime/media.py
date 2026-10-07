@@ -226,8 +226,8 @@ def _compose(images: list[Image], frames: list[SheetFrame], columns: int, rows: 
 
 
 def _clock(seconds: float) -> str:
-    minutes, rest = divmod(seconds, 60)
-    return f"{int(minutes):02d}:{rest:04.1f}"
+    minutes, tenths = divmod(round(seconds * 10), 600)  # round first: 59.95 s is 01:00.0
+    return f"{minutes:02d}:{tenths / 10:04.1f}"
 
 
 def _number(value: object) -> float | None:

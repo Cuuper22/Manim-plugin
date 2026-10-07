@@ -208,3 +208,14 @@ def test_qa_rejects_an_unreadable_image(project: Path, ctx) -> None:
     with pytest.raises(DirectorError) as raised:
         qa(task, ctx)
     assert (raised.value.code, raised.value.data) == ("invalid_source", {"path": str(broken)})
+
+
+def test_contact_sheet_clock_rounds_before_splitting_minutes() -> None:
+    from manim_director_runtime.media import _clock
+
+    assert [_clock(t) for t in (5.04, 59.95, 119.99, 61.0)] == [
+        "00:05.0",
+        "01:00.0",
+        "02:00.0",
+        "01:01.0",
+    ]
