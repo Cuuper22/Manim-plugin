@@ -249,8 +249,9 @@ function VideoView({ artifact, still, playback, onExportWebm }: VideoViewProps) 
   const onError = async () => {
     // A <video> cannot see HTTP statuses; ask once whether the file was replaced (410) or cannot be decoded.
     const response = await fetch(artifact.url, { method: "HEAD" }).catch(() => null);
-    if (response?.status === 410) store.refresh();
-    else setFailure(response?.ok ? "decode" : "load");
+    if (response?.status === 410) return store.refresh();
+    playback.cannotPlay();
+    setFailure(response?.ok ? "decode" : "load");
   };
 
   return (
