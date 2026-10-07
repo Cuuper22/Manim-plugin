@@ -47,7 +47,8 @@ storyboard:
   accepts.
 - **Profiles.** Built-ins: `draft` 854×480@15, `preview` 1280×720@30, `production` 1920×1080@60,
   `ultra` 3840×2160@60, `custom` (from `render.width/height/fps`). An entry may override a built-in
-  or add a new name with `quality` (`low`, `medium`, `high`, `production`, `fourk`), `resolution`
+  or add a new name with `quality` (Manim's: `low` 480p15, `medium` 720p30, `high` 1080p60,
+  `production` 1440p60, `fourk` 2160p60; not the profiles of the same name), `resolution`
   `[w, h]` (even, 16–8192), `fps` (1–240), `renderer` (`cairo`, `opengl`), `format` (`mp4`, `mov`,
   `webm`, `gif`) and `alpha` (needs `mov` or `webm`).
 - **Safe area.** Fractions of the frame kept clear on each side (0–0.45). Regions, `place()` and

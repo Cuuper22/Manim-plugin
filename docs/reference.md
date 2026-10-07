@@ -112,9 +112,10 @@ narration: {manifest: narration.json, source: narration.md}
 ```
 
 Built-in profiles: `draft` 854×480@15, `preview` 1280×720@30, `production` 1920×1080@60, `ultra`
-3840×2160@60, `custom` from `render`. A profile entry takes `quality` (`low`, `medium`, `high`,
-`production`, `fourk`), `resolution`, `fps`, `renderer`, `format` and `alpha`; width and height must
-be even and 16–8192, fps 1–240, and `alpha` needs `mov` or `webm`. Directories must stay inside the
+3840×2160@60, `custom` from `render`. A profile entry takes `quality` (Manim's names: `low`
+854×480@15, `medium` 1280×720@30, `high` 1920×1080@60, `production` 2560×1440@60, `fourk`
+3840×2160@60), `resolution`, `fps`, `renderer`, `format` and `alpha`; width and height must be even
+and 16–8192, fps 1–240, and `alpha` needs `mov` or `webm`. Directories must stay inside the
 project. An invalid file fails every operation that needs it with `invalid_spec` and the YAML line.
 
 ## MCP tools
