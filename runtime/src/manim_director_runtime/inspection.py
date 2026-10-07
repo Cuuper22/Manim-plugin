@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import io
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -107,27 +109,34 @@ def parse_module(path: Path, file: str) -> ast.Module | Finding:
     """Parse one file, or describe why it cannot be parsed; `file` is its public path."""
 
     try:
-        source = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return Finding(
-            code="source_encoding",
-            severity=Severity.ERROR,
-            message="The file is not valid UTF-8.",
-            hint="Save the file as UTF-8.",
-            location=SourceLocation(file=file, line=1),
-        )
+        raw = path.read_bytes()
     except OSError as exc:
         raise io_error(path, exc) from exc
     try:
+        # As Python reads source: a UTF-8 BOM or a PEP 263 coding line decides.
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+        source = raw.decode(encoding)
+    except (SyntaxError, UnicodeDecodeError, LookupError):
+        return Finding(
+            code="source_encoding",
+            severity=Severity.ERROR,
+            message="The file is not valid UTF-8 (or the encoding its coding line names).",
+            hint="Save the file as UTF-8.",
+            location=SourceLocation(file=file, line=1),
+        )
+    try:
         return ast.parse(source, filename=str(path))
     except SyntaxError as exc:
-        return Finding(
-            code="python_syntax",
-            severity=Severity.ERROR,
-            message=exc.msg,
-            hint="Fix the syntax error before rendering.",
-            location=SourceLocation(file=file, line=exc.lineno or 1, column=exc.offset),
-        )
+        message, line, column = exc.msg, exc.lineno or 1, exc.offset
+    except ValueError as exc:  # NUL bytes, on Python 3.11
+        message, line, column = str(exc), 1, None
+    return Finding(
+        code="python_syntax",
+        severity=Severity.ERROR,
+        message=message,
+        hint="Fix the syntax error before rendering.",
+        location=SourceLocation(file=file, line=line, column=column),
+    )
 
 
 def scene_class_names(parsed: list[ParsedFile]) -> set[str]:

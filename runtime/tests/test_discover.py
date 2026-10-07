@@ -101,6 +101,18 @@ def test_unparseable_files_become_findings(project: Path, ctx) -> None:
     assert findings[0]["location"]["column"] is not None
 
 
+def test_files_are_decoded_as_python_reads_them(project: Path, ctx) -> None:
+    scene = "from manim import Scene\nclass Caf\u00e9(Scene):\n    pass\n"
+    bom = write(project, "scenes/bom.py", b"\xef\xbb\xbf" + scene.encode("utf-8"))
+    cookie = write(project, "scenes/cookie.py", ("# coding: latin-1\n" + scene).encode("latin-1"))
+    result = as_json(discover(DiscoverTask(files=[bom, cookie]), ctx))
+    assert result["findings"] == []
+    assert [(s["name"], s["file"]) for s in result["scenes"]] == [
+        ("Caf\u00e9", "scenes/bom.py"),
+        ("Caf\u00e9", "scenes/cookie.py"),
+    ]
+
+
 def test_discover_never_executes_code(project: Path, ctx) -> None:
     marker = project / "executed"
     source = f"open({str(marker)!r}, 'w').write('x')\nclass Demo(Scene):\n    pass\n"
