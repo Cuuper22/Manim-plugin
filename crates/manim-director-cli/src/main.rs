@@ -18,6 +18,7 @@ use manim_director_engine::{
 use std::{
     collections::BTreeMap,
     fs,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::ExitCode,
     time::{Duration, Instant},
@@ -36,6 +37,7 @@ async fn main() -> ExitCode {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
     let cli = Cli::parse();
     let machine = cli.json;
