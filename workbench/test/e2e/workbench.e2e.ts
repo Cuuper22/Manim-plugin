@@ -115,7 +115,8 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
 
   await t.test("QA findings jump to their line", async () => {
     await action("QA").click();
-    const finding = page.locator(".finding", { hasText: "safe_area" });
+    // QA may report the overflow differently per frame; any one of them jumps.
+    const finding = page.locator(".finding", { hasText: "safe_area" }).first();
     await finding.waitFor({ timeout: STEP_MS });
     assert.equal(await page.locator("#inspector-tab-findings").getAttribute("aria-selected"), "true");
     const link = finding.locator("button.link");
