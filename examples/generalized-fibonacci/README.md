@@ -25,11 +25,11 @@ manim-director --project examples/generalized-fibonacci contact-sheet
 manim-director --project examples/generalized-fibonacci render --scene StateOrbit3D
 ```
 
-Or with plain Manim, from this directory:
+Or with plain Manim from this directory, using the one the installer set up beside the runtime:
 
 ```bash
-manim -ql scenes.py GeneralizedFibonacci
-manim -ql scenes.py CompanionMatrix
+~/.local/share/manim-director/venv/bin/manim -ql scenes.py GeneralizedFibonacci
+~/.local/share/manim-director/venv/bin/manim -ql scenes.py CompanionMatrix
 ```
 
 Check the algebra behind the `roots` beat (`λ₊` solves `λ² = pλ + q`):
