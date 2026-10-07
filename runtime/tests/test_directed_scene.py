@@ -469,6 +469,38 @@ def test_derive_aligns_relations_and_leaves_one_block_on_stage(render: Render) -
 
 
 @requires_latex
+def test_derive_puts_notes_under_their_lines_when_the_region_is_tall(tmp_path, tex_dir) -> None:
+    seen: dict[str, Any] = {}
+
+    class Portrait(DirectedScene):
+        symbols = {"a": "primary", "b": "secondary", "c": "accent"}
+
+        def construct(self):
+            steps = self.derive(
+                r"ax^2 + bx + c = 0",
+                (r"x^2 + \frac{b}{a}x = -\frac{c}{a}", "divide by $a$"),
+                (
+                    r"\left(x + \frac{b}{2a}\right)^2 = \frac{b^2 - 4ac}{4a^2}",
+                    "complete the square",
+                ),
+            )
+            (_, line, after), note = steps.lines, steps.notes[1]
+            seen["under"] = line.get_bottom()[1] > note.get_top()[1] > after.get_top()[1]
+            seen["left"] = note.get_left()[0] - line.get_left()[0]
+            seen["tex note"] = type(note).__name__
+            seen["scale"] = line.font_size / 44
+            with pytest.raises(CompositionError, match="notes='left'"):
+                self.derive("a = b", notes="left")
+
+    portrait = {"pixel_width": 180, "pixel_height": 320, "frame_width": 4.5, "frame_height": 8.0}
+    settings = {"media_dir": str(tmp_path / "media"), "tex_dir": str(tex_dir), **portrait}
+    with tempconfig({**settings, "save_last_frame": True, "write_to_movie": False}):
+        Portrait().render()  # notes beside the lines would need 0.46x, below the 0.5x minimum
+    assert seen["under"] and seen["left"] == pytest.approx(0)
+    assert seen["tex note"] == "Tex" and seen["scale"] > 0.6
+
+
+@requires_latex
 def test_derive_in_place_ends_on_the_last_step(render: Render) -> None:
     seen: dict[str, Any] = {}
 

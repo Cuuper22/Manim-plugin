@@ -229,7 +229,7 @@ class CharacteristicRoots(DirectedScene):
             self.caption("Put the guess into the rule, divide by λⁿ, and solve.")
             roots = self.derive(
                 r"\lambda^{n+2} = p\lambda^{n+1} + q\lambda^n",
-                (r"\lambda^2 = p\lambda + q", "divide by λⁿ"),
+                (r"\lambda^2 = p\lambda + q", r"divide by $\lambda^n$"),
                 (r"\lambda_\pm = \frac{p \pm \sqrt{p^2 + 4q}}{2}", "quadratic formula"),
                 replaces=guess,
             )

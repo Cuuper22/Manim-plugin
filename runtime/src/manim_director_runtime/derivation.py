@@ -1,15 +1,16 @@
-"""Layout of stepwise derivations: lines aligned on their relation, notes beside them."""
+"""Layout of stepwise derivations: lines aligned on their relation, notes beside or under them."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from manim import DOWN, RIGHT, MathTex, Mobject, SingleStringMathTex, VGroup
+from manim import DOWN, LEFT, RIGHT, MathTex, Mobject, SingleStringMathTex, VGroup
 
 from .texscan import is_relation
 
 LINE_GAP = 0.32
-NOTE_GAP = 0.6
+NOTE_GAP = 0.6  # beside the lines
+NOTE_BELOW = 0.12  # under its line, much closer than the next line so it reads as its own
 
 
 class Derivation(VGroup):
@@ -21,16 +22,27 @@ class Derivation(VGroup):
         self.notes = list(notes)
 
 
-def stack(lines: Sequence[SingleStringMathTex], notes: Sequence[Mobject | None]) -> None:
-    """One line per step, relations in one column (lines without one align by their left)."""
+def stack(
+    lines: Sequence[SingleStringMathTex], notes: Sequence[Mobject | None], *, below: bool = False
+) -> None:
+    """One line per step, relations in one column (lines without one align by their left);
+    notes in a column beside the lines, or each under its own line."""
 
-    VGroup(*lines).arrange(DOWN, buff=LINE_GAP)
+    top = 0.0
+    for line, note in zip(lines, notes, strict=True):
+        line.move_to((0, top - line.height / 2, 0))
+        top -= line.height + LINE_GAP
+        if below and note is not None:
+            note.move_to((0, top + LINE_GAP - NOTE_BELOW - note.height / 2, 0))
+            top -= note.height + NOTE_BELOW
     column = relation_x(lines[0])
     for line in lines[1:]:
         line.shift(RIGHT * (column - relation_x(line)))
     right = max(line.get_right()[0] for line in lines)
     for line, note in zip(lines, notes, strict=True):
-        if note is not None:
+        if note is not None and below:
+            note.align_to(line, LEFT)
+        elif note is not None:
             note.move_to((right + NOTE_GAP + note.width / 2, line.get_center()[1], 0))
 
 

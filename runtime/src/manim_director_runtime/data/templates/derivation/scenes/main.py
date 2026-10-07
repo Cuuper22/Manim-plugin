@@ -33,7 +33,7 @@ class QuadraticFormula(DirectedScene):
             steps = self.derive(
                 r"\left(x + \frac{b}{2a}\right)^2 = \frac{b^2 - 4ac}{4a^2}",
                 (r"x + \frac{b}{2a} = \pm\frac{\sqrt{b^2 - 4ac}}{2a}", "take square roots"),
-                (r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}", "subtract b/2a"),
+                (r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}", r"subtract $\frac{b}{2a}$"),
                 replaces=square.lines[-1],
             )
 

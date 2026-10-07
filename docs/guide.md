@@ -146,11 +146,13 @@ steps = self.derive(
 )
 ```
 
-Each step is a TeX string or a `MathTex`, optionally paired with a note. The first step is written
-(or morphed from `replaces=`), then each line transforms into the next with `TransformMatchingTex`,
-stacked with relations in one column. `in_place=True` transforms a single line instead. `run_time`
-and `pause` set each step's length and the rest between steps. The result is a `Derivation`
-(a `VGroup`) with `.lines` and `.notes`; `steps.lines[-1]` is what the next beat usually replaces.
+Each step is a TeX string or a `MathTex`, optionally paired with a note (`$...$` in a note is TeX).
+The first step is written (or morphed from `replaces=`), then each line transforms into the next
+with `TransformMatchingTex`, stacked with relations in one column. Notes go beside the lines or
+under each line, whichever needs less shrinking (`notes="right"` or `"below"` to choose).
+`in_place=True` transforms a single line instead. `run_time` and `pause` set each step's length
+and the rest between steps. The result is a `Derivation` (a `VGroup`) with `.lines` and `.notes`;
+`steps.lines[-1]` is what the next beat usually replaces.
 
 - `self.term(eq, r"\frac{b}{2a}", occurrence=None)` returns the glyphs of a sub-term of any `MathTex`
   or `Tex`.

@@ -89,13 +89,15 @@ with self.beat("roots", transition="continue", keep=[plane], focus=None, hold=1.
 
 ## Mathematics
 
-`self.derive(*steps, region="content", in_place=False, run_time=None, pause=None, replaces=None,
-min_scale=0.5) -> Derivation`
+`self.derive(*steps, region="content", in_place=False, notes="auto", run_time=None, pause=None,
+replaces=None, min_scale=0.5) -> Derivation`
 
 - Steps are TeX strings or `MathTex`, optionally `(tex, "note")`. The first is written (or morphed
   from `replaces=`), each next line transforms from a copy of the previous one with
   `TransformMatchingTex`, lines stack with their first relation (`=`, `<`, `\le`, ...) in one
-  column, notes sit to the right in the `label` role.
+  column. Notes are `label`-role text; `$...$` in a note is TeX (`r"divide by $\lambda^n$"`).
+  `notes="right"` puts them in a column beside the lines, `"below"` under each line, and `"auto"`
+  picks whichever needs less shrinking (below in a 9:16 frame).
 - `in_place=True` transforms one line through all steps (notes appear below and swap).
 - Returns a `VGroup` with `.lines` and `.notes`. Continue a derivation in the next beat with
   `derive(..., replaces=steps.lines[-1])`, or promote the result with

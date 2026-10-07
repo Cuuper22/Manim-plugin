@@ -59,7 +59,7 @@ from . import motion, timeline
 from .beats import Beat, Intent, Transition
 from .derivation import Derivation, overlay, stack
 from .errors import CompositionError, parse_choice
-from .layout import LANES, Rect, Region, frame_regions
+from .layout import LANES, Rect, Region, fit_scale, frame_regions
 from .project import load_style
 from .staging import (
     Stage,
@@ -323,9 +323,10 @@ class Directed:
 
     def derive(
         self,
-        *steps: str | MathTex | tuple[str | MathTex, str],
+        *steps: str | MathTex | tuple[str | MathTex, str | Mobject],
         region: Region | str = Region.CONTENT,
         in_place: bool = False,
+        notes: str = "auto",
         run_time: float | None = None,
         pause: float | None = None,
         replaces: Mobject | None = None,
@@ -333,17 +334,23 @@ class Directed:
     ) -> Derivation:
         """Play a derivation, one step at a time, with matching terms carried between steps.
 
-        Steps are TeX strings (or MathTex), optionally paired with a note: `(r"= x^2", "expand")`.
-        Lines stack with their relations aligned; `in_place=True` transforms one line instead.
-        `replaces` morphs an on-stage expression into the first step instead of writing it.
+        Steps are TeX strings (or MathTex), optionally paired with a note: `(r"= x^2", "expand")`;
+        a note with `$...$` is typeset as TeX, and a Mobject is used as it is. Lines stack with
+        their relations aligned and notes `"right"` of them or each `"below"` its line; `"auto"`
+        picks the one that needs less shrinking (below, in a tall region). `in_place=True`
+        transforms one line instead. `replaces` morphs an on-stage expression into the first
+        step instead of writing it.
         """
 
         if not steps:
             raise CompositionError("derive() needs at least one step.")
         if replaces is not None and not self._visible(replaces):
             raise CompositionError(f"replaces={describe(replaces)} is not on stage.")
-        lines, notes = [], []
-        for step in steps:
+        if notes not in ("auto", "right", "below"):
+            raise CompositionError(f"notes={notes!r}; use 'auto', 'right' or 'below'.")
+        area_name = parse_choice(Region, region)
+        lines, labels = [], []
+        for number, step in enumerate(steps, start=1):
             tex, note = step if isinstance(step, tuple) else (step, None)
             line = self.math(tex) if isinstance(tex, str) else tex
             if not isinstance(line, SingleStringMathTex):
@@ -352,14 +359,26 @@ class Directed:
                     f"as (tex, note); got {describe(tex)}."
                 )
             lines.append(line)
-            notes.append(None if note is None else self.text(note, Role.LABEL))
-        (overlay if in_place else stack)(lines, notes)
-        block = Derivation(lines, notes)
-        area_name = parse_choice(Region, region)
+            labels.append(self._note(note, number))
+        area = self._regions[area_name]
+        if in_place:
+            overlay(lines, labels)
+        else:
+            noted = any(label is not None for label in labels)
+            sides = ["right", "below"] if notes == "auto" and noted else [notes]
+
+            def fit(side: str) -> float:
+                stack(lines, labels, below=side == "below")
+                block = VGroup(*lines, *(label for label in labels if label is not None))
+                return fit_scale(block.width, block.height, area)
+
+            best = max(sides, key=lambda side: (fit(side), side == "right"))
+            stack(lines, labels, below=best == "below")
+        block = Derivation(lines, labels)
         layout = plan(
             [block],
             area_name,
-            self._regions[area_name],
+            area,
             anchor=(0.0, 0.0),
             axis=(0, -1),
             buff=0.0,
@@ -376,21 +395,28 @@ class Directed:
             self._carry(replaces)
             self._stage.placed.pop(id(replaces), None)
             first = motion.morph(replaces, lines[0])
-        self._flush(along=[first, *_fade_in(notes[0])], run_time=seconds)
+        self._flush(along=[first, *_fade_in(labels[0])], run_time=seconds)
         for i in range(1, len(lines)):
             if rest > 0:
                 self.wait(rest)
             source = lines[i - 1] if in_place else lines[i - 1].copy()
-            animations = [TransformMatchingTex(source, lines[i]), *_fade_in(notes[i])]
-            if in_place and notes[i - 1] is not None:
-                animations.append(FadeOut(notes[i - 1]))
+            animations = [TransformMatchingTex(source, lines[i]), *_fade_in(labels[i])]
+            if in_place and labels[i - 1] is not None:
+                animations.append(FadeOut(labels[i - 1]))
             self._perform(animations, seconds)
         self.remove(*block.submobjects)
         if in_place:
-            block.remove(*(m for m in block.submobjects if m not in (lines[-1], notes[-1])))
+            block.remove(*(m for m in block.submobjects if m not in (lines[-1], labels[-1])))
         self.add(block)
         self._stage.place(block, area_name)
         return block
+
+    def _note(self, note: str | Mobject | None, step: int) -> Mobject | None:
+        if note is None or isinstance(note, Mobject):
+            return note
+        if not isinstance(note, str):
+            raise CompositionError(f"The note of step {step} is {describe(note)}; use a str.")
+        return self.tex(note, role=Role.LABEL) if "$" in note else self.text(note, Role.LABEL)
 
     def term(self, mobject: Mobject, tex: str, *, occurrence: int | None = None) -> VGroup:
         """The glyphs of `tex` inside a MathTex or Tex, e.g. `self.term(eq, r"\\frac{b}{2a}")`."""
