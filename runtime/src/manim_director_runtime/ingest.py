@@ -35,6 +35,9 @@ TARGET_LOUDNESS_LUFS = -16
 _MAX_HEADINGS, _MAX_COLUMNS, _MAX_SCENES = 30, 100, 100
 _UNSAFE_SVG_ELEMENTS = {"script", "foreignobject"}
 _UNSAFE_HREF = re.compile(r"(?i)\s*(?:https?:|javascript:|data:text/html)")
+# Written SVG keeps the usual prefixes instead of ElementTree's ns0:/ns1:.
+ET.register_namespace("", "http://www.w3.org/2000/svg")
+ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
 
 @dataclass(frozen=True, slots=True)

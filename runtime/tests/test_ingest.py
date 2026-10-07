@@ -127,8 +127,9 @@ def test_an_older_manifest_is_kept_aside(tmp_path: Path, project: Path, ctx) -> 
 def test_normalize_sanitizes_svg(tmp_path: Path, project: Path, ctx) -> None:
     svg = tmp_path / "knot.svg"
     svg.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" onload="x()">'
-        '<script>alert(1)</script><a href="javascript:x()"><circle r="4"/></a></svg>'
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        'width="40" height="20" onload="x()"><script>alert(1)</script>'
+        '<a href="javascript:x()"><circle id="c" r="4"/></a><use xlink:href="#c"/></svg>'
     )
     result = run(ctx, project, [source(svg, "svg", project / "assets")], normalize=True)
     item = result["sources"][0]
@@ -140,7 +141,7 @@ def test_normalize_sanitizes_svg(tmp_path: Path, project: Path, ctx) -> None:
     )
     stored = (project / "assets/knot.svg").read_text()
     assert "script" not in stored and "onload" not in stored and "javascript" not in stored
-    assert "circle" in stored
+    assert "<circle " in stored and '<use xlink:href="#c"' in stored  # no ns0:/ns1: prefixes
 
 
 def test_malformed_sources_fail_without_leaving_files(tmp_path: Path, project: Path, ctx) -> None:
