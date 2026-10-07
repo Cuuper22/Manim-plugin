@@ -16,8 +16,13 @@ use tokio::{
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Serves until stdin ends or a signal arrives, then cancels this engine's
+/// jobs and gives up its lease.
 pub async fn run_mcp(scheduler: Scheduler) -> Result<()> {
-    let served = serve(&scheduler, tokio::io::stdin(), tokio::io::stdout()).await;
+    let served = tokio::select! {
+        served = serve(&scheduler, tokio::io::stdin(), tokio::io::stdout()) => served,
+        _ = crate::shutdown_signal() => Ok(()),
+    };
     scheduler.shutdown().await;
     served
 }

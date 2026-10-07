@@ -14,7 +14,7 @@ mod workbench;
 #[cfg(test)]
 mod tests;
 
-use crate::Scheduler;
+use crate::{shutdown_signal, Scheduler};
 use anyhow::{bail, Result};
 use auth::Session;
 use axum::{
@@ -179,21 +179,4 @@ async fn common_headers(request: Request, next: Next) -> Response {
             .or_insert(HeaderValue::from_static("no-store"));
     }
     response
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut signal) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            signal.recv().await;
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
 }

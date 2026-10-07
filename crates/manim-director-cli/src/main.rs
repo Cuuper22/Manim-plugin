@@ -12,9 +12,9 @@ use manim_director_core::{
     ValidateMathParams,
 };
 use manim_director_engine::{
-    cli_project_path, current_revision, init_project, inspect, run_mcp, state_db_path,
-    write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, SourceEdit, SourceWrite,
-    Store,
+    cli_project_path, current_revision, init_project, inspect, run_mcp, shutdown_signal,
+    state_db_path, write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, SourceEdit,
+    SourceWrite, Store,
 };
 use std::{
     collections::BTreeMap,
@@ -124,8 +124,14 @@ async fn run(cli: Cli) -> Outcome {
                 Ok(root) => root,
                 Err(_) => project.canonicalize()?,
             };
-            run_mcp(start_scheduler(&root, EngineMode::Mcp).await?).await?;
-            Ok(ExitCode::SUCCESS)
+            let served = run_mcp(start_scheduler(&root, EngineMode::Mcp).await?).await;
+            // stdin is read on a thread nothing can cancel, so a server that
+            // stopped on a signal exits rather than wait for more input.
+            if let Err(error) = served {
+                eprintln!("error: {error:#}");
+                std::process::exit(EXIT_ENGINE.into());
+            }
+            std::process::exit(0)
         }
         command => {
             let root = find_project(&project).map_err(EngineError::from)?;
@@ -375,7 +381,7 @@ async fn submit_and_report(
     let progress = (!machine).then(|| tokio::spawn(print_progress(scheduler.clone(), job.id)));
     let finished = tokio::select! {
         finished = scheduler.wait(job.id) => Some(finished?),
-        _ = interrupted() => None,
+        _ = shutdown_signal() => None,
     };
     if let Some(task) = progress {
         task.abort();
@@ -384,7 +390,7 @@ async fn submit_and_report(
         scheduler.cancel(job.id).await?;
         let cancelled = tokio::select! {
             finished = scheduler.wait(job.id) => finished?,
-            _ = interrupted() => std::process::exit(EXIT_INTERRUPTED.into()),
+            _ = shutdown_signal() => std::process::exit(EXIT_INTERRUPTED.into()),
         };
         output::job(&cancelled, machine);
         return Ok(ExitCode::from(EXIT_INTERRUPTED));
@@ -435,25 +441,6 @@ async fn print_progress(scheduler: Scheduler, id: uuid::Uuid) {
             .map(|message| format!(" {message}"))
             .unwrap_or_default();
         eprintln!("{phase}{count}{message}");
-    }
-}
-
-async fn interrupted() {
-    #[cfg(unix)]
-    {
-        let terminate = async {
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(mut signal) => {
-                    signal.recv().await;
-                }
-                Err(_) => std::future::pending::<()>().await,
-            }
-        };
-        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate => {} }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
     }
 }
 
