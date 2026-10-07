@@ -241,6 +241,33 @@ async fn idle_workers_that_die_are_respawned_until_prewarming_gives_up() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_take_that_finds_the_idle_worker_dead_still_gets_it_replaced() {
+    let fixture = Fixture::new();
+    let mut bridge = fixture.bridge("stub");
+    let key = SpawnKey::default();
+    bridge.start_prewarm(&fixture.root, key.clone(), quick_policy());
+    fixture
+        .until("the idle worker", |fixture| {
+            fixture.readies.load(Ordering::SeqCst) == 1
+        })
+        .await;
+    let pid = fixture.records("stub-spawns.txt")[0].0;
+    // SAFETY: plain kill(2) of the stub's own process.
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    // Blocks the runtime, so the keeper meets the death and the take at once.
+    std::thread::sleep(Duration::from_millis(200));
+    let (outcome, _) = run_job(&bridge, &fixture.root, &key, &diagnose("cold")).await;
+    assert_eq!(message(&outcome), "cold");
+    fixture
+        .until("a replacement idle worker", |fixture| {
+            fixture.records("stub-spawns.txt").len() == 3
+        })
+        .await;
+    bridge.close().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn closing_the_bridge_retires_the_idle_worker() {
     let fixture = Fixture::new();
     let mut bridge = fixture.bridge("stub");

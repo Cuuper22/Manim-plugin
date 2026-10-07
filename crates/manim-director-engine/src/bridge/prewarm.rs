@@ -177,10 +177,12 @@ impl Keeper {
             self.respawn_at = Some(Instant::now());
             self.replenish();
         }
-        let mut worker = self.idle.take();
-        if let Some(dead) = worker.take_if(|worker| !worker.is_alive()) {
-            tokio::spawn(dead.discard());
-        }
+        // A worker that died unnoticed stays idle: its next step reports the
+        // failure, which schedules its replacement.
+        let worker = match self.idle.as_mut().is_some_and(Worker::is_alive) {
+            true => self.idle.take(),
+            false => None,
+        };
         if worker.is_some() {
             self.failures = 0;
             self.respawn_at = Some(Instant::now());
