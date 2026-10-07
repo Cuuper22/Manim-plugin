@@ -54,7 +54,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
     do {
       refetch.current = false;
       const page = { after: cursor.current, limit: PAGE_SIZE };
-      const outcome = await store.perform(`logs:${jobId}`, (client) => client.jobLogs(jobId, page));
+      const outcome = await store.perform((client) => client.jobLogs(jobId, page));
       if (!outcome.ok) break;
       const { items, next_after } = outcome.value;
       cursor.current = items.at(-1)?.cursor ?? cursor.current;
@@ -95,7 +95,7 @@ function LogsBody({ jobId, onDiagnose }: { jobId: JobId; onDiagnose: (job: JobSu
             </button>
           ) : null}
           {job && retry ? (
-            <button type="button" onClick={() => void store.submit(`retry:${job.id}`, retry)}>
+            <button type="button" onClick={() => void store.submit(retry)}>
               Retry
             </button>
           ) : null}

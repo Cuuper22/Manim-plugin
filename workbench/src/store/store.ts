@@ -11,8 +11,7 @@ export type Outcome<T> = { ok: true; value: T } | { ok: false; error: ApiError }
 
 /**
  * The one store the workbench reads: a snapshot from `GET /api/state` kept
- * current by the event stream, plus which actions are pending and toasts.
- * Subscribe with `useSyncExternalStore`.
+ * current by the event stream, plus toasts. Subscribe with `useSyncExternalStore`.
  */
 export class WorkbenchStore {
   readonly #client: EngineClient;
@@ -66,49 +65,40 @@ export class WorkbenchStore {
   }
 
   /**
-   * Runs `task` as action `key`, listed in `pending` while it runs. A failure
-   * is returned, and shown as a toast unless the caller handles its code
-   * (`quiet`). A lost session or engine switches the connection state instead.
+   * Runs `task` against the engine. A failure is returned, and shown as a toast
+   * unless the caller handles its code (`quiet`). A lost session or engine
+   * switches the connection state instead.
    */
-  async perform<T>(
-    key: string,
-    task: (client: EngineClient) => Promise<T>,
-    quiet: readonly string[] = [],
-  ): Promise<Outcome<T>> {
-    this.#dispatch({ type: "action_started", key });
+  async perform<T>(task: (client: EngineClient) => Promise<T>, quiet: readonly string[] = []): Promise<Outcome<T>> {
     try {
-      const value = await task(this.#client);
-      this.#dispatch({ type: "action_succeeded", key });
-      return { ok: true, value };
+      return { ok: true, value: await task(this.#client) };
     } catch (caught) {
       const error = asApiError(caught);
-      const lost = isConnectionLoss(error);
-      const toast = lost || quiet.includes(error.code) ? null : error.message;
-      this.#dispatch({ type: "action_failed", key, toast });
-      if (lost) this.#lost(error);
+      if (isConnectionLoss(error)) this.#lost(error);
+      else if (!quiet.includes(error.code)) this.#dispatch({ type: "toasted", message: error.message, tone: "danger" });
       return { ok: false, error };
     }
   }
 
   /** Submits an operation; the job is listed at once and then follows its events. */
-  submit(key: string, request: OperationRequest): Promise<Outcome<JobSummary>> {
-    return this.perform(key, async (client) => this.#tracked(await client.submitJob(request)));
+  submit(request: OperationRequest): Promise<Outcome<JobSummary>> {
+    return this.perform(async (client) => this.#tracked(await client.submitJob(request)));
   }
 
   cancel(jobId: string): Promise<Outcome<JobSummary>> {
-    return this.perform(`cancel:${jobId}`, async (client) => this.#tracked(await client.cancelJob(jobId)));
+    return this.perform(async (client) => this.#tracked(await client.cancelJob(jobId)));
   }
 
   async loadOlderJobs(): Promise<void> {
     const before = this.#state.jobsNextBefore;
     if (before === null) return;
-    const outcome = await this.perform("jobs:older", (client) => client.jobs({ before }));
+    const outcome = await this.perform((client) => client.jobs({ before }));
     if (outcome.ok) this.#dispatch({ type: "older_jobs", page: outcome.value });
   }
 
   /** Says why something cannot be done yet, e.g. a disabled action that was pressed. */
   hint(message: string): void {
-    this.#dispatch({ type: "hinted", message });
+    this.#dispatch({ type: "toasted", message, tone: "info" });
   }
 
   dismissToast(id: number): void {

@@ -46,8 +46,6 @@ export interface WorkbenchState {
   fileRevisions: Readonly<Record<string, string | null>>;
   /** Counts snapshots (start, resync, reconnect): events may have been missed before each. */
   snapshots: number;
-  /** The keys of the actions running now. */
-  pending: ReadonlySet<string>;
   toasts: readonly Toast[];
   nextToastId: number;
 }
@@ -58,11 +56,7 @@ export type StoreAction =
   | { type: "job"; job: JobSummary }
   | { type: "older_jobs"; page: JobPage }
   | { type: "connection"; connection: Connection }
-  | { type: "action_started"; key: string }
-  | { type: "action_succeeded"; key: string }
-  /** `toast`: the message to show, unless the caller shows the failure itself. */
-  | { type: "action_failed"; key: string; toast: string | null }
-  | { type: "hinted"; message: string }
+  | { type: "toasted"; message: string; tone: Toast["tone"] }
   | { type: "toast_dismissed"; id: number };
 
 export const initialState: WorkbenchState = {
@@ -73,7 +67,6 @@ export const initialState: WorkbenchState = {
   jobsNextBefore: null,
   fileRevisions: {},
   snapshots: 0,
-  pending: new Set(),
   toasts: [],
   nextToastId: 1,
 };
@@ -103,16 +96,8 @@ export function reduce(state: WorkbenchState, action: StoreAction): WorkbenchSta
     }
     case "connection":
       return sameConnection(state.connection, action.connection) ? state : { ...state, connection: action.connection };
-    case "action_started":
-      return { ...state, pending: new Set(state.pending).add(action.key) };
-    case "action_succeeded":
-      return withoutPending(state, action.key);
-    case "action_failed": {
-      const failed = withoutPending(state, action.key);
-      return action.toast === null ? failed : withToast(failed, action.toast, "danger");
-    }
-    case "hinted":
-      return withToast(state, action.message, "info");
+    case "toasted":
+      return withToast(state, action.message, action.tone);
     case "toast_dismissed":
       return { ...state, toasts: state.toasts.filter((toast) => toast.id !== action.id) };
   }
@@ -172,12 +157,6 @@ function capJobs(state: WorkbenchState): WorkbenchState {
   if (state.jobs.length <= MAX_JOBS) return state;
   const jobs = state.jobs.slice(0, MAX_JOBS);
   return { ...state, jobs, jobsNextBefore: String(jobs[jobs.length - 1]!.sequence) };
-}
-
-function withoutPending(state: WorkbenchState, key: string): WorkbenchState {
-  const pending = new Set(state.pending);
-  pending.delete(key);
-  return { ...state, pending };
 }
 
 /** A message already on screen is not shown twice. */

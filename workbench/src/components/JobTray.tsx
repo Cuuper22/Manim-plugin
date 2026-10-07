@@ -137,7 +137,7 @@ function JobRow({ job, onLogs, onDiagnose }: { job: JobSummary } & Pick<JobTrayP
           </button>
         ) : null}
         {retry ? (
-          <button type="button" className="quiet small" onClick={() => void store.submit(`retry:${job.id}`, retry)}>
+          <button type="button" className="quiet small" onClick={() => void store.submit(retry)}>
             Retry
           </button>
         ) : null}

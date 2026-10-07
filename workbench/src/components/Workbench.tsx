@@ -8,7 +8,7 @@ import { useShortcuts } from "../hooks/useShortcuts.ts";
 import { useTheme } from "../hooks/useTheme.ts";
 import { planAction, planExport, type StageAction } from "../model/actions.ts";
 import { bySeverity, fromWorkspace, type CodeTarget } from "../model/findings.ts";
-import { expectedSeconds, isActive, progressFraction, stageActivity } from "../model/jobs.ts";
+import { expectedSeconds, progressFraction, stageActivity } from "../model/jobs.ts";
 import { PlaybackController } from "../stage/playback.ts";
 import type { Workspace } from "../store/reducer.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -50,7 +50,6 @@ interface WorkbenchProps {
 }
 
 export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps) {
-  const pending = useWorkbench((state) => state.pending);
   const jobs = useWorkbench((state) => state.jobs);
   const { project, scenes, profiles, latest, findings } = workspace;
   const { scene, selectScene, profile, selectProfile } = useSelection(project.root, scenes, profiles);
@@ -130,12 +129,12 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
     const shown = VIEW_AFTER[action];
     if (shown && launchedFor === sceneId) setView(shown);
   };
-  const { launch, jobFor, keyOf } = useLaunches(onFinished);
+  const { launch, jobFor, isBusy } = useLaunches(onFinished);
 
   const context = { scene, latest: sceneLatest, profile, playhead: 0 };
   const stateOf = (action: string, target: SceneId | null = sceneId): ActionState => {
     const job = jobFor(action, target);
-    const busy = pending.has(keyOf(action, target)) || (job !== null && isActive(job));
+    const busy = isBusy(action, target);
     return { busy, fraction: busy && job ? progressFraction(job.progress, expectedSeconds(job, workspace)) : null };
   };
 

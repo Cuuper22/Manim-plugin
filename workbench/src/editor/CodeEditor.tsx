@@ -37,11 +37,10 @@ const OPEN_ERRORS = ["not_found", "invalid_path", "not_utf8", "file_too_large", 
 
 function sourceAccess(store: WorkbenchStore): SourceAccess {
   return {
-    load: (path, quiet) => store.perform(`source:${path}`, (client) => client.loadSource(path), quiet ? OPEN_ERRORS : []),
-    write: (write) =>
-      store.perform(`save:${write.path}`, (client) => client.writeSource(write), ["revision_conflict", "source_invalid"]),
+    load: (path, quiet) => store.perform((client) => client.loadSource(path), quiet ? OPEN_ERRORS : []),
+    write: (write) => store.perform((client) => client.writeSource(write), ["revision_conflict", "source_invalid"]),
     revision: async (path) => {
-      const outcome = await store.perform(`revision:${path}`, (client) => client.sourcePage(path, 1, 1), ["not_found"]);
+      const outcome = await store.perform((client) => client.sourcePage(path, 1, 1), ["not_found"]);
       if (outcome.ok) return { ok: true, value: outcome.value.revision };
       return outcome.error.code === "not_found" ? { ok: true, value: null } : outcome;
     },
