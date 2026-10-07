@@ -133,9 +133,11 @@ def _notebook_summary(path: Path) -> Summary:
     if not isinstance(notebook, dict) or not isinstance(notebook.get("cells"), list):
         raise invalid_source(path, "it is not a Jupyter notebook")
     cells = [cell for cell in notebook["cells"] if isinstance(cell, dict)]
-    markdown = "\n".join(
-        "".join(cell.get("source", [])) for cell in cells if cell.get("cell_type") == "markdown"
-    )
+    sources = [cell.get("source", "") for cell in cells if cell.get("cell_type") == "markdown"]
+    # nbformat: a cell's source is a string or a list of strings.
+    if not all(isinstance(s, str) or _strings(s) for s in sources):
+        raise invalid_source(path, "it is not a Jupyter notebook")
+    markdown = "\n".join("".join(source) for source in sources)
     code = sum(cell.get("cell_type") == "code" for cell in cells)
     summary = _text_summary(markdown, "markdown")
     summary.summary = f"Notebook with {len(cells)} cells ({code} code). {summary.summary}"
@@ -237,12 +239,17 @@ def _read_text(path: Path) -> str:
 def read_json(path: Path, *, strict: bool = False) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         if strict:
-            raise invalid_source(path, f"it is not valid JSON ({exc})") from exc
+            reason = "it nests too deeply" if isinstance(exc, RecursionError) else exc
+            raise invalid_source(path, f"it is not valid JSON ({reason})") from None
         return None
     except OSError as exc:
         raise io_error(path, exc) from exc
+
+
+def _strings(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
 def compact(text: str) -> str:

@@ -151,9 +151,14 @@ def test_malformed_sources_fail_without_leaving_files(tmp_path: Path, project: P
 
     bad = tmp_path / "bad.json"
     bad.write_text("{nope")
-    with pytest.raises(DirectorError) as raised:
-        run(ctx, project, [source(bad, "json", project / "sources")])
-    assert raised.value.code == "invalid_source"
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 100_000 + "]" * 100_000)
+    cells = tmp_path / "cells.ipynb"
+    cells.write_text('{"cells": [{"cell_type": "markdown", "source": [1, 2]}]}')
+    for path, kind in ((bad, "json"), (deep, "json"), (cells, "notebook")):
+        with pytest.raises(DirectorError) as raised:
+            run(ctx, project, [source(path, kind, project / "sources")])
+        assert raised.value.code == "invalid_source", path.name
     assert list((project / "sources").iterdir()) == []
 
 
