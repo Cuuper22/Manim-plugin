@@ -6,12 +6,13 @@ lazy so command-line and inspection work stays light when no render is running.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import sys
 import textwrap
-from typing import Any, Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from manim import (
-    DOWN,
     LEFT,
     RIGHT,
     UP,
@@ -22,14 +23,15 @@ from manim import (
     MathTex,
     Mobject,
     MovingCameraScene,
+    ReplacementTransform,
     RoundedRectangle,
     Scene,
     Text,
     ThreeDScene,
     VGroup,
-    ReplacementTransform,
 )
 
+from . import timeline
 from .composition import (
     Beat,
     CompositionError,
@@ -38,7 +40,6 @@ from .composition import (
     LayoutItem,
     LayoutPlan,
     Placement,
-    Rect,
     Region,
     TransitionKind,
 )
@@ -103,7 +104,11 @@ class CompositionMixin:
         self.current_beat: Beat | None = None
         self.beat_history: list[Beat] = []
         self._director_counter = 0
+        self._director_beat_handle: int | None = None
         self._director_ready = True
+        recorder = timeline.active()
+        if recorder is not None:
+            recorder.attach()
 
     def styled_text(
         self,
@@ -197,7 +202,11 @@ class CompositionMixin:
         self._ensure_director()
         resolved_key = self._key(key)
         item = self._item(resolved_key, mobject, priority, min_scale)
-        occupied = [active.placement for active in self._director_active.values() if active.key != resolved_key]
+        occupied = [
+            active.placement
+            for active in self._director_active.values()
+            if active.key != resolved_key
+        ]
         plan = self.composition.place(
             item,
             region=region,
@@ -249,7 +258,9 @@ class CompositionMixin:
             ):
                 self._retire(old_key, animate=False)
         for record in records:
-            self._register(record.key, record.mobject, record.region, record.priority, record.placement)
+            self._register(
+                record.key, record.mobject, record.region, record.priority, record.placement
+            )
         return plan
 
     def beat(
@@ -272,6 +283,41 @@ class CompositionMixin:
         """
 
         self._ensure_director()
+        recorder = timeline.active()
+        if recorder is not None:
+            # A call-style beat lasts until the next beat starts, or until the scene ends.
+            now = self.renderer.time
+            if self._director_beat_handle is not None:
+                recorder.exit(self._director_beat_handle, now)
+            caller = sys._getframe(1)
+            self._director_beat_handle = recorder.enter(
+                None, caller.f_code.co_filename, caller.f_lineno, now
+            )
+        return self._stage_beat(
+            beat,
+            mobjects,
+            region=region,
+            flow=flow,
+            keys=keys,
+            priorities=priorities,
+            min_scale=min_scale,
+            gap=gap,
+            run_time=run_time,
+        )
+
+    def _stage_beat(
+        self,
+        beat: Beat,
+        mobjects: Sequence[Mobject],
+        *,
+        region: Region | str,
+        flow: str,
+        keys: Sequence[str] | None,
+        priorities: Sequence[int] | None,
+        min_scale: float,
+        gap: float | None,
+        run_time: float | None,
+    ) -> LayoutPlan:
         if not isinstance(beat, Beat):
             raise TypeError("beat must be a Beat instance")
         if not mobjects:
@@ -279,12 +325,14 @@ class CompositionMixin:
         budget = beat.max_active or self.design.max_active
         if len(mobjects) > budget:
             raise CompositionError(
-                f"beat has {len(mobjects)} active visuals but its budget is {budget}; group or sequence them"
+                f"beat has {len(mobjects)} active visuals but its budget is {budget}; "
+                "group or sequence them"
             )
         resolved_keys = self._resolve_keys(mobjects, keys)
         if beat.focus not in resolved_keys:
             raise CompositionError(
-                f"beat focus {beat.focus!r} must name one of its visual keys: {', '.join(resolved_keys)}"
+                f"beat focus {beat.focus!r} must name one of its visual keys: "
+                f"{', '.join(resolved_keys)}"
             )
 
         self._release_focus(animate=False)
@@ -305,15 +353,18 @@ class CompositionMixin:
         old_keys = {record.key for record in old_records}
         separation = self.design.effective_spacing.md if gap is None else float(gap)
         persistent = [
-            record for record in self._director_active.values()
-            if record.key not in old_keys
+            record for record in self._director_active.values() if record.key not in old_keys
         ]
         for record in new_records:
-            collision = next((
-                kept for kept in persistent
-                if kept.key == record.key
-                or kept.placement.rect.intersects(record.placement.rect, gap=separation)
-            ), None)
+            collision = next(
+                (
+                    kept
+                    for kept in persistent
+                    if kept.key == record.key
+                    or kept.placement.rect.intersects(record.placement.rect, gap=separation)
+                ),
+                None,
+            )
             if collision is not None:
                 raise CompositionError(
                     f"beat visual {record.key!r} would cover persistent {collision.region.value} "
@@ -324,7 +375,9 @@ class CompositionMixin:
         for old in old_records:
             self._director_active.pop(old.key, None)
         for record in new_records:
-            self._register(record.key, record.mobject, record.region, record.priority, record.placement)
+            self._register(
+                record.key, record.mobject, record.region, record.priority, record.placement
+            )
         self.current_beat = beat
         self.beat_history.append(beat)
         target = next(record.mobject for record in new_records if record.key == beat.focus)
@@ -369,10 +422,14 @@ class CompositionMixin:
         plan = self.composition.arrange([item], region=Region.CAPTION, flow="grid", max_active=1)
         placement = plan.for_key(key)
         self._apply_placement(caption_panel, placement)
-        collision = next((
-            active for active in self._director_active.values()
-            if active.key != key and active.placement.rect.intersects(placement.rect)
-        ), None)
+        collision = next(
+            (
+                active
+                for active in self._director_active.values()
+                if active.key != key and active.placement.rect.intersects(placement.rect)
+            ),
+            None,
+        )
         if collision is not None:
             raise CompositionError(
                 f"caption lane is occupied by {collision.key!r}; place stage visuals in content"
@@ -428,7 +485,9 @@ class CompositionMixin:
 
         self._ensure_director()
         self._release_focus(animate=False)
-        records = self._stage_records(include_header=include_header, include_caption=include_caption)
+        records = self._stage_records(
+            include_header=include_header, include_caption=include_caption
+        )
         if records:
             self.play(
                 *(FadeOut(record.mobject) for record in records),
@@ -458,7 +517,9 @@ class CompositionMixin:
                 raise CompositionError("priorities must match the number of mobjects")
         items = [
             self._item(key, mobject, priority, min_scale)
-            for key, mobject, priority in zip(resolved_keys, mobjects, resolved_priorities)
+            for key, mobject, priority in zip(
+                resolved_keys, mobjects, resolved_priorities, strict=True
+            )
         ]
         plan = self.composition.arrange(
             items,
@@ -472,7 +533,9 @@ class CompositionMixin:
                 "composition cannot preserve legibility for: " + ", ".join(plan.evicted)
             )
         records: list[_Active] = []
-        for key, mobject, priority in zip(resolved_keys, mobjects, resolved_priorities):
+        for key, mobject, priority in zip(
+            resolved_keys, mobjects, resolved_priorities, strict=True
+        ):
             placement = plan.for_key(key)
             self._apply_placement(mobject, placement)
             records.append(_Active(key, mobject, Region(region), priority, placement))
@@ -492,7 +555,9 @@ class CompositionMixin:
         style = self.design.motion.style_for(beat.transition)
 
         if beat.transition is TransitionKind.CHAPTER and old_objects:
-            self.play(*(FadeOut(mobject) for mobject in old_objects), run_time=self.design.motion.quick)
+            self.play(
+                *(FadeOut(mobject) for mobject in old_objects), run_time=self.design.motion.quick
+            )
             old_objects = []
 
         if style == "morph" and old_objects:
@@ -561,7 +626,9 @@ class CompositionMixin:
         if include_caption:
             excluded.discard(Region.CAPTION)
             excluded.discard(Region.FOOTER)
-        return [record for record in self._director_active.values() if record.region not in excluded]
+        return [
+            record for record in self._director_active.values() if record.region not in excluded
+        ]
 
     def _retire(self, key: str, *, animate: bool) -> None:
         active = self._director_active.pop(key, None)

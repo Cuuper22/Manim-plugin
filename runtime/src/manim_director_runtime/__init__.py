@@ -2,28 +2,30 @@
 
 from .errors import DirectorError
 
-_COMPOSITION_EXPORTS = frozenset({
-    "Beat",
-    "BeatIntent",
-    "ColorPalette",
-    "CompositionError",
-    "CompositionLayout",
-    "DesignSystem",
-    "Insets",
-    "LayoutItem",
-    "LayoutPlan",
-    "MotionGrammar",
-    "Placement",
-    "Rect",
-    "Region",
-    "SpacingScale",
-    "TransitionKind",
-    "TypeScale",
-    "CompositionMixin",
-    "DirectedMovingCameraScene",
-    "DirectedScene",
-    "DirectedThreeDScene",
-})
+_COMPOSITION_EXPORTS = frozenset(
+    {
+        "Beat",
+        "BeatIntent",
+        "ColorPalette",
+        "CompositionError",
+        "CompositionLayout",
+        "DesignSystem",
+        "Insets",
+        "LayoutItem",
+        "LayoutPlan",
+        "MotionGrammar",
+        "Placement",
+        "Rect",
+        "Region",
+        "SpacingScale",
+        "TransitionKind",
+        "TypeScale",
+        "CompositionMixin",
+        "DirectedMovingCameraScene",
+        "DirectedScene",
+        "DirectedThreeDScene",
+    }
+)
 
 __all__ = ["DirectorError", "__version__", *_COMPOSITION_EXPORTS]
 __version__ = "1.1.0"

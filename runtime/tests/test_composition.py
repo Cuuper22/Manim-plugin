@@ -39,7 +39,7 @@ class CompositionTests(unittest.TestCase):
         lane = layout.region(Region.CONTENT)
         for index, first in enumerate(plan.placements):
             self.assertTrue(lane.contains(first.rect))
-            for second in plan.placements[index + 1:]:
+            for second in plan.placements[index + 1 :]:
                 self.assertFalse(first.rect.intersects(second.rect))
 
     def test_place_never_uses_illegibly_small_scale(self) -> None:
@@ -50,26 +50,35 @@ class CompositionTests(unittest.TestCase):
             layout.arrange([LayoutItem("wall", 100, 100, min_scale=0.7)])
 
     def test_direction_mapping_and_beat_contract(self) -> None:
-        design = DesignSystem.from_mapping({
-            "theme": {"primary": "#123456"},
-            "safe_area": {"top": 0.05, "right": 0.05, "bottom": 0.08, "left": 0.05},
-            "direction": {
-                "composition": {"density": "balanced", "max_active": 3, "caption_lane": True},
-                "typography": {"scale": {"hero": 68}},
-                "motion": {"continuation": "morph", "contrast": "lateral", "reveal": "fade", "chapter": "reset"},
-                "narrative": {"audience": "algebra students", "principle": "one-idea-per-beat"},
-            },
-        })
+        design = DesignSystem.from_mapping(
+            {
+                "theme": {"primary": "#123456"},
+                "safe_area": {"top": 0.05, "right": 0.05, "bottom": 0.08, "left": 0.05},
+                "direction": {
+                    "composition": {"density": "balanced", "max_active": 3, "caption_lane": True},
+                    "typography": {"scale": {"hero": 68}},
+                    "motion": {
+                        "continuation": "morph",
+                        "contrast": "lateral",
+                        "reveal": "fade",
+                        "chapter": "reset",
+                    },
+                    "narrative": {"audience": "algebra students", "principle": "one-idea-per-beat"},
+                },
+            }
+        )
         self.assertEqual(design.color("primary"), "#123456")
         self.assertEqual(design.typography.hero, 68)
         self.assertAlmostEqual(design.safe_area.top, 0.4)
         self.assertEqual(design.stroke("accent")["stroke_color"], design.color("accent"))
-        direct_style = DesignSystem.from_mapping({
-            "background": "#010203",
-            "foreground": "#FAFAFA",
-            "primary": "#ABCDEF",
-            "font": "DejaVu Sans",
-        })
+        direct_style = DesignSystem.from_mapping(
+            {
+                "background": "#010203",
+                "foreground": "#FAFAFA",
+                "primary": "#ABCDEF",
+                "font": "DejaVu Sans",
+            }
+        )
         self.assertEqual(direct_style.color("background"), "#010203")
         self.assertEqual(direct_style.color("primary"), "#ABCDEF")
         beat = Beat(

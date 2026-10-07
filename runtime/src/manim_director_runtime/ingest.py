@@ -1,292 +1,212 @@
+"""The `ingest` operation: copy external files into the project with summaries and provenance."""
+
 from __future__ import annotations
 
-import ast
-import csv
-import json
-import mimetypes
+import hashlib
+import os
 import re
 import shutil
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
-from .assets import AUDIO, RASTER, VIDEO, describe_asset
-from .errors import DirectorError
-from .util import Emit, atomic_write, confined_path, noop_emit, project_root
+from .errors import io_error
+from .jsonio import write_json
+from .media import require_pillow
+from .model import ArtifactKind, RuntimeArtifact
+from .paths import atomic_target, create_exclusive, ensure_dir, slug
+from .summaries import (
+    compact,
+    invalid_source,
+    local_name,
+    media_tool,
+    parse_svg,
+    read_json,
+    summarize,
+)
+from .tasks import IngestSource, IngestTask
 
+if TYPE_CHECKING:
+    from .protocol import Context
 
-TEXT_LIMIT = 256_000
-SUMMARY_LIMIT = 2_000
-SUPPORTED = {
-    ".md": "markdown", ".markdown": "markdown", ".tex": "latex", ".latex": "latex",
-    ".typ": "typst", ".csv": "csv", ".json": "json", ".py": "python",
-    ".ipynb": "notebook", ".pdf": "pdf", ".svg": "svg",
-}
-
-
-def _read_text(path: Path, limit: int = TEXT_LIMIT) -> tuple[str, bool]:
-    with path.open("rb") as handle:
-        raw = handle.read(limit + 1)
-    truncated = len(raw) > limit
-    return raw[:limit].decode("utf-8", errors="replace"), truncated
-
-
-def _compact_text(value: str, limit: int = SUMMARY_LIMIT) -> str:
-    value = re.sub(r"```.*?```", " ", value, flags=re.DOTALL)
-    value = re.sub(r"[`*_>#]+", " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    if len(value) <= limit:
-        return value
-    return value[: max(0, limit - 1)].rstrip() + "…"
+MANIFEST_VERSION = 2
+MAX_RASTER_SIDE = 4096
+TARGET_LOUDNESS_LUFS = -16
+_MAX_HEADINGS, _MAX_COLUMNS, _MAX_SCENES = 30, 100, 100
+_UNSAFE_SVG_ELEMENTS = {"script", "foreignobject"}
+_UNSAFE_HREF = re.compile(r"(?i)\s*(?:https?:|javascript:|data:text/html)")
 
 
-def _text_summary(path: Path, kind: str) -> dict[str, Any]:
-    text, truncated = _read_text(path)
-    lines = text.splitlines()
-    if kind == "markdown":
-        headings = [match.group(2).strip() for line in lines if (match := re.match(r"^(#{1,6})\s+(.+)", line))][:30]
-        summary = _compact_text(text)
-        details = {"headings": headings, "code_blocks": text.count("```") // 2, "links": len(re.findall(r"\[[^]]+\]\([^)]+\)", text))}
-    elif kind == "latex":
-        cleaned = re.sub(r"(?m)(?<!\\)%.*$", "", text)
-        headings = [match.group(2).strip() for match in re.finditer(r"\\(section|subsection|chapter)\*?\{([^}]*)\}", cleaned)][:30]
-        prose = re.sub(r"\\[A-Za-z@]+\*?(?:\[[^]]*\])?", " ", cleaned)
-        prose = prose.replace("{", " ").replace("}", " ").replace("$", " ")
-        summary = _compact_text(prose)
-        details = {"headings": headings, "equation_environments": len(re.findall(r"\\begin\{(?:equation|align|gather|multline)\*?\}", cleaned)), "document_classes": re.findall(r"\\documentclass(?:\[[^]]*\])?\{([^}]+)\}", cleaned)[:5]}
-    else:
-        headings = [match.group(2).strip() for line in lines if (match := re.match(r"^(={1,6})\s+(.+)", line))][:30]
-        prose = re.sub(r"#(?:import|include)\s+[^\n]+", " ", text)
-        summary = _compact_text(prose.replace("$", " "))
-        details = {"headings": headings, "equation_delimiters": text.count("$") // 2, "imports": re.findall(r"#(?:import|include)\s+([^\n]+)", text)[:20]}
-    return {"summary": summary, "lines_sampled": len(lines), "words_sampled": len(re.findall(r"\b\w+\b", text)), "text_sample_truncated": truncated, **details}
+@dataclass(frozen=True, slots=True)
+class IngestedSource:
+    id: str
+    kind: str
+    path: str
+    bytes: int
+    sha256: str
+    origin: str
+    summary: str
+    headings: list[str]
+    columns: list[str]
+    rows: int | None
+    pages: int | None
+    scenes: list[str]
+    width: int | None
+    height: int | None
+    duration_seconds: float | None
+    normalized: bool
 
 
-def _csv_summary(path: Path) -> dict[str, Any]:
-    rows = 0
-    columns: list[str] = []
-    widths: set[int] = set()
-    dialect_name = "unknown"
-    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
-        sample = handle.read(8192)
-        handle.seek(0)
-        try:
-            dialect = csv.Sniffer().sniff(sample)
-            dialect_name = {",": "comma", "\t": "tab", ";": "semicolon", "|": "pipe"}.get(dialect.delimiter, dialect.delimiter)
-        except csv.Error:
-            dialect = csv.excel
-        reader = csv.reader(handle, dialect)
-        try:
-            columns = [str(value)[:120] for value in next(reader)]
-        except StopIteration:
-            return {"summary": "Empty tabular source.", "columns": [], "rows": 0, "consistent_width": True, "dialect": dialect_name}
-        for row in reader:
-            rows += 1
-            widths.add(len(row))
-    return {
-        "summary": f"Tabular source with {rows} data rows and {len(columns)} named columns.",
-        "columns": columns[:100], "column_count": len(columns), "rows": rows,
-        "consistent_width": not widths or widths == {len(columns)}, "observed_widths": sorted(widths)[:20], "dialect": dialect_name,
-    }
+@dataclass(frozen=True, slots=True)
+class IngestResult:
+    sources: list[IngestedSource]
+    artifacts: list[RuntimeArtifact]
 
 
-def _json_shape(value: Any, depth: int = 0) -> dict[str, Any]:
-    if depth >= 3:
-        return {"type": type(value).__name__}
-    if isinstance(value, dict):
-        keys = [str(key) for key in list(value)[:50]]
-        return {"type": "object", "keys": keys, "key_count": len(value), "sample": {key: _json_shape(value[key], depth + 1) for key in list(value)[:8]}}
-    if isinstance(value, list):
-        return {"type": "array", "length": len(value), "item": _json_shape(value[0], depth + 1) if value else None}
-    return {"type": type(value).__name__}
-
-
-def _json_summary(path: Path) -> dict[str, Any]:
-    if path.stat().st_size > 64 * 1024 * 1024:
-        raise DirectorError("json_too_large", "JSON ingestion is limited to 64 MiB; convert larger sources to CSV or split them")
+def ingest(task: IngestTask, ctx: Context) -> IngestResult:
+    manifest = ctx.require_inside(task.manifest, "manifest")
+    created: list[Path] = []
+    targets: list[Path] = []
+    results: list[IngestedSource] = []
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DirectorError("invalid_json_source", f"JSON source is invalid: {path}", {"error": str(exc)}) from exc
-    shape = _json_shape(value)
-    return {"summary": f"JSON {shape['type']} source.", "shape": shape}
+        for index, source in enumerate(task.sources):
+            field = f"sources[{index}].destination_dir"
+            target = _allocate(
+                ctx.require_inside(source.destination_dir, field), source, task.force
+            )
+            if not task.force or not target.exists():
+                created.append(target)
+            with atomic_target(target) as temp:
+                normalized = _store(source, temp, normalize=task.normalize)
+            targets.append(target)
+            results.append(_describe(source, target, normalized, ctx))
+            ctx.progress("ingest", index + 1, len(task.sources))
+        _merge_manifest(manifest, results, task.sources)
+    except Exception:
+        # A failed request leaves no new files behind; forced overwrites stay overwritten.
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
+    artifacts = [ctx.artifact(ArtifactKind.FILE, target) for target in targets]
+    artifacts.append(ctx.artifact(ArtifactKind.FILE, manifest))
+    return IngestResult(sources=results, artifacts=artifacts)
 
 
-def _python_summary(path: Path) -> dict[str, Any]:
-    text, truncated = _read_text(path)
-    if truncated:
-        functions = re.findall(r"(?m)^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(", text)[:100]
-        classes = re.findall(r"(?m)^\s*class\s+([A-Za-z_]\w*)\s*(?:\([^\n]*\))?\s*:", text)[:100]
-        scenes = [match.group(1) for match in re.finditer(r"(?m)^\s*class\s+([A-Za-z_]\w*)\s*\([^\n]*(?:Scene|Slide)[^\n]*\)\s*:", text)][:100]
-        imports = re.findall(r"(?m)^\s*(?:from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import|import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*))", text)
-        modules = sorted({left or right for left, right in imports})[:100]
-        valid_python: bool | None = None
-        syntax_error = None
-    else:
-        try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError as exc:
-            return {"summary": "Python source with a syntax error.", "valid_python": False, "syntax_error": {"message": exc.msg, "line": exc.lineno, "column": exc.offset}}
-        functions = [node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))][:100]
-        classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)][:100]
-        scenes = [node.name for node in tree.body if isinstance(node, ast.ClassDef) and any((base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else "").endswith(("Scene", "Slide")) for base in node.bases)][:100]
-        modules = sorted({node.module for node in tree.body if isinstance(node, ast.ImportFrom) and node.module} | {alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names})[:100]
-        valid_python = True
-        syntax_error = None
-    return {
-        "summary": f"Python module with {len(classes)} classes, {len(functions)} functions, and {len(scenes)} apparent Manim scenes.",
-        "valid_python": valid_python, "syntax_error": syntax_error, "classes": classes, "functions": functions,
-        "scenes": scenes, "imports": modules,
-        "text_sample_truncated": truncated,
-    }
+def _allocate(directory: Path, source: IngestSource, force: bool) -> Path:
+    stem, suffix = slug(source.id or source.path.stem, "source"), source.path.suffix.lower()
+    if force:
+        return ensure_dir(directory) / f"{stem}{suffix}"
+    return create_exclusive(directory, stem, suffix)
 
 
-def _notebook_summary(path: Path) -> dict[str, Any]:
-    if path.stat().st_size > 64 * 1024 * 1024:
-        raise DirectorError("notebook_too_large", "Notebook ingestion is limited to 64 MiB")
+def _store(source: IngestSource, target: Path, *, normalize: bool) -> bool:
+    """Copy `source` to `target`, normalizing when asked; True if the bytes were transformed."""
+
+    if normalize and source.kind == "svg":
+        _sanitize_svg(source.path, target)
+        return True
+    if normalize and source.kind == "image" and _downscale(source.path, target):
+        return True
+    if normalize and source.kind == "audio":
+        loudnorm = f"loudnorm=I={TARGET_LOUDNESS_LUFS}:TP=-1.5:LRA=11"
+        args = ["-loglevel", "error", "-nostdin", "-y", "-i", str(source.path), "-af", loudnorm]
+        media_tool(source.path, "ffmpeg", [*args, str(target)])
+        return True
     try:
-        notebook = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DirectorError("invalid_notebook", f"Notebook JSON is invalid: {path}") from exc
-    cells = notebook.get("cells", []) if isinstance(notebook, dict) else []
-    counts: dict[str, int] = {}
-    headings = []
-    output_count = 0
-    for cell in cells:
-        kind = str(cell.get("cell_type", "unknown"))
-        counts[kind] = counts.get(kind, 0) + 1
-        source = "".join(cell.get("source", []))
-        if kind == "markdown":
-            headings.extend(match.group(2).strip() for line in source.splitlines() if (match := re.match(r"^(#{1,6})\s+(.+)", line)))
-        output_count += len(cell.get("outputs", []))
-    language = ((notebook.get("metadata") or {}).get("language_info") or {}).get("name") if isinstance(notebook, dict) else None
-    return {"summary": f"Notebook with {len(cells)} cells ({counts.get('code', 0)} code, {counts.get('markdown', 0)} markdown).", "cells": len(cells), "cell_types": counts, "language": language, "headings": headings[:30], "outputs": output_count}
+        shutil.copyfile(source.path, target)
+    except OSError as exc:
+        raise io_error(source.path, exc) from exc
+    return False
 
 
-def _pdf_summary(path: Path, max_pages: int) -> dict[str, Any]:
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        raise DirectorError("pdf_dependency_missing", "PDF ingestion requires the optional `ingest` extra (`pip install manim-director-runtime[ingest]`).") from exc
-    try:
-        reader = PdfReader(str(path), strict=False)
-        text_parts = []
-        for page in reader.pages[:max_pages]:
-            if sum(map(len, text_parts)) >= TEXT_LIMIT:
-                break
-            text_parts.append((page.extract_text() or "")[:TEXT_LIMIT])
-        metadata = reader.metadata or {}
-    except Exception as exc:
-        raise DirectorError("pdf_read_failed", f"Could not read PDF: {path}", {"error": str(exc)}) from exc
-    safe_metadata = {str(key).lstrip("/"): str(value)[:500] for key, value in list(metadata.items())[:30]}
-    return {"summary": _compact_text(" ".join(text_parts)), "pages": len(reader.pages), "pages_sampled": min(len(reader.pages), max_pages), "metadata": safe_metadata, "text_sample_truncated": len(reader.pages) > max_pages or sum(map(len, text_parts)) >= TEXT_LIMIT}
+def _describe(source: IngestSource, target: Path, normalized: bool, ctx: Context) -> IngestedSource:
+    summary = summarize(target, source.kind)
+    return IngestedSource(
+        id=target.stem,
+        kind=source.kind,
+        path=ctx.relative(target),
+        bytes=target.stat().st_size,
+        sha256=_sha256(target),
+        origin=str(source.path),
+        summary=compact(summary.summary),
+        headings=summary.headings[:_MAX_HEADINGS],
+        columns=summary.columns[:_MAX_COLUMNS],
+        rows=summary.rows,
+        pages=summary.pages,
+        scenes=summary.scenes[:_MAX_SCENES],
+        width=summary.width,
+        height=summary.height,
+        duration_seconds=summary.duration_seconds,
+        normalized=normalized,
+    )
 
 
-def _svg_summary(path: Path) -> dict[str, Any]:
-    try:
-        root = ET.parse(path).getroot()
-    except ET.ParseError as exc:
-        raise DirectorError("invalid_svg", f"SVG is malformed: {path}", {"error": str(exc)}) from exc
-    counts: dict[str, int] = {}
-    for node in root.iter():
-        name = node.tag.rsplit("}", 1)[-1]
-        counts[name] = counts.get(name, 0) + 1
-    return {"summary": f"SVG vector with {sum(counts.values())} elements.", "view_box": root.attrib.get("viewBox"), "width": root.attrib.get("width"), "height": root.attrib.get("height"), "elements": dict(sorted(counts.items())[:50])}
-
-
-def _kind(path: Path, explicit: Any = None) -> str:
-    if explicit:
-        return str(explicit).lower()
-    suffix = path.suffix.lower()
-    if suffix in RASTER:
-        return "image"
-    if suffix in AUDIO:
-        return "audio"
-    if suffix in VIDEO:
-        return "video"
-    return SUPPORTED.get(suffix, "binary")
-
-
-def _destination(directory: Path, source: Path, identifier: str | None, force: bool) -> Path:
-    stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", identifier or source.stem).strip(".-") or "source"
-    candidate = directory / f"{stem}{source.suffix.lower()}"
-    if force or not candidate.exists():
-        return candidate
-    for index in range(2, 10_000):
-        candidate = directory / f"{stem}-{index}{source.suffix.lower()}"
-        if not candidate.exists():
-            return candidate
-    raise DirectorError("source_collision", f"Could not allocate a destination for {source.name}")
-
-
-def _summarize(path: Path, kind: str, root: Path, params: Mapping[str, Any]) -> dict[str, Any]:
-    if kind in {"markdown", "latex", "typst"}:
-        return _text_summary(path, kind)
-    if kind == "csv":
-        return _csv_summary(path)
-    if kind == "json":
-        return _json_summary(path)
-    if kind == "python":
-        return _python_summary(path)
-    if kind == "notebook":
-        return _notebook_summary(path)
-    if kind == "pdf":
-        return _pdf_summary(path, max(1, min(100, int(params.get("pdf_pages", 12)))))
-    if kind == "svg":
-        return _svg_summary(path)
-    if kind in {"image", "audio", "video"}:
-        metadata = describe_asset(path, root, hashes=False)
-        return {"summary": f"{kind.title()} source ({metadata.get('mime_type')}, {metadata['bytes']} bytes).", "metadata": metadata}
-    mime, _ = mimetypes.guess_type(path.name)
-    return {"summary": f"Binary source ({mime or 'application/octet-stream'}, {path.stat().st_size} bytes)."}
-
-
-def ingest(params: Mapping[str, Any], emit: Emit = noop_emit) -> dict[str, Any]:
-    root = project_root(params)
-    raw_sources = params.get("sources", params.get("paths"))
-    if raw_sources is None and params.get("source") is not None:
-        raw_sources = [params["source"]]
-    if not isinstance(raw_sources, Sequence) or isinstance(raw_sources, (str, bytes)) or not raw_sources:
-        raise DirectorError("sources_required", "Provide a non-empty sources list")
-    destination_dir = confined_path(root, str(params.get("destination_dir", "sources")))
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    per_source_limit = int(params.get("max_source_bytes", 256 * 1024 * 1024))
-    total_limit = int(params.get("max_total_bytes", 1024 * 1024 * 1024))
-    summary_chars = int(params.get("summary_chars", SUMMARY_LIMIT))
-    if not (128 <= summary_chars <= 20_000):
-        raise DirectorError("invalid_summary_limit", "summary_chars must be between 128 and 20000")
-    total = 0
-    items = []
-    for index, raw in enumerate(raw_sources):
-        descriptor = raw if isinstance(raw, Mapping) else {"path": raw}
-        if not descriptor.get("path"):
-            raise DirectorError("invalid_source", f"Source {index} has no path")
-        source = Path(str(descriptor["path"])).expanduser().resolve()
-        if not source.exists() or not source.is_file():
-            raise DirectorError("source_not_found", f"Source does not exist: {source}")
-        size = source.stat().st_size
-        if size > per_source_limit or total + size > total_limit:
-            raise DirectorError("ingest_budget_exceeded", "Source ingestion exceeds the configured byte budget", {"source": str(source), "bytes": size, "total_before": total})
-        total += size
-        identifier = str(descriptor.get("id")) if descriptor.get("id") else None
-        destination = _destination(destination_dir, source, identifier, bool(params.get("force", False)))
-        if source != destination:
-            shutil.copy2(source, destination)
-        kind = _kind(destination, descriptor.get("kind"))
-        emit("ingest_progress", {"completed": index + 1, "total": len(raw_sources), "source": source.name, "kind": kind})
-        summary = _summarize(destination, kind, root, params)
-        item = {
-            "id": identifier or destination.stem, "kind": kind,
-            "path": destination.relative_to(root).as_posix(), "bytes": size,
-            "source": str(descriptor.get("provenance", source)), **summary,
+def _merge_manifest(path: Path, results: list[IngestedSource], sources: list[IngestSource]) -> None:
+    existing: list[Any] = []
+    if path.exists():
+        current = read_json(path)
+        if isinstance(current, dict) and current.get("version") == MANIFEST_VERSION:
+            existing = [e for e in current.get("entries", []) if isinstance(e, dict)]
+        else:
+            # Keep an older or foreign manifest instead of silently dropping its provenance.
+            backup = create_exclusive(path.parent, f"{path.stem}.v1", path.suffix)
+            try:
+                os.replace(path, backup)
+            except OSError as exc:
+                raise io_error(path, exc) from exc
+    entries = [
+        {
+            "id": item.id,
+            "kind": item.kind,
+            "path": item.path,
+            "bytes": item.bytes,
+            "sha256": item.sha256,
+            "origin": item.origin,
+            "license": source.license,
+            "attribution": source.attribution,
         }
-        for key in ("license", "attribution", "notes"):
-            if descriptor.get(key) is not None:
-                item[key] = descriptor[key]
-        # Hard bound all prose returned or persisted, even if a backend emitted more.
-        item["summary"] = _compact_text(str(item.get("summary", "")), summary_chars)
-        items.append(item)
-    manifest_path = confined_path(root, str(params.get("manifest", "sources/manifest.json")))
-    manifest = {"version": 1, "sources": items, "total_bytes": total}
-    atomic_write(manifest_path, json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-    return {"manifest": str(manifest_path), "sources": items, "count": len(items), "total_bytes": total}
+        for item, source in zip(results, sources, strict=True)
+    ]
+    replaced = {entry["path"] for entry in entries}
+    kept = [entry for entry in existing if entry.get("path") not in replaced]
+    write_json(path, {"version": MANIFEST_VERSION, "entries": kept + entries})
+
+
+def _sanitize_svg(source: Path, target: Path) -> None:
+    root = parse_svg(source)
+    for parent in root.iter():
+        for child in list(parent):
+            if local_name(child.tag).lower() in _UNSAFE_SVG_ELEMENTS:
+                parent.remove(child)
+        for key, value in list(parent.attrib.items()):
+            name = local_name(key).lower()
+            if name.startswith("on") or (name == "href" and _UNSAFE_HREF.match(value)):
+                del parent.attrib[key]
+    ET.ElementTree(root).write(target, encoding="utf-8", xml_declaration=True)
+
+
+def _downscale(source: Path, target: Path) -> bool:
+    pil = require_pillow()
+    from PIL import ImageOps
+
+    try:
+        with pil.open(source) as loaded:
+            if max(loaded.size) <= MAX_RASTER_SIDE:
+                return False
+            image = ImageOps.exif_transpose(loaded)
+            image.thumbnail((MAX_RASTER_SIDE, MAX_RASTER_SIDE), pil.Resampling.LANCZOS)
+            if target.suffix.lower() in (".jpg", ".jpeg") and image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            image.save(target, format=loaded.format)
+    except (OSError, ValueError) as exc:
+        raise invalid_source(source, "it is not a readable image") from exc
+    return True
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

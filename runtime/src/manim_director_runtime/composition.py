@@ -8,17 +8,18 @@ it cheap to import from authoring tools and deterministic in headless builds.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from enum import Enum
-from math import ceil, sqrt
-from typing import Any, ClassVar, Iterable, Mapping, Sequence
+from enum import StrEnum
+from math import ceil
+from typing import Any, ClassVar
 
 
 class CompositionError(ValueError):
     """A direction or layout request cannot be satisfied safely."""
 
 
-class Region(str, Enum):
+class Region(StrEnum):
     """Named lanes in the safe frame.
 
     ``safe`` is the complete inset frame and is intended for a single hero
@@ -36,7 +37,7 @@ class Region(str, Enum):
     CAPTION = "caption"
 
 
-class BeatIntent(str, Enum):
+class BeatIntent(StrEnum):
     INTRODUCE = "introduce"
     EXPLAIN = "explain"
     COMPARE = "compare"
@@ -45,7 +46,7 @@ class BeatIntent(str, Enum):
     RECAP = "recap"
 
 
-class TransitionKind(str, Enum):
+class TransitionKind(StrEnum):
     CONTINUATION = "continuation"
     CONTRAST = "contrast"
     REVEAL = "reveal"
@@ -81,7 +82,7 @@ class Rect:
     def bottom(self) -> float:
         return self.y - self.height / 2
 
-    def inset(self, *, top: float, right: float, bottom: float, left: float) -> "Rect":
+    def inset(self, *, top: float, right: float, bottom: float, left: float) -> Rect:
         width = self.width - left - right
         height = self.height - top - bottom
         if width <= 0 or height <= 0:
@@ -93,12 +94,12 @@ class Rect:
             height,
         )
 
-    def padded(self, amount: float) -> "Rect":
+    def padded(self, amount: float) -> Rect:
         if amount < 0 and (-2 * amount >= self.width or -2 * amount >= self.height):
             raise CompositionError("padding collapses rectangle")
         return Rect(self.x, self.y, self.width + 2 * amount, self.height + 2 * amount)
 
-    def contains(self, other: "Rect", *, tolerance: float = 1e-9) -> bool:
+    def contains(self, other: Rect, *, tolerance: float = 1e-9) -> bool:
         return (
             other.left >= self.left - tolerance
             and other.right <= self.right + tolerance
@@ -106,7 +107,7 @@ class Rect:
             and other.top <= self.top + tolerance
         )
 
-    def intersects(self, other: "Rect", *, gap: float = 0.0, tolerance: float = 1e-9) -> bool:
+    def intersects(self, other: Rect, *, gap: float = 0.0, tolerance: float = 1e-9) -> bool:
         return not (
             self.right + gap <= other.left + tolerance
             or other.right + gap <= self.left + tolerance
@@ -154,7 +155,7 @@ class TypeScale:
         return float(getattr(self, role))
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, Any] | None) -> "TypeScale":
+    def from_mapping(cls, values: Mapping[str, Any] | None) -> TypeScale:
         if not values:
             return cls()
         allowed = set(cls.__dataclass_fields__)
@@ -182,12 +183,14 @@ class SpacingScale:
             raise CompositionError(f"unknown spacing role: {role}")
         return float(getattr(self, role))
 
-    def for_density(self, density: str) -> "SpacingScale":
+    def for_density(self, density: str) -> SpacingScale:
         factor = {"spacious": 1.0, "balanced": 0.82, "dense": 0.66}[density]
-        return replace(self, **{name: getattr(self, name) * factor for name in self.__dataclass_fields__})
+        return replace(
+            self, **{name: getattr(self, name) * factor for name in self.__dataclass_fields__}
+        )
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, Any] | None) -> "SpacingScale":
+    def from_mapping(cls, values: Mapping[str, Any] | None) -> SpacingScale:
         if not values:
             return cls()
         allowed = set(cls.__dataclass_fields__)
@@ -213,7 +216,7 @@ class ColorPalette:
         return str(getattr(self, role))
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, Any] | None) -> "ColorPalette":
+    def from_mapping(cls, values: Mapping[str, Any] | None) -> ColorPalette:
         if not values:
             return cls()
         allowed = set(cls.__dataclass_fields__)
@@ -243,12 +246,14 @@ class MotionGrammar:
     def __post_init__(self) -> None:
         for key, choices in self._ALLOWED.items():
             if getattr(self, key) not in choices:
-                raise CompositionError(f"motion {key!r} must be one of {', '.join(sorted(choices))}")
+                raise CompositionError(
+                    f"motion {key!r} must be one of {', '.join(sorted(choices))}"
+                )
         if min(self.quick, self.standard, self.deliberate) <= 0:
             raise CompositionError("motion timings must be positive")
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, Any] | None) -> "MotionGrammar":
+    def from_mapping(cls, values: Mapping[str, Any] | None) -> MotionGrammar:
         if not values:
             return cls()
         allowed = set(cls.__dataclass_fields__) - {"_ALLOWED"}
@@ -303,7 +308,9 @@ class DesignSystem:
     def color(self, role: str) -> str:
         return self.palette.get(role)
 
-    def stroke(self, role: str = "foreground", *, width: float = 1.0, opacity: float = 1.0) -> dict[str, Any]:
+    def stroke(
+        self, role: str = "foreground", *, width: float = 1.0, opacity: float = 1.0
+    ) -> dict[str, Any]:
         """Return keyword arguments accepted by Manim's stroked mobjects."""
 
         if width <= 0 or not 0 <= opacity <= 1:
@@ -318,21 +325,22 @@ class DesignSystem:
         return self.typography.get(role)
 
     @classmethod
-    def from_mapping(cls, source: Mapping[str, Any] | None) -> "DesignSystem":
+    def from_mapping(cls, source: Mapping[str, Any] | None) -> DesignSystem:
         """Load either a whole ``director.yaml`` mapping or its direction block."""
 
         if not source:
             return cls()
         defaults = cls()
         root = source.get("direction", {})
-        if not root and any(key in source for key in ("composition", "typography", "motion", "narrative")):
+        if not root and any(
+            key in source for key in ("composition", "typography", "motion", "narrative")
+        ):
             root = source
         if not isinstance(root, Mapping):
             raise CompositionError("direction must be a mapping")
         theme = source.get("theme", {}) if isinstance(source, Mapping) else {}
         if not theme and any(
-            key in source
-            for key in (*ColorPalette.__dataclass_fields__, "font", "stroke_width")
+            key in source for key in (*ColorPalette.__dataclass_fields__, "font", "stroke_width")
         ):
             # A project may pass the result of get_theme() directly instead of
             # wrapping it in a director.yaml-shaped mapping.
@@ -362,9 +370,7 @@ class DesignSystem:
             if not isinstance(block, Mapping):
                 raise CompositionError(f"direction.{name} must be a mapping")
         palette_values = {
-            key: theme[key]
-            for key in ColorPalette.__dataclass_fields__
-            if key in theme
+            key: theme[key] for key in ColorPalette.__dataclass_fields__ if key in theme
         }
         direction_palette = root.get("palette", {})
         if isinstance(direction_palette, Mapping):
@@ -404,7 +410,9 @@ class DesignSystem:
             caption_lane=bool(composition.get("caption_lane", defaults.caption_lane)),
             audience=str(narrative.get("audience", defaults.audience)),
             principle=str(narrative.get("principle", defaults.principle)),
-            stroke_width=float(root.get("stroke_width", theme.get("stroke_width", defaults.stroke_width))),
+            stroke_width=float(
+                root.get("stroke_width", theme.get("stroke_width", defaults.stroke_width))
+            ),
         )
 
 
@@ -480,10 +488,19 @@ class CompositionLayout:
     """Deterministic, collision-free allocation inside named safe regions."""
 
     _FLOWS = frozenset({"auto", "row", "column", "grid"})
-    _ANCHORS = frozenset({
-        "center", "top", "bottom", "left", "right",
-        "top_left", "top_right", "bottom_left", "bottom_right",
-    })
+    _ANCHORS = frozenset(
+        {
+            "center",
+            "top",
+            "bottom",
+            "left",
+            "right",
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right",
+        }
+    )
 
     def __init__(self, design: DesignSystem | None = None):
         self.design = design or DesignSystem()
@@ -555,7 +572,9 @@ class CompositionLayout:
         indexed = list(enumerate(items))
         kept_indices = {
             index
-            for index, _item in sorted(indexed, key=lambda pair: (-pair[1].priority, pair[0]))[:budget]
+            for index, _item in sorted(indexed, key=lambda pair: (-pair[1].priority, pair[0]))[
+                :budget
+            ]
         }
         selected = [item for index, item in indexed if index in kept_indices]
         evicted = [item.key for index, item in indexed if index not in kept_indices]
@@ -568,22 +587,34 @@ class CompositionLayout:
         reflowed = False
         while selected:
             for candidate_index, candidate in enumerate(flows):
-                placements = self._arrange_flow(selected, lane, Region(region), candidate, actual_gap)
-                if all(p.scale + 1e-9 >= item.min_scale for p, item in zip(placements, selected)):
+                placements = self._arrange_flow(
+                    selected, lane, Region(region), candidate, actual_gap
+                )
+                if all(
+                    p.scale + 1e-9 >= item.min_scale
+                    for p, item in zip(placements, selected, strict=True)
+                ):
                     self._assert_collision_free(placements, actual_gap)
                     return LayoutPlan(
-                        tuple(placements), tuple(evicted), candidate, Region(region),
+                        tuple(placements),
+                        tuple(evicted),
+                        candidate,
+                        Region(region),
                         reflowed or candidate_index > 0,
                     )
             if len(selected) == 1:
-                placements = self._arrange_flow(selected, lane, Region(region), flows[0], actual_gap)
+                placements = self._arrange_flow(
+                    selected, lane, Region(region), flows[0], actual_gap
+                )
                 required = placements[0].scale
                 minimum = selected[0].min_scale
                 raise CompositionError(
                     f"{selected[0].key!r} would need scale {required:.3f}, below its readable "
                     f"minimum of {minimum:.3f}; simplify it or choose a larger region"
                 )
-            drop_index = min(range(len(selected)), key=lambda index: (selected[index].priority, -index))
+            drop_index = min(
+                range(len(selected)), key=lambda index: (selected[index].priority, -index)
+            )
             evicted.append(selected.pop(drop_index).key)
             flows = self._flow_candidates(flow, selected, lane)
             reflowed = True
@@ -612,24 +643,38 @@ class CompositionLayout:
         width, height = item.width * fit_scale, item.height * fit_scale
         for candidate_anchor in self._anchor_order(anchor):
             rect = self._anchored_rect(width, height, lane, candidate_anchor)
-            if not any(rect.intersects(existing.rect, gap=actual_gap) for existing in occupied_items):
+            if not any(
+                rect.intersects(existing.rect, gap=actual_gap) for existing in occupied_items
+            ):
                 placement = Placement(item.key, rect, fit_scale, Region(region), item.priority)
-                return LayoutPlan((placement,), (), "place", Region(region), candidate_anchor != anchor)
+                return LayoutPlan(
+                    (placement,), (), "place", Region(region), candidate_anchor != anchor
+                )
 
         preferred = self._anchored_rect(width, height, lane, anchor)
         conflicts = [
-            existing for existing in occupied_items
+            existing
+            for existing in occupied_items
             if preferred.intersects(existing.rect, gap=actual_gap)
         ]
-        evicted = tuple(existing.key for existing in sorted(conflicts, key=lambda value: value.priority))
+        evicted = tuple(
+            existing.key for existing in sorted(conflicts, key=lambda value: value.priority)
+        )
         placement = Placement(item.key, preferred, fit_scale, Region(region), item.priority)
         return LayoutPlan((placement,), evicted, "place", Region(region), True)
 
     @staticmethod
     def _anchor_order(preferred: str) -> tuple[str, ...]:
         all_anchors = (
-            "center", "top", "bottom", "left", "right",
-            "top_left", "top_right", "bottom_left", "bottom_right",
+            "center",
+            "top",
+            "bottom",
+            "left",
+            "right",
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right",
         )
         return (preferred,) + tuple(anchor for anchor in all_anchors if anchor != preferred)
 
@@ -649,7 +694,9 @@ class CompositionLayout:
     @staticmethod
     def _flow_candidates(flow: str, items: Sequence[LayoutItem], lane: Rect) -> list[str]:
         if flow != "auto":
-            fallback = [flow] + [candidate for candidate in ("row", "column", "grid") if candidate != flow]
+            fallback = [flow] + [
+                candidate for candidate in ("row", "column", "grid") if candidate != flow
+            ]
             return fallback
         if len(items) == 1:
             return ["grid"]
@@ -687,13 +734,15 @@ class CompositionLayout:
             cell_x = row_left + column * (cell_width + gap) + cell_width / 2
             cell_y = lane.top - row * (cell_height + gap) - cell_height / 2
             scale = min(1.0, cell_width / item.width, cell_height / item.height)
-            result.append(Placement(
-                item.key,
-                Rect(cell_x, cell_y, item.width * scale, item.height * scale),
-                scale,
-                region,
-                item.priority,
-            ))
+            result.append(
+                Placement(
+                    item.key,
+                    Rect(cell_x, cell_y, item.width * scale, item.height * scale),
+                    scale,
+                    region,
+                    item.priority,
+                )
+            )
         return result
 
     @staticmethod
@@ -713,7 +762,7 @@ class CompositionLayout:
     @staticmethod
     def _assert_collision_free(placements: Sequence[Placement], gap: float) -> None:
         for index, first in enumerate(placements):
-            for second in placements[index + 1:]:
+            for second in placements[index + 1 :]:
                 if first.rect.intersects(second.rect, gap=gap):
                     raise CompositionError(
                         f"internal layout collision between {first.key!r} and {second.key!r}"
@@ -737,19 +786,17 @@ __all__ = [
     "SpacingScale",
     "TransitionKind",
     "TypeScale",
-    "CompositionMixin",
-    "DirectedMovingCameraScene",
-    "DirectedScene",
-    "DirectedThreeDScene",
 ]
 
 
-_DIRECTED_EXPORTS = frozenset({
-    "CompositionMixin",
-    "DirectedMovingCameraScene",
-    "DirectedScene",
-    "DirectedThreeDScene",
-})
+_DIRECTED_EXPORTS = frozenset(
+    {
+        "CompositionMixin",
+        "DirectedMovingCameraScene",
+        "DirectedScene",
+        "DirectedThreeDScene",
+    }
+)
 
 
 def __getattr__(name: str) -> Any:

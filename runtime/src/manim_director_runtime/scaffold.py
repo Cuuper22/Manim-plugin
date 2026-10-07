@@ -1,34 +1,204 @@
+"""The `init` operation: create a project from a template or add one scene template."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
 
-from .errors import DirectorError
-from .sample import generalized_fibonacci_source
+from . import catalog
+from .errors import DirectorError, invalid_params, io_error
+from .model import ArtifactKind, RuntimeArtifact, SceneRef
+from .paths import atomic_target, slug
+from .protocol import Context
+from .tasks import InitTask
+from .templates import SCENE_TEMPLATES
 from .themes import get_theme
-from .util import atomic_write
+
+_GITIGNORE_LINES = (".manim-director/", "__pycache__/")
+_MAIN_SCENE = "MainScene"
 
 
-def _slug(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug or "manim-project"
+@dataclass(frozen=True, slots=True)
+class InitResult:
+    mode: str
+    name: str | None
+    slug: str | None
+    seed: int | None
+    template: str | None
+    scene_template: str | None
+    theme: str | None
+    scene: SceneRef
+    artifacts: list[RuntimeArtifact]
 
 
-def _deterministic_seed(slug: str) -> int:
-    digest = hashlib.sha256(f"manim-director:{slug}".encode("utf-8")).digest()
+def init(task: InitTask, ctx: Context) -> InitResult:
+    if task.mode == "add_scene":
+        return _add_scene(task, ctx)
+    return _create(task, ctx)
+
+
+def _create(task: InitTask, ctx: Context) -> InitResult:
+    root = ctx.project_root
+    template = task.template or catalog.PROJECT_TEMPLATES[0]
+    if template not in catalog.PROJECT_TEMPLATES:
+        raise invalid_params(
+            "template", "unknown template", allowed=list(catalog.PROJECT_TEMPLATES)
+        )
+    theme = task.theme or catalog.default_theme()
+    if theme not in catalog.theme_names():
+        raise invalid_params("theme", "unknown theme", allowed=catalog.theme_names())
+    name = (task.name or root.name or "Manim Project").strip()
+    project_slug = slug(name, fallback="manim-project")
+    seed = task.seed if task.seed is not None else _seed_for(project_slug)
+
+    files = {
+        "director.yaml": _director_yaml(name, seed, theme),
+        "manim.cfg": "[CLI]\nmedia_dir = .manim-director/media\n",
+        "requirements.txt": "manim>=0.21,<0.22\n",
+        "README.md": _readme(name),
+        "scenes/main.py": _starter_scene(name, get_theme(theme)),
+    }
+    if task.mode == "create":
+        existing = sorted(path for path in files if (root / path).exists())
+        if existing:
+            raise DirectorError(
+                "project_not_empty",
+                f"{len(existing)} template file(s) already exist; pass force to overwrite them.",
+                {"paths": existing},
+            )
+    written = [_write(root / path, content) for path, content in files.items()]
+    written.append(_merge_gitignore(root / ".gitignore"))
+    return InitResult(
+        mode=task.mode,
+        name=name,
+        slug=project_slug,
+        seed=seed,
+        template=template,
+        scene_template=None,
+        theme=theme,
+        scene=SceneRef(name=_MAIN_SCENE, file="scenes/main.py"),
+        artifacts=[ctx.artifact(ArtifactKind.FILE, path) for path in written],
+    )
+
+
+def _add_scene(task: InitTask, ctx: Context) -> InitResult:
+    assert task.scene_template is not None and task.source_dir is not None
+    entry = SCENE_TEMPLATES.get(task.scene_template)
+    if entry is None:
+        raise invalid_params(
+            "scene_template", "unknown scene template", allowed=list(SCENE_TEMPLATES)
+        )
+    scene_class, generate = entry
+    source_dir = ctx.require_inside(task.source_dir, "source_dir")
+    target = source_dir / f"{task.scene_template}.py"
+    source = generate(get_theme(catalog.default_theme()))
+    try:
+        source_dir.mkdir(parents=True, exist_ok=True)
+        with target.open("w" if task.force else "x", encoding="utf-8") as handle:
+            handle.write(source)
+    except FileExistsError:
+        raise DirectorError(
+            "project_not_empty",
+            f"{ctx.relative(target)} already exists; pass force to overwrite it.",
+            {"paths": [ctx.relative(target)]},
+        ) from None
+    except OSError as exc:
+        raise io_error(target, exc) from exc
+    return InitResult(
+        mode=task.mode,
+        name=None,
+        slug=None,
+        seed=None,
+        template=None,
+        scene_template=task.scene_template,
+        theme=None,
+        scene=SceneRef(name=scene_class, file=ctx.relative(target)),
+        artifacts=[ctx.artifact(ArtifactKind.FILE, target)],
+    )
+
+
+def _seed_for(project_slug: str) -> int:
+    digest = hashlib.sha256(f"manim-director:{project_slug}".encode()).digest()
     return int.from_bytes(digest[:4], "big") & 0x7FFF_FFFF
 
 
-def _starter_scene_source(name: str, theme: Mapping[str, Any]) -> str:
+def _write(path: Path, content: str) -> Path:
+    with atomic_target(path) as temp:
+        temp.write_text(content, encoding="utf-8")
+    return path
+
+
+def _merge_gitignore(path: Path) -> Path:
+    current = path.read_text(encoding="utf-8") if path.exists() else ""
+    present = {line.strip() for line in current.splitlines()}
+    missing = [line for line in _GITIGNORE_LINES if line not in present]
+    if missing:
+        separator = "" if not current or current.endswith("\n") else "\n"
+        _write(path, current + separator + "\n".join(missing) + "\n")
+    return path
+
+
+def _director_yaml(name: str, seed: int, theme: str) -> str:
+    return f"""version: 1
+project:
+  name: {json.dumps(name)}
+  seed: {seed}
+  source_dir: scenes
+  asset_dir: assets
+  output_dir: output
+  media_dir: .manim-director/media
+engine:
+  source: scenes/main.py
+  main_scene: {_MAIN_SCENE}
+render:
+  profile: preview
+  renderer: cairo
+  format: mp4
+  transparent: false
+  width: 1920
+  height: 1080
+  fps: 60
+theme: {theme}
+safe_area:
+  top: 0.05
+  right: 0.05
+  bottom: 0.08
+  left: 0.05
+budgets:
+  render_seconds: 900
+"""
+
+
+def _readme(name: str) -> str:
+    return f"""# {name}
+
+Render a quick draft, then look at it:
+
+```bash
+manim-director render --scene {_MAIN_SCENE} --profile draft
+manim-director contact-sheet --scene {_MAIN_SCENE}
+```
+
+Production render:
+
+```bash
+manim-director render --scene {_MAIN_SCENE} --profile production
+```
+
+Scenes are ordinary Manim Python, so `manim -ql scenes/main.py {_MAIN_SCENE}` works too
+from the environment where Manim Director is installed.
+"""
+
+
+def _starter_scene(name: str, theme: dict[str, object]) -> str:
     return f'''"""A compact starter that uses Manim Director's composition grammar."""
 from manim import *
 from manim_director_runtime import Beat, DesignSystem, DirectedScene
 
 
-class MainScene(DirectedScene):
+class {_MAIN_SCENE}(DirectedScene):
     design = DesignSystem.from_mapping({{"theme": {dict(theme)!r}}})
 
     def construct(self):
@@ -64,166 +234,3 @@ class MainScene(DirectedScene):
         self.caption("One beat, one focus, one clean visual relationship.")
         self.wait(1)
 '''
-
-
-def scaffold(params: Mapping[str, Any]) -> dict[str, Any]:
-    raw_root = Path(str(params.get("project_root", "."))).expanduser().resolve()
-    raw_root.mkdir(parents=True, exist_ok=True)
-    if not raw_root.is_dir():
-        raise DirectorError("invalid_project_root", f"Cannot create project at: {raw_root}")
-    name = str(params.get("name", raw_root.name or "Manim Project"))
-    if not name.strip():
-        raise DirectorError("invalid_project_name", "Project name cannot be empty")
-    slug = _slug(name)
-    theme_name = str(params.get("theme", "midnight"))
-    theme = get_theme(theme_name)
-    sample = bool(params.get("sample", False))
-    force = bool(params.get("force", False))
-    merge = bool(params.get("merge", False))
-    try:
-        seed = int(params.get("seed", _deterministic_seed(slug)))
-    except (TypeError, ValueError) as exc:
-        raise DirectorError("invalid_seed", "Project seed must be an integer") from exc
-    if not (0 <= seed <= 0x7FFF_FFFF):
-        raise DirectorError("invalid_seed", "Project seed must be between 0 and 2147483647")
-    existing_entries = sorted(path.name for path in raw_root.iterdir())
-    if existing_entries and not force and not merge:
-        raise DirectorError(
-            "project_not_empty", "Scaffold destination is not empty; use force or merge explicitly",
-            {"entries": existing_entries[:100], "entry_count": len(existing_entries)},
-        )
-    scene_name = "GeneralizedFibonacciScene" if sample else "MainScene"
-    files: dict[str, str] = {
-        "director.yaml": f'''version: 1
-schema: manim-director/v1
-project:
-  name: {json.dumps(name)}
-  seed: {seed}
-  source_dir: scenes
-  asset_dir: assets
-  output_dir: output
-  media_dir: .manim-director/media
-engine:
-  backend: manim-ce
-  source: scenes/main.py
-  main_scene: {scene_name}
-  compatible: ">=0.21,<0.22"
-render:
-  renderer: cairo
-  profile: preview
-  format: mp4
-  transparent: false
-  width: 1920
-  height: 1080
-  fps: 60
-theme:
-  preset: {theme_name}
-  background: {json.dumps(theme["background"])}
-  foreground: {json.dumps(theme["foreground"])}
-  accent: {json.dumps(theme["accent"])}
-  font: {json.dumps(theme["font"])}
-safe_area:
-  top: 0.05
-  right: 0.05
-  bottom: 0.08
-  left: 0.05
-direction:
-  composition:
-    density: spacious
-    max_active: 4
-    caption_lane: true
-  typography:
-    scale:
-      hero: 64
-      title: 44
-      section: 36
-      body: 30
-      math: 48
-      label: 24
-      caption: 25
-      micro: 18
-  motion:
-    continuation: morph
-    contrast: lateral
-    reveal: draw
-    chapter: reset
-  narrative:
-    audience: curious general audience
-    principle: one-idea-per-beat
-captions:
-  format: vtt
-  burn_in: false
-''',
-        "manim.cfg": f'''[CLI]
-media_dir = .manim-director/media
-background_color = {theme["background"]}
-progress_bar = display
-''',
-        "requirements.txt": "manim>=0.21,<0.22\n",
-        "scenes/__init__.py": "\"\"\"Directed Manim scenes.\"\"\"\n",
-        "assets/manifest.json": '{"version":1,"assets":[]}\n',
-        ".gitignore": ".manim-director/media/\n.manim-director/tmp/\n__pycache__/\n*.pyc\n",
-        "README.md": f'''# {name}
-
-Preview the included scene in the plugin-managed runtime:
-
-```bash
-manim-director preview --scene {scene_name} --contact-sheet
-```
-
-Production render:
-
-```bash
-manim-director render --scene {scene_name} --profile production
-```
-
-The generated source remains ordinary Manim Python. When invoking Manim
-directly, use the same environment in which Manim Director is installed so
-`manim_director_runtime` is importable.
-''',
-    }
-    files["scenes/main.py"] = generalized_fibonacci_source(theme=theme_name) if sample else _starter_scene_source(name, theme)
-    directories = ("scenes", "assets", "output", ".manim-director/media", ".manim-director/tmp")
-    conflicts = []
-    for directory in directories:
-        target = raw_root / directory
-        if target.exists() and not target.is_dir():
-            conflicts.append(str(target))
-    for relative in files:
-        target = raw_root / relative
-        if target.exists() and not target.is_file():
-            conflicts.append(str(target))
-        parent = target.parent
-        while parent != raw_root:
-            if parent.exists() and not parent.is_dir():
-                conflicts.append(str(parent))
-                break
-            parent = parent.parent
-    if conflicts:
-        raise DirectorError("scaffold_path_conflict", "Scaffold paths conflict with non-file or non-directory entries", {"paths": sorted(set(conflicts))})
-    for directory in directories:
-        (raw_root / directory).mkdir(parents=True, exist_ok=True)
-    written: list[str] = []
-    preserved: list[str] = []
-    for rel, content in files.items():
-        target = raw_root / rel
-        if target.exists() and merge and not force:
-            preserved.append(str(target))
-            continue
-        if rel == ".gitignore" and target.exists() and force:
-            current = target.read_text(encoding="utf-8")
-            missing = [line for line in content.splitlines() if line and line not in current.splitlines()]
-            content = current.rstrip("\n") + ("\n" if current else "") + "\n".join(missing) + ("\n" if missing else "")
-        atomic_write(target, content)
-        written.append(str(target))
-    return {
-        "project_root": str(raw_root),
-        "name": name,
-        "slug": slug,
-        "seed": seed,
-        "theme": theme,
-        "files": [str(raw_root / rel) for rel in sorted(files)],
-        "written_files": written,
-        "preserved_files": preserved,
-        "sample_scene": scene_name,
-    }

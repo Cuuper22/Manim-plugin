@@ -134,6 +134,5 @@ validation:
     - sequence[6] == 8
 budgets:
   render_seconds: 900
-  memory_mb: 4096
   output_mb: 1024
 extensions: {}

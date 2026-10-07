@@ -1,5 +1,6 @@
-# Exact dependency set exercised by the 1.1.0 installer and release gate.
+# Exact dependency set exercised by the installer and release gate.
 ManimPango==0.6.1
+PyYAML==6.0.3
 Pygments==2.21.0
 av==18.1.0
 beautifulsoup4==4.15.0

@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
-from typing import Any, Callable, Mapping
-
-from .errors import DirectorError
-from .sample import generalized_fibonacci_source
-from .themes import get_theme
-from .util import atomic_write, confined_path, project_root
+from collections.abc import Callable
+from typing import Any
 
 
 def _preamble(theme: dict[str, Any], description: str) -> str:
@@ -26,8 +21,10 @@ def _preamble(theme: dict[str, Any], description: str) -> str:
 
 
 def _equation(theme: dict[str, Any]) -> str:
-    return _preamble(theme, "A directed visual derivation of the sum of odd numbers.") + textwrap.dedent(
-        r'''
+    return _preamble(
+        theme, "A directed visual derivation of the sum of odd numbers."
+    ) + textwrap.dedent(
+        r"""
 
 
         class EquationDerivationScene(DirectedScene):
@@ -120,13 +117,13 @@ def _equation(theme: dict[str, Any]) -> str:
                 self.play(Indicate(second, color=THEME["accent"]))
                 self.caption("The picture predicts the algebra; the algebra proves it.")
                 self.wait(.7)
-        '''
+        """
     ).lstrip("\n")
 
 
 def _function(theme: dict[str, Any]) -> str:
     return _preamble(theme, "A directed exploration of sine and its derivative.") + textwrap.dedent(
-        r'''
+        r"""
 
 
         class FunctionExplorerScene(DirectedScene):
@@ -216,13 +213,13 @@ def _function(theme: dict[str, Any]) -> str:
                 self.focus(complete_plot)
                 self.caption("Blue is height; gold is the rate at which that height changes.")
                 self.wait(.8)
-        '''
+        """
     ).lstrip("\n")
 
 
 def _geometry(theme: dict[str, Any]) -> str:
     return _preamble(theme, "A directed right-triangle similarity proof.") + textwrap.dedent(
-        r'''
+        r"""
 
 
         class GeometryProofScene(DirectedScene):
@@ -254,7 +251,9 @@ def _geometry(theme: dict[str, Any]) -> str:
                 labels = VGroup(
                     self.styled_math("a", role="label").move_to((a + c) / 2 + LEFT * .32),
                     self.styled_math("b", role="label").move_to((a + b) / 2 + DOWN * .32),
-                    self.styled_math("c", role="label", color_role="accent").move_to((b + c) / 2 + UR * .28),
+                    self.styled_math("c", role="label", color_role="accent").move_to(
+                        (b + c) / 2 + UR * .28
+                    ),
                 )
                 diagram = VGroup(triangle, right_angle, labels)
                 altitude = DashedLine(a, foot, color=THEME["accent"], dash_length=.12)
@@ -329,13 +328,13 @@ def _geometry(theme: dict[str, Any]) -> str:
                 )
                 self.play(Indicate(conclusion, color=THEME["accent"]))
                 self.wait(.7)
-        '''
+        """
     ).lstrip("\n")
 
 
 def _algorithm(theme: dict[str, Any]) -> str:
     return _preamble(theme, "A directed breadth-first-search walkthrough.") + textwrap.dedent(
-        r'''
+        r"""
 
 
         class AlgorithmWalkthroughScene(DirectedScene):
@@ -399,42 +398,14 @@ def _algorithm(theme: dict[str, Any]) -> str:
                     queue_panel = next_panel
                 self.caption("A first visit therefore always uses a shortest number of edges.")
                 self.wait(.8)
-        '''
+        """
     ).lstrip("\n")
 
 
-GENERATORS: dict[str, tuple[str, Callable[[dict[str, Any]], str]]] = {
+# Scene template name -> (scene class, source generator taking a theme mapping).
+SCENE_TEMPLATES: dict[str, tuple[str, Callable[[dict[str, Any]], str]]] = {
     "equation_derivation": ("EquationDerivationScene", _equation),
     "function_explorer": ("FunctionExplorerScene", _function),
     "geometry_proof": ("GeometryProofScene", _geometry),
     "algorithm_walkthrough": ("AlgorithmWalkthroughScene", _algorithm),
 }
-
-
-def templates(params: Mapping[str, Any]) -> dict[str, Any]:
-    operation = str(params.get("operation", "list"))
-    available = [
-        {"name": name, "scene": descriptor[0], "themes": ["midnight", "paper", "neon", "colorblind"]}
-        for name, descriptor in sorted(GENERATORS.items())
-    ] + [{"name": "generalized_fibonacci", "scene": "GeneralizedFibonacciScene", "themes": ["midnight", "paper", "neon", "colorblind"]}]
-    if operation == "list":
-        return {"templates": available}
-    if operation != "generate":
-        raise DirectorError("invalid_template_operation", f"Unknown template operation: {operation}")
-    root = project_root(params)
-    name = str(params.get("name", "equation_derivation"))
-    theme_name = str(params.get("theme", "midnight"))
-    if name == "generalized_fibonacci":
-        source = generalized_fibonacci_source(theme=theme_name)
-        scene = "GeneralizedFibonacciScene"
-    elif name in GENERATORS:
-        scene, generator = GENERATORS[name]
-        source = generator(get_theme(theme_name))
-    else:
-        raise DirectorError("template_not_found", f"Unknown template: {name}", {"available": [item["name"] for item in available]})
-    output = confined_path(root, str(params.get("output", f"scenes/{name}.py")))
-    if output.exists() and not bool(params.get("force", False)):
-        raise DirectorError("file_exists", f"Refusing to overwrite existing scene: {output}")
-    compile(source, str(output), "exec")
-    atomic_write(output, source)
-    return {"template": name, "theme": theme_name, "scene": scene, "path": str(output)}

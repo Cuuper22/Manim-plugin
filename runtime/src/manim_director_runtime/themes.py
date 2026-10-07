@@ -5,7 +5,6 @@ from typing import Any
 
 from .errors import DirectorError
 
-
 BUILTIN_THEMES: dict[str, dict[str, Any]] = {
     "midnight": {
         "background": "#0B1020",
@@ -105,7 +104,9 @@ def get_theme(name: str = "midnight", overrides: dict[str, Any] | None = None) -
         allowed = set(theme)
         unknown = sorted(set(overrides) - allowed)
         if unknown:
-            raise DirectorError("invalid_theme", "Theme contains unsupported keys", {"unknown": unknown})
+            raise DirectorError(
+                "invalid_theme", "Theme contains unsupported keys", {"unknown": unknown}
+            )
         theme.update(overrides)
     theme["name"] = name
     return theme

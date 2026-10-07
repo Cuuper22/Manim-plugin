@@ -192,7 +192,6 @@ accessibility:
   reduced_motion_strategy: replace camera travel with short dissolves
 budgets:
   render_seconds: 1800
-  memory_mb: 4096
   output_mb: 1024
 outputs:
   manifest: expected/outputs.json
