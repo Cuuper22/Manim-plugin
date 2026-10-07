@@ -14,8 +14,9 @@ engine renders, inspects and checks.
 
 ## Start from the project's state
 
-1. Call `inspect`. It lists the scenes the engine found (with beat counts), profiles, the theme,
-   the latest render, still and contact sheet per scene, and recent jobs.
+1. Call `inspect`. It lists the scenes (with beat counts and `director.yaml` ids), profiles, the
+   theme, findings, the latest render, still and contact sheet per scene, and recent jobs. A video
+   with `video_outdated: true` predates the scene's last edit: render again before judging it.
    - `director.yaml is missing`: call `init` with a `template` (`explainer`, `derivation`,
      `geometry`, `graph`, `vertical_short`), or ask where the project should live. To add a scene to
      an existing project, call `init` with only `scene_template`.
@@ -96,8 +97,9 @@ The full API, transition semantics, regions and pitfalls are in
 
 1. `render` the changed scene at `profile: "draft"`. Render only what changed.
 2. `contact_sheet` for the whole scene; `still` (last frame) or `submit` with `operation: "frame"`
-   and `at_seconds` for one moment. Open the PNG paths from the answer with your image viewer and
-   look: overlaps, clipped or tiny formulas, wrong colors, empty frames, a confusing order.
+   and `at_seconds` for one moment. Open the PNGs listed in the answer's `paths` (absolute) with
+   your image viewer and look: overlaps, clipped or tiny formulas, wrong colors, empty frames, a
+   confusing order.
 3. `qa`. Its findings name the time, the beat and the line where that beat starts.
 4. `validate_math` on the algebra behind each derivation: Python syntax, `^` allowed, each equation
    written as `lhs - rhs` and divided by any factor the step applied to both sides, `ranges` for

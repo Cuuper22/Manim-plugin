@@ -140,7 +140,7 @@ manim-director validate-math "(1 - r^4)/(1 - r)" "1 + r + r^2 + r^3" --range r=-
 
 A failed render already carries its diagnosis; `manim-director diagnose --job <id>` repeats it, and
 `diagnose --text` explains a pasted traceback or TeX log. Renders and stills are cached on the
-content of the project files they can read, so an unchanged scene comes back at once.
+content of the project's code, data and media, so an unchanged scene comes back at once.
 
 ## The workbench
 
@@ -159,8 +159,9 @@ QA and exports. Jobs started from the CLI or by your agent appear live.
 The plugin adds the `manim-director` skill and an MCP server with ten tools: `init`, `inspect`,
 `doctor`, `render`, `still`, `contact_sheet`, `qa`, `validate_math`, `submit` (the other operations:
 `frame`, `diagnose`, `captions`, `ingest`, `export`) and `job_status`. A job tool waits for its job
-(20 seconds by default, up to 50), then answers with a bounded summary and the absolute paths of the
-images and videos it made. Logs and media stay on disk; the agent opens the PNGs it needs.
+(20 seconds by default, up to 50), then answers with its verdict (a failed step, the QA status),
+up to five `file:line` findings and the absolute paths of the images and videos it made. Logs and
+media stay on disk; the agent opens the PNGs it needs.
 
 Ask for what you want to see:
 

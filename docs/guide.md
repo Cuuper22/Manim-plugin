@@ -42,7 +42,7 @@ creates `director.yaml`, `scenes/main.py`, `manim.cfg`, `README.md` and a `.giti
 `explainer` (default), `derivation`, `geometry`, `graph` and `vertical_short`; each is a finished
 scene whose beats match the storyboard in `director.yaml`. Inside an existing project,
 `manim-director init --scene-template graph` adds `scenes/graph.py`. `init` refuses a non-empty
-directory unless you pass `--force`.
+directory; `--force` writes the template anyway, replacing files of the same names without a copy.
 
 `director.yaml` names the project, the scene files and the main scene, the theme, the storyboard,
 render profiles, the safe area and symbol colors. Only `project.name` is required; the
@@ -214,10 +214,12 @@ successful job whose verdict is "a step is not equivalent"; `--json` gives the c
 LaTeX, FFmpeg, font, OpenGL, missing-asset or composition errors. `diagnose --job <id>` prints them
 again, and `diagnose --text` (or `--text-file`) reads a pasted traceback or TeX log.
 
-**Caching.** A render or still whose scene, settings, runtime and project files have not changed
-returns the earlier job's artifacts at once (`cached`), and submitting one identical to a render
-still running returns that job. Two renders of the same scene run one after the other. `--fresh`
-renders again and also skips Manim's partial-movie cache.
+**Caching.** A render or still whose scene, settings, runtime and project files (the
+[reference](reference.md#cli) lists which) have not changed returns the earlier job's artifacts at
+once (`cached`), and submitting one identical to a render still running returns that job. Renders
+and stills of one scene run one at a time; the later one shows as running ("Waiting for another
+render") without holding a worker. `--fresh` renders again and also skips Manim's partial-movie
+cache.
 
 ## Delivering
 
@@ -228,12 +230,13 @@ manim-director export --format gif --scene Tangent --gif-fps 15 --gif-width 640
 manim-director export                                              # output/<project>.zip
 ```
 
-A zip holds `director.yaml`, `manim.cfg`, READMEs, licenses and requirements files at the root,
-the source, asset and `sources/` directories, and the files `director.yaml` refers to. It leaves out
-`.manim-director/`, the output and media directories, the ignored directories (`.git`, `.venv`,
-`node_modules`, ...) and files that look like credentials, and lists every entry in
-`manim-director-export.json`. With `--job` or `--scene` it adds that render's artifacts under
-`deliverables/`. `--output` picks another path inside the project.
+A zip holds `director.yaml`, `manim.cfg`, `pyproject.toml`, READMEs, licenses and requirements
+files at the root, the source, asset and `sources/` directories, and the files `director.yaml`
+refers to. It leaves out `.manim-director/`, the output and media directories, the ignored
+directories (`.git`, `.venv`, `node_modules`, ...) and files that look like credentials, and lists
+every entry in `manim-director-export.json`. The latest render of `--scene` (default the main
+scene), or `--job`, adds its artifacts under `deliverables/`. `--output` picks another path inside
+the project.
 
 `captions` validates a WebVTT or SRT file, shifts or scales its times, and converts between the two:
 `manim-director captions captions.vtt --shift 0.5 --output captions.srt`.
@@ -253,11 +256,13 @@ manim-director ingest ~/notes/recurrences.md ~/data/sequences.csv --license CC-B
 `manim-director open` starts the server on `127.0.0.1:4177` and opens the workbench in your browser
 already signed in; `serve` does the same without the browser. Both print the sign-in link, which
 carries a token that changes every start. Use `--port` for another port and `--port 0` for any free
-one.
+one. A port already in use is most likely an engine that is already serving: open the link it
+printed.
 
 The workbench shows the project's scenes with their storyboard beats, the latest render of the
-selected scene over a beat timeline, stills and contact sheets, the source editor, and the QA and
-doctor findings; a finding opens its file at its line. Saves are checked against the file's
+selected scene over a beat timeline (tagged outdated once its scene changes, with the `.srt` from
+Manim's `add_subcaption` as a download), stills and contact sheets, the source editor, and the QA
+and doctor findings; a finding opens its file at its line. Saves are checked against the file's
 revision, so an edit made elsewhere (by you or an agent) is never overwritten silently. Jobs from
 the CLI and MCP appear as they run.
 
@@ -268,13 +273,12 @@ files and run code as you. Prefer an SSH tunnel.
 
 The skill teaches the agent this guide's loop: inspect the project, plan beats, write the scene with
 `DirectedScene`, render a draft, look at a contact sheet or stills, run `qa`, fix, and render the
-final profile. The MCP tools mirror the CLI: `render`, `still`, `contact_sheet`, `qa` and
-`validate_math` take the same parameters, `submit` runs `frame`, `diagnose`, `captions`, `ingest`
-and `export`, and `job_status` follows or cancels a job that outlived the tool's wait. Answers list
-artifact paths instead of carrying media, so the agent opens only the images it needs.
+final profile. The [MCP tools](reference.md#mcp-tools) take the CLI's parameters; `submit` runs
+`frame`, `diagnose`, `captions`, `ingest` and `export`, and `job_status` follows or cancels a job
+that outlived the tool's wait. Answers give the verdict and artifact paths instead of media, so the
+agent opens only the images it needs.
 
-Agents edit files with their own tools. The CLI and MCP share the project database with a running
-workbench, so everything shows up there too.
+Agents edit files with their own tools; their jobs show up in a running workbench too.
 
 ## Troubleshooting
 
@@ -290,5 +294,5 @@ is ready to render.
 - **`latex_missing`**: install TeX with `dvisvgm`; `Text` still works without it, `MathTex` does not.
 - **OpenGL unavailable**: use the default `cairo` renderer; headless machines usually lack a display.
 - **A job left running by a crashed engine**: once that engine's heartbeat has been silent for 10
-  seconds, the next engine to start (or any running `serve` or `mcp`) fails its jobs as
-  `engine_lost`.
+  seconds, any running engine (a CLI command, `serve` or `mcp`) fails its jobs as `engine_lost`
+  within two seconds and releases their scene locks.

@@ -7,8 +7,8 @@ Render projects you wrote or reviewed; render anything else in a container or VM
 
 ## The local server
 
-`serve` and `open` bind `127.0.0.1` by default. Binding any other address is refused without
-`--allow-remote`.
+`serve` and `open` bind `127.0.0.1` by default. Without `--allow-remote` they bind only `127.0.0.1`
+or `::1`, the loopback addresses the Host check accepts.
 
 - **Token.** Each start creates a random 32-byte token. Every `/api` request needs it, as a Bearer
   header or as the `mdsess_<port>` cookie (HttpOnly, SameSite=Strict) that the printed sign-in link
@@ -45,16 +45,21 @@ loopback port.
 
 The CLI and MCP server act for the local user who started them and have the same project rules,
 except that `ingest` (through `submit` in MCP) may read any file that user can read. It refuses
-files that look like credentials (`.env`, `*.pem`, `*.key`, `id_rsa*`, `.netrc`, ...) and anything
-under `.ssh`, `.gnupg`, `.aws` or `.config/gcloud`.
+files that look like credentials (`.env`, `*.pem`, `*.key`, `id_rsa*`, `.netrc`, `.git-credentials`,
+`.pgpass`, ...), anything under `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+`.config/gcloud` or `.config/gh`, and kernel pseudo-files under `/proc`, `/sys` and `/dev`. Writes
+from `ingest` and `init` resolve symlinks and stay inside the project. On Unix, project discovery
+never climbs into a directory anyone may write to, so another user's `/tmp/director.yaml` cannot
+become your project.
 
 ## Processes
 
 The engine starts Python, and the runtime starts FFmpeg and TeX, with argument lists, never through a
 shell. Each request runs in a fresh process group that is killed on cancel, timeout (30 minutes by
-default) or engine shutdown, children included. A memory limit is available on Unix
-(`MANIM_DIRECTOR_MEMORY_MB`) but off by default. Request, response, log and artifact sizes are
-bounded. None of this contains hostile Python; it keeps honest mistakes from taking the machine down.
+default) or engine shutdown, children included; on POSIX a worker whose engine dies kills its own
+group. A memory limit is available on Unix (`MANIM_DIRECTOR_MEMORY_MB`) but off by default.
+Request, response, log and artifact sizes are bounded. None of this contains hostile Python; it
+keeps honest mistakes from taking the machine down.
 
 The runtime inherits the engine's environment, so a scene can read any secret in it. Start the
 engine with only the variables the project needs.
@@ -64,7 +69,8 @@ engine with only the variables the project needs.
 - `.manim-director/state.db` holds job requests, results and every line the scene printed to stderr.
   Review it before sharing it.
 - `export --format zip` leaves out `.manim-director/`, the output and media directories, version
-  control and environment directories, and files that look like credentials. It does include your
+  control and environment directories, files with the credential names `ingest` refuses, and files
+  reached through a symlink that leaves the project or lands on a hidden path. It does include your
   scene source, assets and ingested sources: check licenses and confidential material before you
   publish it.
 - `ingest --normalize` removes `script` and `foreignObject` elements, event-handler attributes and

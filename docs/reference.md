@@ -10,10 +10,17 @@ manim-director [--project PATH] [--json] <command>
 ```
 
 `--project` is the project directory or any path inside it (default `.`); the engine walks up to the
-nearest `director.yaml`. Path arguments are relative to your current directory and must stay inside
-the project. Operation commands run one job, print progress on stderr and a summary with
-project-relative artifact paths on stdout; `--json` prints the job record instead (`id`, `operation`,
-`status`, `cached`, `request`, `result`, `error`, `progress`, timestamps, ...). Ctrl-C cancels the job.
+nearest `director.yaml`, but on Unix never climbs into a directory anyone may write to, such as
+`/tmp`. `doctor`, `validate-math` and `diagnose --text` also run outside a project. Path arguments
+are relative to your current directory and must stay inside the project. `ingest` is the one
+exception: its paths may be any file you can read. `init`'s PATH is relative to `--project`, and
+files that only hold an argument's text (`--text-file`, `--content-file`, ...) may be anywhere.
+
+Operation commands run one job, print progress on stderr and a summary (status, verdict, findings,
+project-relative artifact paths) on stdout; `--json` prints the job record instead (`id`,
+`operation`, `status`, `cached`, `request`, `result`, `error`, `progress`, timestamps, ...), or
+`{"error": {code, message, data}}`. Ctrl-C cancels a job the command started; a job it joined keeps
+running for the client that started it.
 
 | Command | Arguments |
 |---|---|
@@ -25,19 +32,26 @@ project-relative artifact paths on stdout; `--json` prints the job record instea
 | `contact-sheet` | a source, `--count N` (6, 1–24) `--columns N` (3, 1–8) |
 | `qa` | a source, `--frames N` (8, 1–40) |
 | `diagnose` | `--job ID`, `--text TEXT` or `--text-file PATH` |
-| `validate-math STEP STEP...` | `--range VAR=LO:HI`... `--samples N` (200) `--tolerance X` (1e-9) `--seed N` |
+| `validate-math STEP STEP...` | `--range VAR=LO:HI`... `--samples N` (200) `--tolerance X` (1e-9) `--seed N`; steps that start with `-` go after `--` |
 | `captions PATH` | `--shift SECONDS` `--scale K` `--output PATH` (`.vtt` or `.srt`) |
 | `ingest PATH...` | `--id ID`... (paired with the paths in order) `--license L` `--attribution A` `--normalize` `--force` |
 | `export` | `--format zip\|mp4\|webm\|gif` (zip), a source, `--output PATH` `--gif-fps N` `--gif-width N` |
-| `inspect` | Scenes, profiles, latest renders and recent jobs |
+| `inspect` | Scenes in declared order (with `director.yaml` ids), profiles, findings, latest renders (marked outdated once the scene file changes) and recent jobs |
 | `edit PATH` | `--content S`, `--content-file F`, `--line START:END` with `--replacement S` or `--replacement-file F`, or `--merge-patch JSON` / `--merge-patch-file F` (only `director.yaml`); `--expected-revision R` |
-| `serve` | `--host` (127.0.0.1) `--port` (4177, 0 = any) `--workbench-dir DIR` `--allow-remote` |
+| `serve` | `--host` (127.0.0.1; only it and `::1` without `--allow-remote`) `--port` (4177, 0 = any) `--workbench-dir DIR` `--allow-remote` |
 | `open` | as `serve`, plus `--no-browser` |
 | `mcp` | MCP over stdio |
 
 A *source* is `--job ID` (a succeeded job's video, or for `qa` its image), `--path FILE`, or by
 default the latest successful render of `--scene` (default `engine.main_scene`), filtered by
 `--profile`.
+
+A `render` or `still` is answered from the cache (`cached`) while its task, the engine and runtime
+versions and every project file with one of these extensions are unchanged: `py cfg toml yaml yml
+json csv tsv txt dat npy npz parquet md tex sty cls bib typ glsl frag vert svg png jpg jpeg webp gif
+bmp tif tiff wav mp3 ogg ttf otf`, outside the media and output directories and the ignored ones
+(`.git`, `.venv`, `node_modules`, `build`, ...). After editing any other file a scene reads, pass
+`--fresh`.
 
 Exit codes: `0` succeeded; `1` the job failed or was cancelled (including timeouts); `2` invalid
 input; `3` the runtime is unavailable, the engine was lost, or an internal error; `130` interrupted.
@@ -49,12 +63,12 @@ verdict.
 | Variable | Effect |
 |---|---|
 | `MANIM_DIRECTOR_PYTHON` | Interpreter for the runtime. Default: `<prefix>/share/manim-director/venv` beside the binary, else `python3` (`python` on Windows). |
-| `MANIM_DIRECTOR_WORKERS` | Jobs run at once per engine process (2, 1–32). |
+| `MANIM_DIRECTOR_WORKERS` | Runtime processes at once per engine process (2, 1–32). A render or still waiting for another render of its scene shows as `running` without holding one. |
 | `MANIM_DIRECTOR_QUEUE` | Queued jobs per engine process (128, 1–4096); beyond it, `queue_full`. |
 | `MANIM_DIRECTOR_TIMEOUT_SECONDS` | Job timeout, over `budgets.render_seconds` (1800, 10–86400). |
 | `MANIM_DIRECTOR_MEMORY_MB` | Address-space limit per runtime process on Unix, over `budgets.memory_mb`. Off by default: it can break NumPy, Cairo and OpenGL. |
 | `MANIM_DIRECTOR_PREWARM` | `0` stops `serve` and `mcp` from keeping a runtime process warm. |
-| `MANIM_DIRECTOR_KEEP_JOBS`, `MANIM_DIRECTOR_KEEP_DAYS` | Pruning of finished jobs and their artifacts (500 jobs, 30 days); the latest artifacts of every scene are kept. |
+| `MANIM_DIRECTOR_KEEP_JOBS`, `MANIM_DIRECTOR_KEEP_DAYS` | `serve` and `mcp` delete finished jobs and their artifacts beyond the newest 500 (50–100000) or older than 30 days (1–3650), but keep each scene's latest still and contact sheet, its newest render per profile, and the jobs those came from. |
 | `MANIM_DIRECTOR_WORKBENCH` | Same as `--workbench-dir`. |
 | `MANIM_DIRECTOR_PREFIX` | Install prefix for `install.py`, and a place the MCP launcher looks for `bin/manim-director`. |
 | `MANIM_DIRECTOR_RELEASE_BASE` | Where `install.py` downloads release archives and `SHA256SUMS` from: an `https://` or `file://` URL. |
@@ -137,12 +151,16 @@ sources are `{"job_id": "…"}` or `{"path": "…"}`.
 | `submit` | `operation` (any job operation) plus its parameters, `wait_seconds` |
 | `job_status` | `job_id`, `cancel`, `cursor`, `limit` (20, 1–100), `wait_seconds` |
 
-Job tools wait `wait_seconds` (20, 0–50) and answer `{job, result, error}`; `job_status` adds log
-`events` and a `next_cursor`. The text content is a one-line summary followed by the absolute path of
-every artifact. A failed or cancelled job, and any error before the job starts, is a result with
-`isError: true` and `{error: {code, message, data}}`; only malformed JSON-RPC and unknown tools are
-protocol errors. Structured content stays under 48 KiB (`inspect` under 32 KiB); longer lists are
-cut and marked `truncated`.
+Job tools wait `wait_seconds` (20, 0–50) and answer `{job, result, error, paths}`, where `paths`
+holds the absolute path of every artifact (at most 64); `job_status` adds log `events` and a
+`next_cursor`. The text content is `<operation> <job id> <status>` (plus `(cached)`, the error's code
+and message, or a running job's phase), the verdict (`ready to render: no`, `qa: warn`, `a step is
+not equivalent` with the failing step pair, ...), up to five findings as `severity file:line:
+message` with their hints, and the absolute paths. A failed or cancelled job is a result with
+`isError: true`, and so is an error before the job starts, whose structured content is only
+`{error: {code, message, data}}`. Only malformed JSON-RPC and unknown tools are protocol errors.
+Structured content stays under 48 KiB (`inspect` under 32 KiB); longer lists are cut and marked
+`truncated`.
 
 ## HTTP API
 
@@ -161,7 +179,7 @@ also gets `{"event":"listening","url":…,"address":…}`. The token is random p
 | Route | Purpose |
 |---|---|
 | `GET /api/health` | `{ok, version, api_version: 2, instance_id}` |
-| `GET /api/state` | The workspace: engine info, project, spec, profiles, themes, scene index, scenes, storyboard, latest artifacts per scene, findings, doctor, the 50 newest jobs and an `event_cursor` |
+| `GET /api/state` | The workspace: engine info, project, spec, profiles, themes, scene index, scenes, storyboard, latest artifacts per scene (a video with its profile, `outdated` flag and caption files), findings, doctor, the 50 newest jobs and an `event_cursor` |
 | `POST /api/jobs` | Submit `{"operation": "render", "scene": "…", …}`; `202` queued, `200` cached or joined. `init`, `discover` and `ingest` are refused (`operation_not_allowed`). |
 | `GET /api/jobs?before=&limit=` | Newest first (50, at most 200) |
 | `GET /api/jobs/{id}` | One job with its result and artifact URLs |
@@ -175,9 +193,10 @@ also gets `{"event":"listening","url":…,"address":…}`. The token is random p
 **Source writes.** `expected_revision` is the file's BLAKE3 from the last read, or `null` to create
 it; anything else is `409 revision_conflict` with the current revision. Writes are atomic, keep the
 file's line endings, and are validated first (Python syntax, JSON, `director.yaml`) with
-`400 source_invalid` and the line. Editable types: `py json yaml yml toml md tex typ vtt srt txt`, up
-to 2 MiB; hidden paths are refused. The previous content is kept under `.manim-director/undo/` (20
-per file).
+`400 source_invalid` and the line; one that leaves the file unchanged returns its revision and
+writes nothing. A `merge_patch` keeps the order of `director.yaml`'s keys (new keys go last) but
+drops its comments. Editable types: `py json yaml yml toml md tex typ vtt srt txt`, up to 2 MiB;
+hidden paths are refused. The previous content is kept under `.manim-director/undo/` (20 per file).
 
 **Files.** Paths are project-relative. Hidden paths are refused except `.manim-director/artifacts/`;
 the media directory is refused. Artifact URLs carry `?v=<size>-<mtime>`, and a file that changed since

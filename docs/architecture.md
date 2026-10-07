@@ -33,12 +33,13 @@ workbench   runtime (Python) ──> Manim, FFmpeg, TeX
    profile (to exact width, height, fps, renderer and format), the media source and every path, and
    turns the request into a task. Invalid input fails here, before anything runs.
 3. **Cache.** For `render` and `still`, a fingerprint of the task, the engine and runtime versions
-   and the content of the project files a render can read either returns an earlier result or joins
-   an identical running job.
+   and the content of the project's code, data and media files either returns an earlier result or
+   joins an identical running job.
 4. **Queue.** The job row is written to `state.db` with its owner, the engine instance. Each engine
    heartbeats a lease; when one disappears, any other engine fails its unfinished jobs as
    `engine_lost`. CLI commands, `serve` and `mcp` can work on one project at the same time, and
-   renders of the same scene take a lock so they run one at a time.
+   renders of the same scene take a lock so they run one at a time; a job waiting for it holds no
+   worker.
 5. **Run.** A worker takes a Python process that is already started, with Manim imported (`serve` and
    `mcp` keep one ready), writes one request line, and reads progress, log and result frames until
    the process exits. Cancelling kills its process group.
