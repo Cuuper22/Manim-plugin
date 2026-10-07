@@ -107,7 +107,10 @@ pub fn is_secret_like(path: impl AsRef<Path>) -> bool {
         || ["id_rsa", "id_ed25519", "id_ecdsa"]
             .iter()
             .any(|prefix| name.starts_with(prefix))
-        || matches!(name.as_str(), ".npmrc" | ".pypirc" | ".netrc")
+        || matches!(
+            name.as_str(),
+            ".npmrc" | ".pypirc" | ".netrc" | ".git-credentials" | ".pgpass"
+        )
 }
 
 /// The ignored-directory set for one project: the shared names plus the
@@ -201,6 +204,8 @@ mod tests {
             "id_ed25519",
             ".npmrc",
             ".netrc",
+            ".git-credentials",
+            ".pgpass",
         ] {
             assert!(is_secret_like(secret), "{secret}");
         }

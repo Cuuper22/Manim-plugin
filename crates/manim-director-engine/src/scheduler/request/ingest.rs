@@ -23,7 +23,7 @@ pub(super) fn task(
             .ok()
             .filter(|path| path.is_file())
             .ok_or_else(|| EngineError::invalid(field.clone(), "missing"))?;
-        if files::is_secret_like(&path) || in_credential_dir(&path) {
+        if files::is_secret_like(&path) || in_denied_dir(&path) {
             return Err(EngineError::invalid(field, "denied"));
         }
         let bytes = path.metadata().map_err(EngineError::internal)?.len();
@@ -65,7 +65,9 @@ pub(super) fn task(
     }))
 }
 
-fn in_credential_dir(path: &Path) -> bool {
+/// Credential stores, and kernel pseudo-files such as `/proc/<pid>/environ`,
+/// whose reported size of 0 says nothing of what they hold.
+fn in_denied_dir(path: &Path) -> bool {
     let names: Vec<_> = path
         .components()
         .filter_map(|component| match component {
@@ -73,10 +75,18 @@ fn in_credential_dir(path: &Path) -> bool {
             _ => None,
         })
         .collect();
-    names
+    ["/proc", "/sys", "/dev"]
         .iter()
-        .any(|name| matches!(*name, ".ssh" | ".gnupg" | ".aws"))
-        || names.windows(2).any(|pair| pair == [".config", "gcloud"])
+        .any(|dir| path.starts_with(dir))
+        || names.iter().any(|name| {
+            matches!(
+                *name,
+                ".ssh" | ".gnupg" | ".aws" | ".azure" | ".kube" | ".docker"
+            )
+        })
+        || names
+            .windows(2)
+            .any(|pair| matches!(pair, [".config", "gcloud" | "gh"]))
 }
 
 #[cfg(test)]
@@ -127,6 +137,14 @@ mod tests {
             }
         }
         assert!(task(&root, &spec, &params("missing.md")).is_err());
+        for denied in [
+            "/proc/1/environ",
+            "/home/a/.kube/config",
+            "/home/a/.config/gh/hosts.yml",
+        ] {
+            assert!(in_denied_dir(Path::new(denied)), "{denied}");
+        }
+        assert!(!in_denied_dir(Path::new("/home/a/.config/notes.md")));
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(host.path(), root.join("assets")).unwrap();
