@@ -8,8 +8,8 @@ use crate::{
 };
 use chrono::Utc;
 use manim_director_core::{
-    files, named_enum, path_rule_violation, relative_posix, DirectorSpec, DiscoverResult,
-    EngineError, Resource, SpecError, SPEC_FILE,
+    files, named_enum, path_rule_violation, relative_posix, scene_key, DirectorSpec,
+    DiscoverResult, EngineError, Resource, SpecError, SPEC_FILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -264,7 +264,7 @@ pub fn write_source(
                     .scenes
                     .iter()
                     .filter(|scene| scene.file == path)
-                    .map(|scene| format!("{}#{}", scene.file, scene.name))
+                    .map(|scene| scene_key(&scene.file, &scene.name))
                     .collect()
             })
             .unwrap_or_default(),

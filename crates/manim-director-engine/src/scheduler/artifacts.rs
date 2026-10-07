@@ -264,7 +264,7 @@ impl Location {
             Self::Within(dir) => path.starts_with(dir),
             Self::Exactly(expected) => path == expected,
             Self::ProjectFiles => {
-                path.starts_with(root) && !path.starts_with(root.join(".manim-director"))
+                path.starts_with(root) && !path.starts_with(root.join(files::STATE_DIR))
             }
             Self::Nowhere => false,
         }

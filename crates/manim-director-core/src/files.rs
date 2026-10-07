@@ -7,10 +7,15 @@ use std::{
 };
 use walkdir::WalkDir;
 
+/// Engine state under the project root: the job store, artifacts, locks,
+/// undo snapshots and, by default, Manim's media cache.
+pub const STATE_DIR: &str = ".manim-director";
+pub const DEFAULT_MEDIA_DIR: &str = ".manim-director/media";
+
 /// Directory names skipped at any depth by every project walk.
 pub const IGNORED_DIR_NAMES: &[&str] = &[
     ".git",
-    ".manim-director",
+    STATE_DIR,
     "__pycache__",
     ".venv",
     "venv",

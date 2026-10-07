@@ -17,7 +17,7 @@ pub use logs::NewLog;
 pub use runtime::{RuntimeIdentity, StoredRuntime};
 
 use anyhow::{anyhow, Result};
-use manim_director_core::{scene_id, JobRecord, LogRecord, OperationResult, Task};
+use manim_director_core::{files, scene_id, JobRecord, LogRecord, OperationResult, Task};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
@@ -39,7 +39,7 @@ const JOB_COLUMNS: &str = "sequence, id, operation, status, origin, owner, reque
 
 /// Where a project keeps its job store.
 pub fn state_db_path(root: &Path) -> PathBuf {
-    root.join(".manim-director/state.db")
+    root.join(files::STATE_DIR).join("state.db")
 }
 
 pub struct Store {

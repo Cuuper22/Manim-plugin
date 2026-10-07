@@ -1,13 +1,11 @@
 //! Turning project-relative paths into filesystem paths that provably stay
 //! inside the canonical project root, symlinks included.
 
-use manim_director_core::EngineError;
+use manim_director_core::{files::STATE_DIR, EngineError};
 use std::{
     fs, io,
     path::{Component, Path, PathBuf},
 };
-
-const STATE_DIR: &str = ".manim-director";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confinement {

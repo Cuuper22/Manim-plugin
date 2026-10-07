@@ -52,7 +52,7 @@ pub(crate) fn project_path(
             media_dir,
             extensions,
         } => {
-            let denied = [root.join(".manim-director"), root.join(media_dir)];
+            let denied = [root.join(files::STATE_DIR), root.join(media_dir)];
             let under_denied = denied
                 .iter()
                 .any(|dir| dir != root && resolved.starts_with(dir));

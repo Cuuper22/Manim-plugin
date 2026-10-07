@@ -241,7 +241,7 @@ fn default_output_dir() -> String {
     "output".into()
 }
 fn default_media_dir() -> String {
-    ".manim-director/media".into()
+    crate::files::DEFAULT_MEDIA_DIR.into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

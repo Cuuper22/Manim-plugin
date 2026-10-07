@@ -6,7 +6,7 @@ use crate::{
     cache, confine::write_target, BridgeConfig, BridgeEvent, BridgeOutcome, RuntimeBridge,
 };
 use manim_director_core::{
-    python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
+    files, python_sources, CancelledBy, DirectorSpec, DiscoverResult, DiscoverTask, EngineError,
     ErrorBody, Finding, InitMode, InitParams, InitResult, InitTask, Operation, OperationRequest,
     OperationResult, Task, SPEC_FILE,
 };
@@ -271,7 +271,7 @@ fn project_entries(root: &Path) -> std::io::Result<Vec<String>> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let engine_state_only = name == ".manim-director" && holds_only_state(&entry.path())?;
+        let engine_state_only = name == files::STATE_DIR && holds_only_state(&entry.path())?;
         if name != ".git" && !engine_state_only {
             entries.push(name);
         }

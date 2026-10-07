@@ -2,8 +2,8 @@
 //! workbench order and the storyboard with its code positions (§6.1.6).
 
 use manim_director_core::{
-    BeatIntent, DirectorSpec, DiscoverResult, DiscoveredScene, ErrorBody, Finding, SceneSpec,
-    SectionMark, Timestamp, Transition,
+    scene_key, BeatIntent, DirectorSpec, DiscoverResult, DiscoveredScene, ErrorBody, Finding,
+    SceneSpec, SectionMark, Timestamp, Transition,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -197,7 +197,7 @@ fn declares(entry: &SceneSpec, scene: &DiscoveredScene) -> bool {
 
 fn scene(found: &DiscoveredScene, entry: Option<&SceneSpec>, parse_failed: bool) -> Scene {
     Scene {
-        id: format!("{}#{}", found.file, found.name),
+        id: scene_key(&found.file, &found.name),
         class_name: found.name.clone(),
         file: found.file.clone(),
         span: LineSpan {

@@ -31,7 +31,6 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
 const DEFAULT_OUTPUT_MB: u64 = 2048;
 const DEFAULT_SEED: u64 = 1729;
 const MAX_DIAGNOSE_TEXT_BYTES: usize = 64 * 1024;
-const DEFAULT_MEDIA_DIR: &str = ".manim-director/media";
 
 /// A frontend that accepts tagged `OperationRequest` bodies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,7 +345,7 @@ pub(crate) fn resolve(
 }
 
 fn media_dir(spec: Option<&DirectorSpec>) -> &str {
-    spec.map_or(DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir)
+    spec.map_or(files::DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir)
 }
 
 /// Which scene a name refers to, per `director.yaml` (no disk access).

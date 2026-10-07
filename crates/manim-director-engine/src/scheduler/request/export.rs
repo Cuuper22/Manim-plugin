@@ -129,7 +129,7 @@ fn output_path(
         "output",
         &relative,
         PathUse::Output {
-            media_dir: spec.map_or(super::DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir),
+            media_dir: spec.map_or(files::DEFAULT_MEDIA_DIR, |spec| &spec.project.media_dir),
             extensions: &[params.format.as_str()],
         },
     )
@@ -172,7 +172,7 @@ fn project_entries(root: &Path, spec: &DirectorSpec) -> Vec<ExportEntry> {
         }
     }
     // An output or media dir of "." would exclude the whole project.
-    let excluded: Vec<PathBuf> = [".manim-director", &project.output_dir, &project.media_dir]
+    let excluded: Vec<PathBuf> = [files::STATE_DIR, &project.output_dir, &project.media_dir]
         .into_iter()
         .map(|dir| root.join(dir))
         .filter(|dir| dir != root)
