@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .derivation import Derivation
     from .scene import Directed, DirectedMovingCameraScene, DirectedScene, DirectedThreeDScene
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 _SCENE_EXPORTS = {
     "Derivation": "derivation",

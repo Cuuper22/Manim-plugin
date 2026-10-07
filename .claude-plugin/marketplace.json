@@ -1,8 +1,10 @@
 {
   "name": "manim-director",
-  "interface": {
-    "displayName": "Manim Director"
+  "owner": {
+    "name": "Cuuper22",
+    "url": "https://github.com/Cuuper22"
   },
+  "description": "Manim Director: author, render and inspect math-heavy Manim animations.",
   "plugins": [
     {
       "name": "manim-plugin",
@@ -11,11 +13,7 @@
         "url": "https://github.com/Cuuper22/Manim-plugin.git",
         "ref": "v2.0.0"
       },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Developer Tools"
+      "category": "development"
     }
   ]
 }

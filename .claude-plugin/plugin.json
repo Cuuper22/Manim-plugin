@@ -1,0 +1,20 @@
+{
+  "name": "manim-plugin",
+  "displayName": "Manim Director",
+  "version": "2.0.0",
+  "description": "Author math-heavy Manim animations: a math-first scene API, a local engine that renders, checks and diagnoses scenes, and a live workbench.",
+  "author": {
+    "name": "Cuuper22",
+    "url": "https://github.com/Cuuper22"
+  },
+  "homepage": "https://github.com/Cuuper22/Manim-plugin",
+  "repository": "https://github.com/Cuuper22/Manim-plugin",
+  "license": "MIT",
+  "keywords": ["manim", "animation", "mathematics", "latex", "visualization", "video"],
+  "mcpServers": {
+    "manim-director": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp_launcher.py"]
+    }
+  }
+}

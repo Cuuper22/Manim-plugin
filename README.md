@@ -1,134 +1,193 @@
 # Manim Director
 
-Manim Director is a production-grade Codex plugin and local toolchain for creating, editing, rendering, debugging, and shipping [Manim Community](https://www.manim.community/) animations.
+Manim Director is a Claude Code and Codex plugin, plus a local engine, for authoring math-heavy
+[Manim Community](https://www.manim.community/) animations. Scenes stay ordinary Manim code; a
+math-first layer, `DirectedScene`, handles stepwise derivations, symbol colors, layout and beats. The
+engine renders scenes, makes stills and contact sheets, checks rendered frames, checks the algebra and
+explains failures with `file:line` findings. Your agent drives it through MCP; you can watch and edit
+in a local workbench.
 
-It pairs a fast Rust control plane with a thin Manim-native Python runtime and an embedded React workbench. Large logs, source trees, and media stay on disk; Codex receives compact results, cursors, and resource URIs instead of context-filling payloads.
+## Write the mathematics
 
-## What ships
+```python
+from manim import *
+from manim_director_runtime import DirectedScene
 
-- A versioned `director.yaml` project format for scenes, storyboards, narration, themes, assets, profiles, variants, and deliverables.
-- Create, inspect, ingest, edit, render, preview, QA, debug, export, and workbench flows from one CLI.
-- Ten coarse MCP tools with bounded responses, paged job/log access, and no base64 media transport.
-- Atomic source edits with revision checks, snapshots, undo metadata, syntax validation, and targeted cache invalidation.
-- Source ingestion for Markdown, LaTeX, Typst, CSV, JSON, Python, notebooks, PDFs, images, SVG, audio, and video.
-- Cairo and OpenGL render orchestration, custom profiles, section renders, stills, contact sheets, transparent output, and variants.
-- Visual, mathematical, caption, artifact, and environment checks with surgical diagnostics.
-- MP4, WebM, GIF, caption-package, and reproducible project-bundle exports.
-- A responsive workbench with project/assets navigation, playback, timeline tracks, inspector, revision-safe code editing, operation intents, render queue, logs, and exports.
-- A complete generalized-Fibonacci production example and 24 feature-level BDD specifications.
+
+class GeometricSum(DirectedScene):
+    symbols = {"S": "primary", "r": "accent"}  # every S and r, in every formula
+
+    def construct(self):
+        total = self.math(r"S = 1 + r + r^2 + \cdots + r^{n-1}")
+        with self.beat("question", transition="reveal"):
+            self.title("A closed form for a geometric sum")
+            self.place(total)
+            self.caption("n terms, each r times the one before.")
+
+        with self.beat("telescope"):
+            self.caption("Shift by one power of r and subtract: the middle cancels.")
+            steps = self.derive(
+                r"S = 1 + r + r^2 + \cdots + r^{n-1}",
+                (r"rS = r + r^2 + \cdots + r^n", "multiply by r"),
+                (r"S - rS = 1 - r^n", "subtract"),
+                (r"S = \frac{1 - r^n}{1 - r}", "divide by 1 - r"),
+                replaces=total,
+            )
+
+        result = self.math(r"S = \frac{1 - r^n}{1 - r}", font_size=72)
+        with self.beat("result"):
+            self.place(result, replaces=steps.lines[-1])
+            self.tag(result)
+            self.caption("Valid for every r ≠ 1.")
+        self.highlight(result, r"r^n", box=True)
+        self.wait()
+```
+
+The contact sheet the engine makes of it:
+
+![Contact sheet of GeometricSum: six frames labelled with their time and beat](docs/images/geometric-sum-contact-sheet.png)
+
+What the scene gets from `DirectedScene`:
+
+- **Symbols keep their color.** `math()` colors every `S` and `r` from the theme (per scene, or for
+  the whole project through `direction.symbols` in `director.yaml`) and splits the TeX into atoms, so
+  `TransformMatchingTex` carries matching terms from one step to the next.
+- **Derivations are one call.** `derive()` writes the first step, then transforms each line into the
+  next with the relations aligned and an optional note beside each; `in_place=True` rewrites a single
+  line instead. `highlight()`, `term()` and `tag()` mark sub-terms and number equations.
+- **Layout is checked, not hoped for.** `place()` fits objects into named regions (`header`,
+  `content`, `left`, `right`, `top`, `bottom`, `caption`) inside the safe area. A placement that would
+  overlap something raises a `CompositionError` naming the line, before anything moves.
+- **Beats carry the story.** A beat changes the stage in one transition: objects that were not kept
+  or placed again leave, replaced ones morph, new ones enter; the title and caption stay until a
+  `chapter`. Each beat is also a Manim section and an entry in the render timeline, so contact sheets
+  and QA findings name the beat and its line.
+- **It is still Manim.** Helpers return ordinary mobjects, plain `self.play(...)` mixes in freely,
+  and the `manim` command renders the scene without the engine.
+
+Four themes ship, each checked for contrast and color-vision deficiencies: `midnight` (default),
+`paper`, `chalkboard` and `contrast`. Pick one in `director.yaml` or per scene with `theme = "paper"`.
 
 ## Install
 
-Python 3.11+ is required for the runtime. The default installer verifies the platform archive against the release's exact `SHA256SUMS` entry before extraction, then creates a prefix-local isolated Python environment; `--with-manim` installs the complete tested Manim dependency set into it. Linux binaries are static musl builds rather than artifacts tied to the release runner's glibc, and every archive includes the project license and third-party notices.
+You need Python 3.11+, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`) and, for `MathTex`, a TeX
+distribution that includes `dvisvgm` (TeX Live, MacTeX or MiKTeX).
 
 ```bash
 git clone https://github.com/Cuuper22/Manim-plugin.git
 cd Manim-plugin
 python3 scripts/install.py --with-manim
-manim-director doctor
 ```
 
-If a release binary is unavailable for the machine, the installer falls back to a local Rust/Node build when those toolchains are present. To request that path directly:
+The installer puts `manim-director` in `~/.local/bin` and Manim plus the runtime in their own virtual
+environment under `~/.local/share/manim-director/venv`. Then add the plugin to your agent.
 
-```bash
-python3 scripts/install.py --from-source --with-manim
-```
-
-Then install the Codex plugin from its repository marketplace:
+Claude Code:
 
 ```text
+/plugin marketplace add Cuuper22/Manim-plugin
+/plugin install manim-plugin@manim-director
+```
+
+Codex:
+
+```bash
 codex plugin marketplace add Cuuper22/Manim-plugin
 codex plugin add manim-plugin@manim-director
 ```
 
-Start a new Codex session after installation. The `$manim-director` skill and local MCP server will be available to direct projects without pulling whole files or render output into context.
-
-## First project
+Start a project and check the machine:
 
 ```bash
-manim-director init my-animation --name "My animation"
-cd my-animation
+manim-director init my-film && cd my-film
 manim-director doctor
-manim-director preview --scene MainScene
+```
+
+Save the scene above as `scenes/sum.py`, render it and look at it:
+
+```bash
+manim-director render --scene GeometricSum --profile preview
+manim-director contact-sheet --scene GeometricSum
+manim-director qa --scene GeometricSum
+~/.local/share/manim-director/venv/bin/manim -ql scenes/sum.py GeometricSum   # plain Manim
+```
+
+## Look before you ship
+
+A render that exits cleanly can still be wrong, so every change goes through the same loop:
+
+```bash
+manim-director render --scene GeometricSum --profile draft     # fast, low resolution
+manim-director still --scene GeometricSum                      # the last frame as PNG
+manim-director frame --scene GeometricSum --at 7.5             # any moment of the latest render
+manim-director contact-sheet --scene GeometricSum              # the whole scene at a glance
+manim-director qa --scene GeometricSum                         # blank frames, contrast, safe area
+manim-director validate-math "(1 - r^4)/(1 - r)" "1 + r + r^2 + r^3" --range r=-0.9:0.9
+```
+
+A failed render already carries its diagnosis; `manim-director diagnose --job <id>` repeats it, and
+`diagnose --text` explains a pasted traceback or TeX log. Renders and stills are cached on the
+content of the project files they can read, so an unchanged scene comes back at once.
+
+## The workbench
+
+```bash
 manim-director open
 ```
 
-Try the included production example:
+`open` serves the workbench on `127.0.0.1:4177` and opens it already signed in. It lists the scenes
+with their storyboard beats, plays the latest render of the selected scene over a beat timeline, and
+shows the code editor next to the QA and doctor findings; a finding jumps to its file and line.
+Buttons run a preview, a render at any profile, a still, the frame at the playhead, a contact sheet,
+QA and exports. Jobs started from the CLI or by your agent appear live.
 
-```bash
-manim-director --project examples/generalized-fibonacci inspect --deep
-manim-director --project examples/generalized-fibonacci render \
-  --scene SequenceData --profile preview
-manim-director --project examples/generalized-fibonacci qa \
-  --scene SequenceData
-```
+## With Claude Code and Codex
 
-The same source remains standard Manim code:
+The plugin adds the `manim-director` skill and an MCP server with ten tools: `init`, `inspect`,
+`doctor`, `render`, `still`, `contact_sheet`, `qa`, `validate_math`, `submit` (the other operations:
+`frame`, `diagnose`, `captions`, `ingest`, `export`) and `job_status`. A job tool waits for its job
+(20 seconds by default, up to 50), then answers with a bounded summary and the absolute paths of the
+images and videos it made. Logs and media stay on disk; the agent opens the PNGs it needs.
 
-```bash
-cd examples/generalized-fibonacci
-manim -pql scenes.py GeneralizedFibonacci
-```
+Ask for what you want to see:
 
-## Fast without being thin
+> Animate the derivation of the quadratic formula by completing the square, then show me a contact sheet.
+>
+> Why does `CompanionMatrix` fail to render?
 
-| Layer | Responsibility | Why it stays lean |
-|---|---|---|
-| Rust engine | CLI, jobs, SQLite state, cache, REST/SSE, MCP, process control, artifact streaming | One stripped binary; bounded queues, output, logs, and memory; content-addressed invalidation |
-| Python runtime | Manim discovery/rendering, media, math, assets, captions, QA, export | Zero mandatory dependencies; expensive imports occur only for the requested operation |
-| React workbench | Visual authoring and live job control | Compiled once and embedded in the Rust binary; no separate production server |
+In Claude Code the server starts through a small launcher. If the engine is not installed yet, it
+offers a single `setup` tool that prints the install command. Codex runs `manim-director mcp`
+directly, so install the engine first and make sure it is on `PATH`.
 
-On Unix, the default worker address-space ceiling is 8 GiB and can be changed with `MANIM_DIRECTOR_MEMORY_MB`; Windows deployments should apply the equivalent Job Object or container limit. Concurrency, queue depth, timeouts, request bodies, log pages, artifact sizes, and source summaries are independently bounded. Cancellation terminates the complete Manim/FFmpeg process tree.
+## Templates and the example
 
-## Project file
+`manim-director init <dir> --template <name>` starts from a finished scene: `explainer` (geometric
+series, picture then algebra), `derivation` (the quadratic formula), `geometry` (Pythagoras by
+rearrangement), `graph` (secant to tangent) or `vertical_short` (a 9:16 Gauss sum).
+`--scene-template <name>` adds one to an existing project.
 
-```yaml
-version: 1
-project:
-  name: recurrence-film
-engine:
-  source: scenes.py
-  main_scene: MainScene
-render:
-  profile: preview
-  renderer: cairo
-storyboard:
-  - id: hook
-    scene: MainScene
-    duration: 4.0
-    intent: Establish the visual question
-```
+[`examples/generalized-fibonacci`](examples/generalized-fibonacci) is a five-scene production of
+`x[n+2] = p x[n+1] + q x[n]`: data charts from a CSV, the companion matrix with a camera close-up,
+characteristic roots and a 3D orbit, with captions and narration timed to the beats.
 
-Built-in profiles remain low-cost unless explicitly overridden; custom profiles can set resolution, frame rate, renderer, format, and alpha. See [the user guide](docs/user-guide.md) and [project specification](skills/manim-director/references/project-spec.md) for the complete schema.
+## Documentation
+
+- [Guide](docs/guide.md): projects, authoring with `DirectedScene`, the verify loop, the workbench.
+- [Reference](docs/reference.md): CLI, `director.yaml`, MCP tools, HTTP API, bridge protocol, errors.
+- [Security](docs/security.md): what the engine guards and what it cannot.
+- [Architecture](docs/architecture.md): engine, runtime and workbench, and how a job flows.
 
 ## Development
 
 ```bash
-make check
-make build
-make dev
+make check                                         # every check CI runs
+make dev PROJECT=examples/generalized-fibonacci    # engine plus the workbench with hot reload
+python3 scripts/install.py --from-source --with-manim
 ```
 
-The focused checks are:
+`make check` needs Rust, Node 22 and a Python with `runtime[full,test]` installed (`PYTHON=...`).
 
-```bash
-cargo test --workspace --locked
-python3 -m pytest runtime/tests -q
-npm --prefix workbench ci
-npm --prefix workbench run build
-```
-
-Useful references:
-
-- [Architecture](docs/architecture.md)
-- [CLI, REST/SSE, JSONL, MCP, and resources](docs/protocol.md)
-- [Performance and context budgets](docs/performance.md)
-- [Security model](docs/security.md)
-- [Plugin installation](docs/plugin/installing.md)
-- [BDD feature map](features/README.md)
-
-## Security boundary
-
-Manim scenes are executable Python. Director confines its own paths, validates requests and artifacts, bounds worker resources, and avoids shell command construction, but it does not pretend arbitrary Python is a sandbox. Render unreviewed projects inside a container or VM without host secrets or network access; the exact operational guidance is in [docs/security.md](docs/security.md).
+Scene files are executable Python: render projects you trust, and untrusted ones in a container or VM.
+See [docs/security.md](docs/security.md).
 
 MIT © Cuuper22

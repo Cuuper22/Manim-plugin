@@ -1,13 +1,13 @@
 interface:
   display_name: "Manim Director"
-  short_description: "Direct, render, and inspect Manim animations"
+  short_description: "Author and verify math-heavy Manim animations"
   brand_color: "#6C63FF"
-  default_prompt: "Use $manim-director to create and visually verify a polished Manim animation from my idea."
+  default_prompt: "Use $manim-director to animate a derivation, then show me a contact sheet of the render."
 policy:
   allow_implicit_invocation: true
 dependencies:
   tools:
     - type: "mcp"
       value: "manim-director"
-      description: "Fast local Manim project, render, QA, and workbench engine"
+      description: "Local Manim Director engine: renders, stills, contact sheets, QA and math checks"
       transport: "stdio"

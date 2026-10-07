@@ -4,16 +4,20 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import tomllib
+from pathlib import Path
 
+from install import sha256_file
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+PLUGIN_NAME = "manim-plugin"
+REPOSITORY = "https://github.com/Cuuper22/Manim-plugin"
+PLUGIN_MANIFESTS = (".codex-plugin/plugin.json", ".claude-plugin/plugin.json")
+MARKETPLACES = (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json")
 RELEASE_TARGETS = {
     "x86_64-unknown-linux-musl": "tar.gz",
     "x86_64-apple-darwin": "tar.gz",
@@ -31,25 +35,32 @@ def _toml(path: Path) -> dict[str, object]:
         return tomllib.load(handle)
 
 
+def _assigned_version(path: Path, name: str) -> str:
+    match = re.search(
+        rf'^{name}\s*=\s*["\']([^"\']+)["\']\s*$', path.read_text(encoding="utf-8"), re.MULTILINE
+    )
+    if not match:
+        raise ValueError(f"{name} is missing from {path}")
+    return match.group(1)
+
+
 def component_versions(root: Path = ROOT) -> dict[str, str]:
-    plugin = _json(root / ".codex-plugin" / "plugin.json")
+    codex_plugin, claude_plugin = (_json(root / manifest) for manifest in PLUGIN_MANIFESTS)
     cargo = _toml(root / "Cargo.toml")
     cargo_lock = _toml(root / "Cargo.lock")
     runtime = _toml(root / "runtime" / "pyproject.toml")
     workbench = _json(root / "workbench" / "package.json")
     workbench_lock = _json(root / "workbench" / "package-lock.json")
-    runtime_init = (root / "runtime" / "src" / "manim_director_runtime" / "__init__.py").read_text(
-        encoding="utf-8"
-    )
-    runtime_match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']\s*$', runtime_init, re.MULTILINE)
-    if not runtime_match:
-        raise ValueError("runtime __version__ is missing")
     try:
         versions = {
-            "plugin": str(plugin["version"]),
+            "Codex plugin": str(codex_plugin["version"]),
+            "Claude Code plugin": str(claude_plugin["version"]),
+            "MCP launcher": _assigned_version(root / "scripts" / "mcp_launcher.py", "VERSION"),
             "cargo workspace": str(cargo["workspace"]["package"]["version"]),  # type: ignore[index]
             "Python runtime": str(runtime["project"]["version"]),  # type: ignore[index]
-            "Python runtime __version__": runtime_match.group(1),
+            "Python runtime __version__": _assigned_version(
+                root / "runtime" / "src" / "manim_director_runtime" / "__init__.py", "__version__"
+            ),
             "workbench": str(workbench["version"]),
             "workbench lock": str(workbench_lock["version"]),
             "workbench lock root": str(workbench_lock["packages"][""]["version"]),  # type: ignore[index]
@@ -76,28 +87,32 @@ def validate_versions(root: Path = ROOT, tag: str | None = None) -> str:
     if tag is not None and tag.strip() != expected_tag:
         raise ValueError(f"release tag {tag!r} must exactly equal {expected_tag!r}")
 
-    marketplace = _json(root / ".agents" / "plugins" / "marketplace.json")
-    try:
-        plugin_entries = marketplace["plugins"]
-        entries = [item for item in plugin_entries if item.get("name") == "manim-plugin"]  # type: ignore[union-attr]
-        if len(entries) != 1:
-            raise ValueError("marketplace must contain exactly one manim-plugin entry")
-        entry = entries[0]
-        marketplace_ref = str(entry["source"]["ref"])
-    except (KeyError, TypeError) as exc:
-        raise ValueError("marketplace entry for manim-plugin is missing its source ref") from exc
-    expected_ref = f"v{version}"
-    if marketplace_ref != expected_ref:
-        raise ValueError(f"marketplace ref {marketplace_ref!r} must equal immutable release ref {expected_ref!r}")
+    for manifest in PLUGIN_MANIFESTS:
+        if _json(root / manifest).get("name") != PLUGIN_NAME:
+            raise ValueError(f"{manifest} must name the plugin {PLUGIN_NAME!r}")
+    for marketplace in MARKETPLACES:
+        ref = marketplace_ref(root, marketplace)
+        if ref != expected_tag:
+            raise ValueError(
+                f"{marketplace} ref {ref!r} must equal immutable release ref {expected_tag!r}"
+            )
+    notices = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    if f"{REPOSITORY}/tree/{expected_tag}\n" not in notices:
+        raise ValueError(f"THIRD_PARTY_NOTICES.md must link the {expected_tag} source tree")
     return version
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def marketplace_ref(root: Path, marketplace: str) -> str:
+    try:
+        plugins = _json(root / marketplace)["plugins"]
+        entries = [entry for entry in plugins if entry.get("name") == PLUGIN_NAME]  # type: ignore[union-attr]
+        if len(entries) != 1:
+            raise ValueError(f"{marketplace} must contain exactly one {PLUGIN_NAME} entry")
+        return str(entries[0]["source"]["ref"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"{marketplace} entry for {PLUGIN_NAME} is missing its source ref"
+        ) from exc
 
 
 def write_checksums(directory: Path, output: Path) -> list[Path]:
@@ -111,12 +126,15 @@ def write_checksums(directory: Path, output: Path) -> list[Path]:
     present_names = {
         path.name
         for path in directory.iterdir()
-        if path.name.startswith("manim-director-v") and (path.name.endswith(".tar.gz") or path.name.endswith(".zip"))
+        if path.name.startswith("manim-director-v")
+        and (path.name.endswith(".tar.gz") or path.name.endswith(".zip"))
     }
     if present_names != expected_names:
         missing = ", ".join(sorted(expected_names - present_names)) or "none"
         unexpected = ", ".join(sorted(present_names - expected_names)) or "none"
-        raise ValueError(f"release archive set is incomplete (missing: {missing}; unexpected: {unexpected})")
+        raise ValueError(
+            f"release archive set is incomplete (missing: {missing}; unexpected: {unexpected})"
+        )
     assets = sorted(directory / name for name in expected_names)
     invalid = [path.name for path in assets if not path.is_file() or path.is_symlink()]
     if invalid:
@@ -132,7 +150,9 @@ def write_checksums(directory: Path, output: Path) -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    versions = subparsers.add_parser("versions", help="Assert every release component has one version.")
+    versions = subparsers.add_parser(
+        "versions", help="Assert every release component has one version."
+    )
     versions.add_argument("--tag", help="Release tag, for example v1.0.0.")
     checksums = subparsers.add_parser("checksums", help="Write SHA256SUMS for release archives.")
     checksums.add_argument("--directory", type=Path, default=Path("dist"))

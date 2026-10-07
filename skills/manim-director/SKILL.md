@@ -1,71 +1,151 @@
 ---
 name: manim-director
-description: Create, edit, explain, render, visually inspect, debug, migrate, and export Manim Community or ManimGL animation projects. Use when the request concerns Manim source, mathematical animation direction, render failures, visual QA, narration timing, or production video delivery.
+description: Author, render, check and debug Manim Community animations, especially math-heavy ones (derivations, proofs, graphs, geometry, data), with the local Manim Director engine and its DirectedScene API. Use for any request to create or change a Manim scene, animate mathematics, render or preview a scene, look at frames or a contact sheet, fix a failing or badly laid out render, check the algebra in an animation, or export video and GIFs.
 metadata:
-  short-description: Direct production Manim animations
+  short-description: Author and verify math-heavy Manim animations
 ---
 
 # Manim Director
 
-Use the local `manim-director` engine to turn animation intent into editable source and inspected media. Preserve user-authored code, isolate changes to the requested scenes, and prefer semantic edits over wholesale rewrites.
+You write ordinary Manim Community scenes on top of `DirectedScene` (a math-first layer: beats,
+layout regions, derivations, theme-aware symbol colors) and use the local engine's MCP tools to
+render them, look at the frames, check them and fix them. Edit files with your own file tools; the
+engine renders, inspects and checks.
 
-## Route the request
+## Start from the project's state
 
-Read only the references needed for the current mode:
+1. Call `inspect`. It lists the scenes the engine found (with beat counts), profiles, the theme,
+   the latest render, still and contact sheet per scene, and recent jobs.
+   - `director.yaml is missing`: call `init` with a `template` (`explainer`, `derivation`,
+     `geometry`, `graph`, `vertical_short`), or ask where the project should live. To add a scene to
+     an existing project, call `init` with only `scene_template`.
+   - No MCP tools at all, or only a `setup` tool: the engine is not installed. In Claude Code,
+     `setup` prints the exact command. Otherwise give the user
+     `python3 <this skill's directory>/../../scripts/install.py --with-manim` (Python 3.11+; it
+     also needs FFmpeg and TeX with dvisvgm) and ask them to restart the session afterwards.
+2. Call `doctor` before the first render on an unfamiliar machine, and after any
+   `runtime_unavailable` or `dependency_missing` error. It says whether the project is ready to
+   render and what is missing.
 
-- Create or substantially redesign: [project and animation specification](references/project-spec.md), then [authoring and direction](references/authoring.md).
-- Edit an existing project: [authoring and direction](references/authoring.md); add [project specification](references/project-spec.md) only when project metadata or output profiles change.
-- Render, preview, recover, or optimize: [rendering and debugging](references/render-debug.md) and the relevant entries in [command and tool contract](references/commands.md).
-- Diagnose a visual or runtime failure: [rendering and debugging](references/render-debug.md); load [visual QA](references/qa.md) for visible defects.
-- Explain code or a project: inspect its inventory and selected scene spans, then use the explanation rules in [authoring and direction](references/authoring.md). Do not render unless visual behavior is part of the question.
-- Migrate between Manim CE versions or from ManimGL: [compatibility and migration](references/compatibility.md), plus [visual QA](references/qa.md) for comparison.
-- Accept or ship a finished project: [visual QA](references/qa.md) and [BDD acceptance](references/bdd-acceptance.md).
+The MCP server serves one project: the one at or above the directory the session started in. For
+another project, use the CLI with `--project`.
 
-## Reuse the bundled direction assets
+## Plan the beats before writing code
 
-For a matching new project, adapt one recipe from `../../assets/recipes/` instead of recreating its beat structure. The copy-ready explainer in `../../assets/templates/explainer/` is a complete runnable baseline, and `../../assets/themes/presets.json` contains the built-in portable theme tokens. Load only the selected recipe or template; do not add all examples to the working project.
+For each beat decide: its id, the question in the viewer's mind, the one takeaway, the object the
+viewer tracks, what stays on stage from the previous beat (`keep=`), and the transition
+(`continue`, `contrast`, `reveal`, `chapter`). One idea per beat; if a takeaway needs "and", split
+it. Pick one visual spine (an object, picture or expression the viewer keeps recognizing) and give
+each color one meaning for the whole film. Record the beats in `director.yaml` under `storyboard`
+with ids equal to the beat ids in the scene. Infer ordinary aesthetic choices; ask one focused
+question only when two readings of the request would produce different mathematics.
 
-## Work from state, not guesses
+## Write the scene
 
-Start with `project_inspect` for an existing project or `project_init` for a new one. Run `doctor` when rendering is requested, the environment is unknown, or a dependency failure is plausible. Keep the animation spec, source, assets, narration, captions, and output profiles in the project; do not encode persistent decisions only in chat.
+```python
+from manim import *
+from manim_director_runtime import DirectedScene
 
-For a new animation, establish the objective, audience, rigor level, target duration, output profile, and any supplied mathematical/data sources. Infer ordinary aesthetic defaults. Ask one focused question only if competing interpretations would produce materially different content.
 
-Before writing scene code, choose one visual spine: the object, spatial metaphor, or transformation the viewer will keep recognizing across the film. Plan each beat as a change in the viewer's mental state, not as a list of facts to display. Every beat must name the audience question it answers, its single takeaway, one primary focus, retained context, and the semantic reason for its transition. If a beat needs several unrelated text blocks, split it or replace the prose with a visual operation.
+class CompletingTheSquare(DirectedScene):
+    symbols = {"a": "primary", "b": "secondary", "c": "accent"}
 
-Use `DirectedScene`, `DesignSystem`, and `Beat` for substantial new work. Treat header, content (or its left/right split), and caption lanes as allocated space; do not position independent elements into the same lane and hope z-order hides the conflict. Let `place`/`layout` reflow content or let `beat` replace prior occupants rather than shrinking text below its role minimum. Use `focus` to subordinate retained context. Keep one hero, a small amount of context, and one consistent meaning per color and movement throughout a chapter.
+    def construct(self):
+        claim = self.math(r"ax^2 + bx + c = 0")
+        with self.beat("claim", transition="reveal"):
+            self.title("Where the quadratic formula comes from")
+            self.place(claim)
+            self.caption("Any quadratic with a ≠ 0.")
 
-Use `project_apply` with `ingest` paths for supplied notes, data, code, documents, or media so the project receives bounded summaries and a source manifest without placing full source contents in tool output.
+        with self.beat("complete"):
+            self.caption("Add exactly what makes the left side a square.")
+            steps = self.derive(
+                r"ax^2 + bx + c = 0",
+                (r"x^2 + \frac{b}{a}x = -\frac{c}{a}", "divide by a"),
+                (r"\left(x + \frac{b}{2a}\right)^2 = \frac{b^2 - 4ac}{4a^2}", "complete the square"),
+                replaces=claim,
+            )
+        self.highlight(steps.lines[-1], r"b^2 - 4ac", box=True)
+        self.wait()
+```
 
-## Produce and verify the actual result
+Rules that keep scenes correct and readable:
 
-For creation, editing, migration, or repair:
+- Formulas go through `self.math` (symbol colors, atoms that `TransformMatchingTex` can match);
+  algebra goes through `self.derive`, one justified step per line, with a short note when the step
+  is not obvious. Put symbol colors in `symbols` or `director.yaml` `direction.symbols`, never
+  per formula.
+- Position top-level content with `self.place(..., region=...)` and the `title`/`caption` lanes,
+  not `move_to`/`shift` chains. Use `left`/`right` or `top`/`bottom` for a picture beside its
+  algebra. Morph with `replaces=` rather than fading one expression out and another in.
+- Use plain Manim for diagrams, graphs and updaters, colored with `self.theme.primary` and the other
+  tokens. Objects you `self.play` in are on stage and leave at the next beat unless kept.
+- A `CompositionError` is the layout refusing an overlap or an unreadable scale. Do what its message
+  says (place together, use another region, let the next beat retire the object, shorten); never
+  work around it with manual offsets.
+- Keep mathematics, data and the user's claims exactly as given. Distinguish proof, numerical
+  evidence and intuition in captions.
 
-1. Write or patch the smallest coherent storyboard/spec/source scope.
-2. Run a targeted preview for the changed scene or section.
-3. Inspect representative frames and QA findings. A successful Python exit is not visual verification.
-4. Repair concrete defects and rerender only invalidated content. Stop after two automatic repair passes unless the user asks to continue.
-5. Render the requested production outputs and export source plus reproducibility metadata.
+The full API, transition semantics, regions and pitfalls are in
+[references/authoring.md](references/authoring.md). `director.yaml` keys are in
+[references/project.md](references/project.md).
 
-Never call an animation complete without a readable requested artifact and visual inspection of at least its opening state, primary transition or content beat, and final state. For narrated work, also inspect one captioned frame and timing alignment. Report unresolved defects with scene, timestamp, evidence, and consequence.
+## Verify every change by looking at it
 
-## Keep context lean
+1. `render` the changed scene at `profile: "draft"`. Render only what changed.
+2. `contact_sheet` for the whole scene; `still` (last frame) or `submit` with `operation: "frame"`
+   and `at_seconds` for one moment. Open the PNG paths from the answer with your image viewer and
+   look: overlaps, clipped or tiny formulas, wrong colors, empty frames, a confusing order.
+3. `qa`. Its findings name the time, the beat and the line where that beat starts.
+4. `validate_math` on the algebra behind each derivation (Python syntax, `^` allowed, each side of
+   an equation as its own expression; `ranges` for domain assumptions).
+5. Fix and repeat. Stop after two or three passes that do not converge and report what remains.
+6. Render the requested profile (`production` by default for delivery) and `export` if a file is
+   wanted.
 
-The MCP server intentionally exposes at most ten coarse tools. Prefer those tools over streaming shell logs or reading media directly.
+A successful render is not a correct animation. Never call work done without having looked at the
+opening, the main transformation and the final frame of each changed scene.
+[references/verify.md](references/verify.md) covers what each check does and does not catch, and
+the acceptance checklist.
 
-- Request inventories, spans, diagnostics, thumbnails, contact sheets, or artifact paths—not entire projects, full logs, base64 media, or rendered frame sequences.
-- Poll jobs with the returned cursor. Reuse the newest cursor and a bounded event limit; do not replay prior pages.
-- Use `project_apply` with an expected revision for engine-managed source/spec edits, then target its `affected_scenes` with `preview`. Prefer a line edit or `director.yaml` merge patch over full content; do not resend or reread unchanged source.
-- Inspect only the implicated scene, section, source range, or time range.
-- Open local images through the host image viewer when visual judgment is required; do not load image bytes into text context.
-- Start the workbench with `manim-director serve --port 4177` when the user benefits from timeline, object selection, side-by-side comparison, or live project navigation.
+## Tools
 
-## Preserve correctness and authorship
+| Tool | Use |
+|---|---|
+| `inspect` | Project summary; call first. |
+| `init` | New project from a template, or `scene_template` to add a scene. |
+| `doctor` | Environment check. |
+| `render` | `scene`, `profile`, `sections`, `fresh`. |
+| `still` | Last frame as PNG; cheapest layout check. |
+| `contact_sheet` | Evenly spaced frames of the latest render (`count`, `columns`). |
+| `qa` | Blank frames, low contrast, safe-area violations. |
+| `validate_math` | Are consecutive steps equal (SymPy plus sampling)? |
+| `submit` | `frame`, `diagnose`, `captions`, `ingest`, `export` (`operation` plus its parameters). |
+| `job_status` | Follow a job past the tool's wait, page its log, or `cancel` it. |
 
-Do not silently change mathematics, data, units, stated assumptions, narration meaning, or supplied visual identity to make a render easier. Distinguish exact results, numerical approximations, intuition, and conjecture. Validate important values and transformations when the engine can do so.
+Job tools wait up to `wait_seconds` (20 by default, at most 50). A job still running comes back with
+its id: call `job_status` with that `job_id` instead of submitting again. An identical render
+returns the cached result at once; `fresh: true` forces a new one. Parameters, sources and error
+codes are in [references/tools.md](references/tools.md).
 
-Do not mix Manim CE and ManimGL APIs in one source tree. Detect the project flavor before editing. Preserve manual code outside the selected scope and keep generated components modular enough for direct human editing.
+## When a render fails
+
+The failed job's `error` holds `findings` with a code, a message, a hint and `file:line`. Fix that
+line first and rerender; downstream errors usually disappear with the first one. For a traceback or
+TeX log the user pastes, `submit` `{"operation": "diagnose", "text": "…"}`. When the cause is the
+environment (`runtime_unavailable`, `dependency_missing`, or a `latex_missing` or `font_missing`
+finding), run `doctor` and tell the user what to install rather than changing the scene.
+
+## Be honest about limits
+
+- `qa` measures pixels: it cannot see overlapping formulas inside the content area, unreadable
+  notation or wrong mathematics. Your own look at the frames is the real check.
+- `validate_math` checks expression equality, not LaTeX, equations, inequalities or limits.
+- There is no voice-over or speech synthesis; captions are validated and retimed, not written.
+- Manim Community 0.21 only (not ManimGL). OpenGL rendering needs a display; Cairo is the default.
 
 ## Handoff
 
-Lead with what now works. Include output paths or links, the scenes/sections changed, the inspected evidence, and any unresolved blocker. Include setup commands only when needed to run the delivered project. Avoid narrating routine tool calls or dumping validation logs.
+Lead with what now works: the scenes changed, the output paths, the frames you inspected and what
+the checks said. Then anything unresolved, with the scene, time and evidence. Skip routine tool
+narration and long logs.
