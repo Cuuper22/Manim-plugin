@@ -71,12 +71,6 @@ pub fn parse_request(frontend: Frontend, body: Value) -> Result<OperationRequest
     OperationRequest::from_json(body)
 }
 
-/// Parses the params of an operation the caller already chose (a dedicated
-/// route or tool).
-pub fn parse_params(operation: Operation, params: Value) -> Result<OperationRequest, EngineError> {
-    OperationRequest::from_params(operation, params)
-}
-
 pub(crate) struct ProjectContext<'a> {
     /// Canonical project root.
     pub root: &'a Path,

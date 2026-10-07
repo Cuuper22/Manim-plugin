@@ -17,7 +17,7 @@ pub use artifacts::probe_media;
 pub use direct::init_project;
 pub use latest::{latest, latest_render, Latest};
 pub use prune::{prune, PrunePolicy, Pruned};
-pub use request::{cli_project_path, parse_params, parse_request, Frontend};
+pub use request::{cli_project_path, parse_request, Frontend};
 
 use crate::{
     cache, now_millis, state_db_path, BridgeConfig, EngineMode, NewJob, PrewarmPolicy,

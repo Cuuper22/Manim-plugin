@@ -2,7 +2,7 @@
 //! engine's `ErrorBody`; a job that fails or is cancelled is one too.
 
 use super::bound::{bound, size};
-use crate::{init_project, inspect, parse_params, parse_request, Frontend, Scheduler};
+use crate::{init_project, inspect, parse_request, Frontend, Scheduler};
 use manim_director_core::{
     parse_value, summary as verdicts, Artifact, CursorPage, EngineError, JobOrigin, JobRecord,
     JobStatus, JobSummary, LogRecord, NoParams, Operation, OperationRequest, OperationResult,
@@ -37,7 +37,7 @@ pub(super) async fn call(scheduler: &Scheduler, name: &str, arguments: Value) ->
         tool => match tool.parse::<Operation>() {
             Ok(operation) => {
                 submit(scheduler, arguments, |params| {
-                    parse_params(operation, params)
+                    OperationRequest::from_params(operation, params)
                 })
                 .await
             }
@@ -52,7 +52,8 @@ pub(super) async fn call(scheduler: &Scheduler, name: &str, arguments: Value) ->
 }
 
 async fn init(scheduler: &Scheduler, arguments: Value) -> Result<Value, EngineError> {
-    let OperationRequest::Init(params) = parse_params(Operation::Init, arguments)? else {
+    let OperationRequest::Init(params) = OperationRequest::from_params(Operation::Init, arguments)?
+    else {
         return Err(EngineError::internal("init parsed as another operation"));
     };
     let result = init_project(scheduler.bridge_config(), scheduler.root(), params).await?;
