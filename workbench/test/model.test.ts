@@ -182,11 +182,25 @@ test("a finding repeated across frames is one card listing its moments", () => {
 });
 
 test("a passing QA is reported only while it is the scene's newest and found nothing", () => {
-  const qa = job({ id: "qa1", sequence: 3, operation: "qa", status: "succeeded", request: { operation: "qa", source: { job_id: "j1" } }, scene_id: scene.id });
-  assert.equal(cleanQa([qa], [], scene.id)?.id, "qa1");
-  assert.equal(cleanQa([qa], fromWorkspace([qaFinding("a", 1)]), scene.id), null);
-  assert.equal(cleanQa([{ ...qa, status: "running" }], [], scene.id), null);
-  assert.equal(cleanQa([qa], [], "scenes.py#Other"), null);
+  const qa = job({
+    id: "qa1",
+    sequence: 3,
+    operation: "qa",
+    status: "succeeded",
+    request: { operation: "qa", source: { job_id: "j1" } },
+    source_job_id: "j1",
+    scene_id: scene.id,
+  });
+  assert.deepEqual(cleanQa([qa], [], scene.id, rendered), { job: qa, outdated: false });
+  assert.equal(cleanQa([qa], fromWorkspace([qaFinding("a", 1)]), scene.id, rendered), null);
+  assert.equal(cleanQa([{ ...qa, status: "running" }], [], scene.id, rendered), null);
+  assert.equal(cleanQa([qa], [], "scenes.py#Other", rendered), null);
+
+  // It passed on a render that a newer one replaced, or whose scene changed since.
+  const rerendered = { ...rendered, video: { ...rendered.video!, job_id: "j2" } };
+  assert.equal(cleanQa([qa], [], scene.id, rerendered)?.outdated, true);
+  assert.equal(cleanQa([qa], [], scene.id, { ...rendered, video: { ...rendered.video!, outdated: true } })?.outdated, true);
+  assert.equal(cleanQa([qa], [], scene.id, null)?.outdated, true);
 });
 
 test("the stage reports its scene's newest job while active or failed", () => {

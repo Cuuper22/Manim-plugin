@@ -1,4 +1,4 @@
-import type { Finding, JobId, JobSummary, OpsFinding, SceneId, Severity, SourceLocation } from "../api/types.ts";
+import type { Finding, JobId, JobSummary, OpsFinding, SceneId, SceneLatest, Severity, SourceLocation } from "../api/types.ts";
 
 /** A workspace finding, or one from a `diagnose` job's result. */
 export interface ShownFinding extends OpsFinding {
@@ -90,14 +90,26 @@ function cards(findings: readonly ShownFinding[]): FindingCard[] {
   return merged;
 }
 
+export interface QaPass {
+  job: JobSummary;
+  /** It checked media that is no longer the scene's newest, or whose scene file changed since (as QA findings). */
+  outdated: boolean;
+}
+
 /**
  * The selected scene's newest QA when it passed: it found nothing, so there
  * is no finding to show for it. `null` while it runs, failed or found issues.
  */
-export function cleanQa(jobs: readonly JobSummary[], findings: readonly ShownFinding[], sceneId: SceneId): JobSummary | null {
+export function cleanQa(
+  jobs: readonly JobSummary[],
+  findings: readonly ShownFinding[],
+  sceneId: SceneId,
+  latest: SceneLatest | null,
+): QaPass | null {
   const newest = jobs.find((job) => job.operation === "qa" && job.scene_id === sceneId);
-  if (newest?.status !== "succeeded") return null;
-  return findings.some((finding) => finding.job_id === newest.id) ? null : newest;
+  if (newest?.status !== "succeeded" || findings.some((finding) => finding.job_id === newest.id)) return null;
+  const checked = [latest?.video, latest?.still].find((media) => media && media.job_id === newest.source_job_id);
+  return { job: newest, outdated: !checked || checked.outdated };
 }
 
 /** Where the editor can jump: project-relative files only; host paths stay text. */
