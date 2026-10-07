@@ -107,8 +107,8 @@ replaces=None, min_scale=0.5) -> Derivation`
 
 `self.term(eq, r"\frac{b}{2a}", occurrence=None)` returns the glyphs of a sub-term for your own
 animations (`self.play(Indicate(self.term(eq, "x^2")))`). `self.highlight(eq, *terms,
-color="accent", box=False)` recolors sub-terms (or all of `eq`) and with `box=True` adds a soft
-backing box. `self.tag(eq, label=None)` numbers the equation at the right edge of `content`
+color="accent", box=False)` recolors sub-terms (or all of `eq`) and with `box=True` backs each
+occurrence with a soft box that moves and leaves with `eq` (`.boxes` on the result). `self.tag(eq, label=None)` numbers the equation at the right edge of `content`
 (`(1)`, `(2)`, ...); it raises if `eq` is too wide to leave room. `self.focus(*mobjects)` and
 `self.unfocus()` dim and restore everything else.
 

@@ -431,6 +431,40 @@ def test_math_colors_symbols_and_splits_into_matchable_atoms(render: Render) -> 
 
 
 @requires_latex
+def test_highlight_boxes_each_occurrence_and_moves_and_leaves_with_its_equation(
+    render: Render,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    class Boxes(DirectedScene):
+        def construct(self):
+            with self.beat("one"):
+                eq = self.math(r"x^2 + 2x + 1")
+                self.place(eq)
+                marked = self.highlight(eq, "x", box=True)
+                self.place(eq, region=Region.LEFT)  # glides in the same beat
+            boxes = marked.boxes
+            seen["count"] = len(boxes)
+            others = [g for g in eq.family_members_with_points() if g not in marked]
+            seen["clear"] = not any(
+                b.get_left()[0] < g.get_x() < b.get_right()[0] for b in boxes for g in others
+            )
+            seen["on glyphs"] = all(
+                np.allclose(b.get_center(), VGroup(g).get_center())
+                for b, g in zip(boxes, marked, strict=True)
+            )
+            with self.beat("two", keep=[eq]):
+                self.place(Square(), region=Region.RIGHT)
+            seen["kept"] = boxes in self.mobjects
+            with self.beat("three"):
+                self.place(Circle())
+            seen["gone"] = boxes not in self.mobjects
+
+    render(Boxes)
+    assert seen == {"count": 2, "clear": True, "on glyphs": True, "kept": True, "gone": True}
+
+
+@requires_latex
 def test_colored_operators_keep_their_typesetting_and_alignment(render: Render) -> None:
     seen: dict[str, Any] = {}
 

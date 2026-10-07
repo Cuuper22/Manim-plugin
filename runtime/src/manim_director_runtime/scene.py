@@ -72,7 +72,7 @@ from .staging import (
     split_by_stage,
     within,
 )
-from .terms import term_glyphs
+from .terms import term_groups
 from .texscan import atoms, colorize
 from .themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme, theme
 
@@ -427,12 +427,17 @@ class Directed:
     def term(self, mobject: Mobject, tex: str, *, occurrence: int | None = None) -> VGroup:
         """The glyphs of `tex` inside a MathTex or Tex, e.g. `self.term(eq, r"\\frac{b}{2a}")`."""
 
+        return VGroup(
+            *(glyph for group in self._terms(mobject, tex, occurrence) for glyph in group)
+        )
+
+    def _terms(self, mobject: Mobject, tex: str, occurrence: int | None = None) -> list[VGroup]:
         if not isinstance(mobject, SingleStringMathTex):
             raise CompositionError(
                 f"term() looks inside MathTex or Tex; {describe(mobject)} is neither."
             )
         source = getattr(mobject, "authored_tex", mobject.tex_string)
-        return term_glyphs(mobject, source, tex, occurrence)
+        return term_groups(mobject, source, tex, occurrence)
 
     def highlight(
         self,
@@ -442,33 +447,31 @@ class Directed:
         box: bool = False,
         run_time: float | None = None,
     ) -> VGroup:
-        """Recolor sub-terms (or the whole mobject) and optionally back them with a soft box,
-        like a highlighter pen. Returns the highlighted glyphs."""
+        """Recolor sub-terms (or the whole mobject) and optionally back each occurrence with a
+        soft box, like a highlighter pen. Returns the highlighted glyphs; their `.boxes` (or
+        None) travel and leave with `mobject`."""
 
-        glyphs = (
-            VGroup(*(glyph for tex in terms for glyph in self.term(mobject, tex)))
+        groups = (
+            [group for tex in terms for group in self._terms(mobject, tex)]
             if terms
-            else VGroup(*mobject.family_members_with_points())
+            else [VGroup(*mobject.family_members_with_points())]
         )
+        glyphs = Highlight(*dict.fromkeys(glyph for group in groups for glyph in group))
         hue = self.theme.color(color)
         animations: list[Animation] = [FadeToColor(glyph, hue) for glyph in glyphs]
         if box:
-            # Tight sideways so neighbouring operators keep their space; taller like a marker.
-            pad_x, pad_y = 0.05, 0.05 + 0.12 * glyphs.height
-            backdrop = RoundedRectangle(
-                width=glyphs.width + 2 * pad_x,
-                height=glyphs.height + 2 * pad_y,
-                corner_radius=0.08,
-                stroke_width=0,
-                fill_color=hue,
-                fill_opacity=0.16,
-            ).move_to(glyphs)
-            backdrop.set_z_index(mobject.z_index - 1)
+            unique = {tuple(map(id, group)): group for group in groups}.values()
+            glyphs.boxes = VGroup(*(_backdrop(group, hue) for group in unique))
+            glyphs.boxes.set_z_index(mobject.z_index - 1)
+            self._stage.attached[id(glyphs.boxes)] = self._placed_root(mobject)
             if self._pinned(mobject):
-                self._pin(backdrop)
-            animations.append(FadeIn(backdrop))
+                self._pin(glyphs.boxes)
+            animations.append(FadeIn(glyphs.boxes))
         self._flush()
         self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        if glyphs.boxes is not None:  # after FadeIn, which suspends updaters
+            for backdrop, group in zip(glyphs.boxes, unique, strict=True):
+                backdrop.add_updater(_following(group))
         return glyphs
 
     def tag(self, mobject: Mobject, label: str | None = None) -> MathTex:
@@ -654,6 +657,14 @@ class Directed:
         if self._beat is not None and not self._beat.transitioned:
             self._beat.carried.update(id(leaf) for leaf in mobject.get_family())
 
+    def _placed_root(self, mobject: Mobject) -> Mobject:
+        """The placed object that `mobject` is part of (a derivation line's block), if any."""
+
+        for placed, _ in self._stage.placed.values():
+            if within(mobject, [placed]):
+                return placed
+        return mobject
+
     def _of(self, mobject: Mobject, ids: set[int]) -> bool:
         """Whether `mobject` is attached (as a tag) to one of `ids`."""
 
@@ -755,6 +766,12 @@ class DirectedScene(Directed, Scene):
     pass
 
 
+class Highlight(VGroup):
+    """The glyphs `highlight()` recolored; `boxes` is the VGroup of their backdrops, if any."""
+
+    boxes: VGroup | None = None
+
+
 class DirectedMovingCameraScene(Directed, MovingCameraScene):
     """Title and caption stay put on screen while the camera moves; placed content does not."""
 
@@ -832,6 +849,35 @@ def _require_held(mobject: Mobject) -> None:
             "so place() cannot move it: place the objects it is drawn from, or position it "
             "inside its redraw function."
         )
+
+
+def _backdrop(glyphs: VGroup, hue: str) -> RoundedRectangle:
+    # Tight sideways so neighbouring operators keep their space; taller like a marker.
+    pad_x, pad_y = 0.05, 0.05 + 0.12 * glyphs.height
+    return RoundedRectangle(
+        width=glyphs.width + 2 * pad_x,
+        height=glyphs.height + 2 * pad_y,
+        corner_radius=0.08,
+        stroke_width=0,
+        fill_color=hue,
+        fill_opacity=0.16,
+    ).move_to(glyphs)
+
+
+def _following(glyphs: VGroup) -> Callable[[Mobject], None]:
+    """An updater that keeps a backdrop on its glyphs as they glide or scale."""
+
+    width = glyphs.width
+
+    def follow(backdrop: Mobject) -> None:
+        nonlocal width
+        if width > 0 and glyphs.width > 0 and not np.isclose(glyphs.width, width):
+            backdrop.scale(glyphs.width / width)
+            width = glyphs.width
+        backdrop.move_to(glyphs)
+
+    follow.director = True  # type: ignore[attr-defined]
+    return follow
 
 
 def _fade_in(mobject: Mobject | None) -> list[Animation]:

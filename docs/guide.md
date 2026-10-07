@@ -157,7 +157,8 @@ and the rest between steps. The result is a `Derivation` (a `VGroup`) with `.lin
 - `self.term(eq, r"\frac{b}{2a}", occurrence=None)` returns the glyphs of a sub-term of any `MathTex`
   or `Tex`.
 - `self.highlight(eq, r"b^2 - 4ac", color="accent", box=False)` recolors sub-terms (or the whole
-  expression) and, with `box=True`, backs them with a soft box.
+  expression) and, with `box=True`, backs each occurrence with a soft box that moves and leaves
+  with `eq` (the result's `.boxes`).
 - `self.tag(eq, label=None)` puts an equation number at the right edge of the content region, level
   with `eq`; labels count `(1)`, `(2)`, ... unless given.
 - `self.focus(*mobjects)` dims everything else on stage (title and caption stay lit);

@@ -19,9 +19,11 @@ def _marker(index: int) -> str:
     return f"#FE{index // 256:02X}{index % 256:02X}"
 
 
-def term_glyphs(
+def term_groups(
     mobject: SingleStringMathTex, source: str, term: str, occurrence: int | None = None
-) -> VGroup:
+) -> list[VGroup]:
+    """The glyphs of each occurrence of `term`, one group per occurrence."""
+
     text_mode = isinstance(mobject, Tex)
     spans = occurrences(source, term, math_only=text_mode)
     if not spans:
@@ -53,9 +55,13 @@ def term_glyphs(
             f"Cannot locate {term!r}: {mobject!r} no longer has the glyphs of its source.",
             term=term,
         )
-    markers = {_marker(i) for i in range(len(spans))}
-    wanted = [i for i, mark in enumerate(marks) if mark.get_color().to_hex() in markers]
-    return VGroup(*(glyphs[i] for i in _match(marks, glyphs, wanted)))
+    colors = [mark.get_color().to_hex() for mark in marks]
+    wanted = [
+        [i for i, color in enumerate(colors) if color == _marker(n)] for n in range(len(spans))
+    ]
+    matched = iter(_match(marks, glyphs, [i for group in wanted for i in group]))
+    chosen = [sorted(next(matched) for _ in group) for group in wanted]
+    return [VGroup(*(glyphs[i] for i in group)) for group in chosen]
 
 
 def _match(marks: list[VMobject], glyphs: list[VMobject], wanted: list[int]) -> list[int]:
@@ -72,7 +78,7 @@ def _match(marks: list[VMobject], glyphs: list[VMobject], wanted: list[int]) -> 
         )
         taken.add(best)
         chosen.append(best)
-    return sorted(chosen)
+    return chosen
 
 
 def _normalized(glyphs: list[VMobject]) -> list[tuple[float, float]]:
