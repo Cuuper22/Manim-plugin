@@ -3,14 +3,20 @@ import { commandFor, type Command, type FocusZone } from "../model/shortcuts.ts"
 
 const COMPOSITE_ROLES = new Set(["tab", "slider", "menuitem", "radio", "option"]);
 
-/** Which keys the focused element needs for itself. */
-export function focusZone(target: EventTarget | null): FocusZone {
+const CONTROLS = "button, a[href], summary";
+
+/**
+ * Which keys the focused element needs for itself. `clicked` is the control
+ * the pointer last pressed: like in video editors, a clicked button leaves
+ * Space to the transport, while one reached by keyboard keeps it.
+ */
+export function focusZone(target: EventTarget | null, clicked: Element | null = null): FocusZone {
   if (!(target instanceof Element)) return "page";
   if (target.closest(".cm-editor")) return "editor";
   // A modal dialog keeps the stage's playback keys away from what is behind it.
   if (target.matches("input, textarea, select, [contenteditable='true']") || target.closest("dialog[open]")) return "text";
   if (COMPOSITE_ROLES.has(target.getAttribute("role") ?? "")) return "composite";
-  if (target.matches("button, a[href], summary")) return "button";
+  if (target.matches(CONTROLS)) return target === clicked ? "page" : "button";
   return "page";
 }
 
@@ -21,16 +27,25 @@ export function useShortcuts(handlers: CommandHandlers): void {
   const current = useRef(handlers);
   current.current = handlers;
   useEffect(() => {
+    let clicked: Element | null = null;
+    const onPointer = (event: PointerEvent) => {
+      clicked = event.target instanceof Element ? event.target.closest(CONTROLS) : null;
+    };
     const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Tab") clicked = null;
       if (event.defaultPrevented || event.isComposing) return;
-      const command = commandFor(event, focusZone(event.target));
+      const command = commandFor(event, focusZone(event.target, clicked));
       const run = command ? current.current[command] : undefined;
       if (!run || (event.repeat && command === "toggle_play")) return;
       event.preventDefault();
       run();
     };
+    document.addEventListener("pointerdown", onPointer, true);
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 }
 
