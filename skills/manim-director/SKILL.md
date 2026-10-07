@@ -22,7 +22,9 @@ engine renders, inspects and checks.
    - No MCP tools at all, or only a `setup` tool: the engine is not installed. In Claude Code,
      `setup` prints the exact command. Otherwise give the user
      `python3 <this skill's directory>/../../scripts/install.py --with-manim` (Python 3.11+; it
-     also needs FFmpeg and TeX with dvisvgm) and ask them to restart the session afterwards.
+     also needs FFmpeg and TeX with dvisvgm). Codex starts `manim-director mcp` from `PATH`, so the
+     installer's `bin` directory (`~/.local/bin` by default) must be on `PATH`; then ask them to
+     restart the session.
 2. Call `doctor` before the first render on an unfamiliar machine, and after any
    `runtime_unavailable` or `dependency_missing` error. It says whether the project is ready to
    render and what is missing.
