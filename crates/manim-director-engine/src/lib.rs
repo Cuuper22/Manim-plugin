@@ -8,6 +8,7 @@ mod mcp;
 mod process;
 mod scheduler;
 mod server;
+mod workspace;
 
 pub use bridge::*;
 pub use cache::*;

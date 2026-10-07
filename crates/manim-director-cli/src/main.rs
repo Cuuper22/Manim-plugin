@@ -1,8 +1,9 @@
 mod args;
 mod output;
+mod serve;
 
-use anyhow::{anyhow, Context};
-use args::{Cli, Command, EditArgs, OpenArgs, ServerArgs, SourceArgs, TargetArgs};
+use anyhow::Context;
+use args::{Cli, Command, EditArgs, SourceArgs, TargetArgs};
 use clap::Parser;
 use manim_director_core::{
     find_project, CaptionsParams, ContactSheetParams, DiagnoseParams, DoctorParams, EngineError,
@@ -11,16 +12,15 @@ use manim_director_core::{
     ValidateMathParams,
 };
 use manim_director_engine::{
-    cli_project_path, current_revision, init_project, inspect, run_mcp, serve, state_db_path,
-    write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, ServeConfig, SourceEdit,
-    SourceWrite, Store,
+    cli_project_path, current_revision, init_project, inspect, run_mcp, state_db_path,
+    write_source, BridgeConfig, EngineMode, Scheduler, SchedulerConfig, SourceEdit, SourceWrite,
+    Store,
 };
 use std::{
     collections::BTreeMap,
     fs,
-    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
-    process::{Command as ProcessCommand, ExitCode, Stdio},
+    process::ExitCode,
     time::{Duration, Instant},
 };
 use tracing_subscriber::EnvFilter;
@@ -275,8 +275,14 @@ async fn run(cli: Cli) -> Outcome {
                     return Ok(ExitCode::SUCCESS);
                 }
                 Command::Edit(args) => return edit(paths, args, machine).await,
-                Command::Serve(args) => return serve_command(&root, args.server).await,
-                Command::Open(args) => return open(&root, args).await,
+                Command::Serve(args) => {
+                    serve::serve(&root, args.server, machine).await?;
+                    return Ok(ExitCode::SUCCESS);
+                }
+                Command::Open(args) => {
+                    serve::open(&root, args, machine).await?;
+                    return Ok(ExitCode::SUCCESS);
+                }
                 Command::Init(_) | Command::Mcp => unreachable!("handled above"),
             };
             submit_and_wait(&root, request, machine).await
@@ -405,7 +411,7 @@ async fn print_progress(scheduler: Scheduler, id: uuid::Uuid) {
     let mut events = scheduler.subscribe();
     let mut last: Option<(ProgressPhase, Instant)> = None;
     while let Ok(event) = events.recv().await {
-        let manim_director_core::EngineEvent::JobProgress { job_id, progress } = event else {
+        let manim_director_core::EngineEvent::Progress { job_id, progress } = event else {
             continue;
         };
         if job_id != id {
@@ -527,79 +533,4 @@ async fn edit(paths: CliPaths<'_>, args: EditArgs, machine: bool) -> Outcome {
         println!("{} @ {}", result.path, result.revision);
     }
     Ok(ExitCode::SUCCESS)
-}
-
-async fn open(root: &Path, args: OpenArgs) -> Outcome {
-    let url = format!(
-        "http://{}:{}",
-        display_host(args.server.host),
-        args.server.port
-    );
-    if !args.no_browser {
-        let url = url.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(180)).await;
-            if let Err(error) = launch_browser(&url) {
-                tracing::warn!(%error, "could not open browser");
-            }
-        });
-    }
-    eprintln!("{url}");
-    serve_command(root, args.server).await
-}
-
-async fn serve_command(root: &Path, args: ServerArgs) -> Outcome {
-    let scheduler = start_scheduler(root, EngineMode::Serve).await?;
-    serve(
-        ServeConfig {
-            address: SocketAddr::new(args.host, args.port),
-            workbench_dir: resolve_workbench(args.workbench_dir),
-        },
-        scheduler,
-    )
-    .await?;
-    Ok(ExitCode::SUCCESS)
-}
-
-fn resolve_workbench(explicit: Option<PathBuf>) -> Option<PathBuf> {
-    explicit.or_else(|| {
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workbench/dist");
-        development.is_dir().then_some(development)
-    })
-}
-
-fn launch_browser(url: &str) -> anyhow::Result<()> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = ProcessCommand::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = ProcessCommand::new("open");
-        command.arg(url);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = ProcessCommand::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| anyhow!(error))?;
-    Ok(())
-}
-
-fn display_host(host: IpAddr) -> String {
-    if host.is_unspecified() {
-        "127.0.0.1".into()
-    } else {
-        host.to_string()
-    }
 }

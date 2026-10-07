@@ -5,7 +5,7 @@ use crate::{
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::{fmt, str::FromStr};
+use std::{fmt, str::FromStr, sync::Arc};
 use uuid::Uuid;
 
 /// RFC 3339 UTC with millisecond precision and `Z`, on the wire and in the DB.
@@ -184,23 +184,14 @@ pub struct CursorPage<T> {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+/// What an engine announces in process, after the change is committed.
+#[derive(Debug, Clone)]
 pub enum EngineEvent {
-    JobQueued {
-        job: JobSummary,
-    },
-    JobStarted {
-        job: JobSummary,
-    },
-    JobProgress {
+    /// A job was queued, started or ended (also a cache hit or a reaped job).
+    Job(Arc<JobRecord>),
+    Progress {
         job_id: Uuid,
         progress: Progress,
-    },
-    JobFinished {
-        job: JobSummary,
-        result: Option<Box<OperationResult>>,
-        error: Option<ErrorBody>,
     },
 }
 

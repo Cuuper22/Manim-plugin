@@ -121,6 +121,12 @@ const QUALITY: [(&str, u32, u32, u32); 5] = [
     ("fourk", 3840, 2160, 60),
 ];
 
+/// The engine's own profile names, `custom` included; any other name comes
+/// from `director.yaml`.
+pub fn is_builtin_profile(name: &str) -> bool {
+    name == "custom" || BUILT_IN.iter().any(|(builtin, ..)| *builtin == name)
+}
+
 pub(super) fn resolve_profiles(
     render: &RenderSpec,
     entries: &BTreeMap<String, ProfileSpec>,

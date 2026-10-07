@@ -150,16 +150,23 @@ async fn a_job_streams_progress_and_logs_into_a_typed_result() {
     assert!(line(LogStream::Runtime, "looked at the text"));
     assert!(line(LogStream::Stderr, "a print from user code"));
 
+    // The record turns terminal in the store just before the event goes out.
     let mut kinds = Vec::new();
-    while let Ok(event) = events.try_recv() {
+    while kinds.last() != Some(&"finished") {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the terminal event follows")
+            .unwrap();
         kinds.push(match event {
-            EngineEvent::JobQueued { .. } => "queued",
-            EngineEvent::JobStarted { .. } => "started",
-            EngineEvent::JobProgress { progress, .. } => match progress.phase {
+            EngineEvent::Job(job) => match job.status {
+                JobStatus::Queued => "queued",
+                JobStatus::Running => "started",
+                _ => "finished",
+            },
+            EngineEvent::Progress { progress, .. } => match progress.phase {
                 ProgressPhase::Analyze => "analyze",
                 _ => "progress",
             },
-            EngineEvent::JobFinished { .. } => "finished",
         });
     }
     kinds.dedup();
@@ -254,7 +261,8 @@ async fn cancelling_a_running_job_kills_it_and_finishes_once() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     let mut finishes = 0;
     while let Ok(event) = events.try_recv() {
-        if matches!(event, EngineEvent::JobFinished { job: summary, .. } if summary.id == job.id) {
+        if matches!(event, EngineEvent::Job(record) if record.id == job.id && record.status.is_terminal())
+        {
             finishes += 1;
         }
     }
@@ -321,8 +329,11 @@ async fn queued_jobs_cancel_without_running_and_a_full_queue_creates_no_row() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let mut finishes = HashMap::new();
     while let Ok(event) = events.try_recv() {
-        if let EngineEvent::JobFinished { job, .. } = event {
-            *finishes.entry(job.id).or_insert(0) += 1;
+        match event {
+            EngineEvent::Job(job) if job.status.is_terminal() => {
+                *finishes.entry(job.id).or_insert(0) += 1;
+            }
+            _ => {}
         }
     }
     for id in &accepted {
@@ -720,11 +731,14 @@ async fn a_request_the_worker_cannot_take_is_retried_once_on_a_fresh_worker() {
         .any(|line| line.contains("retrying with a fresh one")));
 }
 
-fn finishes(events: &mut broadcast::Receiver<EngineEvent>) -> HashMap<Uuid, Vec<JobSummary>> {
-    let mut finished: HashMap<Uuid, Vec<JobSummary>> = HashMap::new();
+fn finishes(events: &mut broadcast::Receiver<EngineEvent>) -> HashMap<Uuid, Vec<Arc<JobRecord>>> {
+    let mut finished: HashMap<Uuid, Vec<Arc<JobRecord>>> = HashMap::new();
     while let Ok(event) = events.try_recv() {
-        if let EngineEvent::JobFinished { job, .. } = event {
-            finished.entry(job.id).or_default().push(job);
+        match event {
+            EngineEvent::Job(job) if job.status.is_terminal() => {
+                finished.entry(job.id).or_default().push(job);
+            }
+            _ => {}
         }
     }
     finished

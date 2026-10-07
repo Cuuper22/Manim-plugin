@@ -302,20 +302,30 @@ impl Store {
     pub fn find_succeeded(
         &self,
         filter: JobFilter<'_>,
+        accept: impl FnMut(&JobRecord) -> bool,
+    ) -> Result<Option<JobRecord>> {
+        self.newest_where(filter, &[JobStatus::Succeeded], accept)
+    }
+
+    /// The newest job matching `filter` in one of `statuses`.
+    pub fn newest_job(
+        &self,
+        filter: JobFilter<'_>,
+        statuses: &[JobStatus],
+    ) -> Result<Option<JobRecord>> {
+        self.newest_where(filter, statuses, |_| true)
+    }
+
+    fn newest_where(
+        &self,
+        filter: JobFilter<'_>,
+        statuses: &[JobStatus],
         mut accept: impl FnMut(&JobRecord) -> bool,
     ) -> Result<Option<JobRecord>> {
-        let mut sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE status='succeeded'");
+        let mut sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE 1=1");
         let mut values: Vec<SqlValue> = Vec::new();
-        if !filter.operations.is_empty() {
-            let marks = vec!["?"; filter.operations.len()].join(", ");
-            sql.push_str(&format!(" AND operation IN ({marks})"));
-            values.extend(
-                filter
-                    .operations
-                    .iter()
-                    .map(|operation| SqlValue::Text(operation.to_string())),
-            );
-        }
+        push_in(&mut sql, &mut values, "status", statuses);
+        push_in(&mut sql, &mut values, "operation", filter.operations);
         for (column, value) in [
             ("scene_class", filter.scene_class),
             ("scene_file", filter.scene_file),
@@ -337,6 +347,34 @@ impl Store {
             }
         }
         Ok(None)
+    }
+
+    /// The highest job sequence so far (0 for an empty store).
+    pub fn last_sequence(&self) -> Result<i64> {
+        Ok(self.conn.lock().query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM jobs",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Jobs other engines own that are newer than `after`, still active, or
+    /// among `watched` (active when last seen), oldest first: what an engine
+    /// polls to see their transitions.
+    pub fn foreign_jobs(&self, me: Uuid, after: i64, watched: &[Uuid]) -> Result<Vec<JobRecord>> {
+        let marks = vec!["?"; watched.len()].join(", ");
+        let mut values = vec![SqlValue::Text(me.to_string()), SqlValue::Integer(after)];
+        values.extend(watched.iter().map(|id| SqlValue::Text(id.to_string())));
+        let conn = self.conn.lock();
+        let mut statement = conn.prepare(&format!(
+            "SELECT {JOB_COLUMNS} FROM jobs WHERE owner != ?1
+             AND (sequence > ?2 OR status IN ('queued','running') OR id IN ({marks}))
+             ORDER BY sequence"
+        ))?;
+        let jobs = statement
+            .query_map(params_from_iter(values), row_to_job)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(jobs)
     }
 
     /// Terminal jobs past the newest `keep` or created before `cutoff`.
@@ -405,6 +443,16 @@ impl Store {
         transaction.commit()?;
         Ok(deleted)
     }
+}
+
+/// Appends `AND column IN (…)` unless `names` is empty (no constraint).
+fn push_in(sql: &mut String, values: &mut Vec<SqlValue>, column: &str, names: &[impl ToString]) {
+    if names.is_empty() {
+        return;
+    }
+    let marks = vec!["?"; names.len()].join(", ");
+    sql.push_str(&format!(" AND {column} IN ({marks})"));
+    values.extend(names.iter().map(|name| SqlValue::Text(name.to_string())));
 }
 
 fn delete_chunk(conn: &Connection, ids: &[Uuid]) -> Result<usize> {

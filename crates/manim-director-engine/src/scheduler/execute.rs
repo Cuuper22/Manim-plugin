@@ -9,7 +9,7 @@ use crate::{
     cache, request_line, BridgeEvent, BridgeOutcome, Finish, RuntimeIdentity, SpawnKey, Undelivered,
 };
 use manim_director_core::{
-    EngineEvent, ErrorBody, JobRecord, JobStatus, JobSummary, LogLevel, MediaInfo, OperationResult,
+    EngineEvent, ErrorBody, JobRecord, JobStatus, LogLevel, MediaInfo, OperationResult,
     ProgressPhase, ReadyFrame, Task,
 };
 use serde_json::json;
@@ -53,9 +53,9 @@ impl Inner {
                 .await;
         match started {
             Ok(Ok((running, out_dir, key))) => {
-                let _ = self.events.send(EngineEvent::JobStarted {
-                    job: JobSummary::from(&running),
-                });
+                let _ = self
+                    .events
+                    .send(EngineEvent::Job(Arc::new(running.clone())));
                 let recorder = Recorder::start(self.store.clone(), self.events.clone(), id);
                 recorder.engine_phase(
                     ProgressPhase::Starting,

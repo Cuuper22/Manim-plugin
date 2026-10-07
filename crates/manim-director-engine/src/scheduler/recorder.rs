@@ -110,7 +110,7 @@ impl Recorder {
     }
 
     fn progress(&self, progress: Progress) {
-        let _ = self.events.send(EngineEvent::JobProgress {
+        let _ = self.events.send(EngineEvent::Progress {
             job_id: self.id,
             progress: progress.clone(),
         });

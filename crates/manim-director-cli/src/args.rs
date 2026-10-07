@@ -254,4 +254,7 @@ pub struct ServerArgs {
     pub port: u16,
     #[arg(long, env = "MANIM_DIRECTOR_WORKBENCH")]
     pub workbench_dir: Option<PathBuf>,
+    /// Accept other machines: binds non-loopback addresses and any Host header.
+    #[arg(long)]
+    pub allow_remote: bool,
 }

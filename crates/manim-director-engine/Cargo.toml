@@ -11,10 +11,12 @@ anyhow.workspace = true
 axum.workspace = true
 blake3.workspace = true
 chrono.workspace = true
+getrandom.workspace = true
 manim-director-core = { path = "../manim-director-core" }
 libc.workspace = true
 mime_guess.workspace = true
 parking_lot.workspace = true
+percent-encoding.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,3 +32,4 @@ walkdir.workspace = true
 
 [dev-dependencies]
 tempfile = "3.14"
+tower = { version = "0.5", features = ["util"] }

@@ -27,7 +27,7 @@ use active::Active;
 use execute::accept_result;
 use manim_director_core::{
     CancelledBy, DirectorSpec, DiscoverResult, EngineError, EngineEvent, ErrorBody, JobOrigin,
-    JobRecord, JobSummary, MediaInfo, MediaSource, Operation, OperationRequest, OperationResult,
+    JobRecord, MediaInfo, MediaSource, Operation, OperationRequest, OperationResult,
 };
 use parking_lot::Mutex;
 use request::{ProjectContext, ResolvedJob};
@@ -283,9 +283,10 @@ impl Scheduler {
             .map_err(EngineError::internal)??;
         let active = Arc::new(Active::new(slot));
         self.inner.active.lock().insert(job.id, active.clone());
-        let _ = self.inner.events.send(EngineEvent::JobQueued {
-            job: JobSummary::from(&job),
-        });
+        let _ = self
+            .inner
+            .events
+            .send(EngineEvent::Job(Arc::new(job.clone())));
         let queued = Queued {
             job: job.clone(),
             context,
@@ -583,11 +584,7 @@ impl Inner {
     }
 
     fn emit_finished(&self, job: &JobRecord) {
-        let _ = self.events.send(EngineEvent::JobFinished {
-            job: JobSummary::from(job),
-            result: job.result.clone().map(Box::new),
-            error: job.error.clone(),
-        });
+        let _ = self.events.send(EngineEvent::Job(Arc::new(job.clone())));
     }
 }
 
