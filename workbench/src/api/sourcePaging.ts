@@ -1,95 +1,80 @@
-export const SOURCE_PAGE_LINES = 400;
-export const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+import { ApiError } from "./errors.ts";
+import type { SourceLanguage, SourcePage } from "./types.ts";
 
-export interface SourcePage {
+export const SOURCE_PAGE_LINES = 400;
+
+/** A whole file read at one revision, byte-exact (CONTRACT-http §6.3 line model). */
+export interface SourceDocument {
   path: string;
   revision: string;
-  language: string;
-  start_line: number;
-  end_line: number;
+  language: SourceLanguage;
+  eol: "lf" | "crlf";
+  final_newline: boolean;
+  bytes: number;
   total_lines: number;
   content: string;
 }
 
-export interface CompleteSourceDocument extends SourcePage {
-  start_line: 1;
-  complete: true;
-  bytes: number;
+export type PageFetcher = (path: string, startLine: number, endLine: number) => Promise<SourcePage>;
+
+function incomplete(path: string, reason: string): never {
+  throw new ApiError("source_incomplete", `Source load incomplete: ${reason}.`, { path });
 }
 
-type PageFetcher = (path: string, startLine: number, endLine: number) => Promise<SourcePage>;
-
-function fail(reason: string): never {
-  throw new Error(`Source load incomplete: ${reason}`);
+function lineCount(content: string): number {
+  return content.split("\n").length;
 }
 
-function pageLineCount(content: string, expected: number): number {
-  if (expected === 0) return content.length === 0 ? 0 : content.split("\n").length;
-  return content.length === 0 ? 1 : content.split("\n").length;
-}
-
-export function sourceByteLength(content: string): number {
-  return new TextEncoder().encode(content).byteLength;
-}
-
-export async function loadCompleteSource(path: string, fetchPage: PageFetcher): Promise<CompleteSourceDocument> {
-  if (!path) fail("source path is empty");
-  const chunks: string[] = [];
-  let nextStart = 1;
-  let revision: string | undefined;
-  let language = "text";
-  let totalLines: number | undefined;
-
-  while (totalLines === undefined || nextStart <= totalLines) {
-    const requestedEnd = nextStart + SOURCE_PAGE_LINES - 1;
-    const page = await fetchPage(path, nextStart, requestedEnd);
-    if (!Number.isSafeInteger(page.total_lines) || page.total_lines < 0) fail("invalid total_lines");
-    if (page.path !== path) fail(`server returned ${page.path} while loading ${path}`);
-    if (!page.revision) fail("page has no revision");
-
-    if (revision === undefined) {
-      revision = page.revision;
-      totalLines = page.total_lines;
-      language = page.language;
-    } else {
-      if (page.revision !== revision) fail("source revision changed between pages");
-      if (page.total_lines !== totalLines) fail("line count changed between pages");
-    }
-
-    if (totalLines === 0) {
-      if (page.start_line !== 1 || page.end_line !== 0 || page.content !== "") fail("empty source page is inconsistent");
-      break;
-    }
-
-    const expectedEnd = Math.min(requestedEnd, totalLines);
-    if (page.start_line !== nextStart || page.end_line !== expectedEnd) {
-      fail(`expected lines ${nextStart}-${expectedEnd}, received ${page.start_line}-${page.end_line}`);
-    }
-    const expectedLines = expectedEnd - nextStart + 1;
-    if (pageLineCount(page.content, expectedLines) !== expectedLines) fail(`page ${nextStart}-${expectedEnd} is truncated`);
-    chunks.push(page.content);
-    nextStart = expectedEnd + 1;
+/**
+ * Reads `path` page by page from line 1. Fails unless every page comes from
+ * the same revision and the pages reassemble into exactly the file's bytes.
+ */
+export async function loadCompleteSource(path: string, fetchPage: PageFetcher): Promise<SourceDocument> {
+  if (!path) incomplete(path, "the path is empty");
+  const first = await fetchPage(path, 1, SOURCE_PAGE_LINES);
+  if (first.path !== path) incomplete(path, `the engine returned ${first.path}`);
+  if (!first.revision) incomplete(path, "the page has no revision");
+  const total = first.total_lines;
+  if (!Number.isSafeInteger(total) || total < 0) incomplete(path, "the line count is invalid");
+  if (total === 0 && (first.start_line !== 1 || first.end_line !== 0 || first.content !== "")) {
+    incomplete(path, "the empty file's page is inconsistent");
   }
 
-  if (revision === undefined || totalLines === undefined) fail("server returned no source pages");
-  if (totalLines > 0 && nextStart !== totalLines + 1) fail("not every source line was loaded");
+  const chunks: string[] = [];
+  let page = first;
+  let start = 1;
+  let requestedEnd = SOURCE_PAGE_LINES;
+  while (total > 0) {
+    const sameFile = page.revision === first.revision
+      && page.total_lines === total
+      && page.bytes === first.bytes
+      && page.final_newline === first.final_newline;
+    if (!sameFile) incomplete(path, "the file changed between pages");
+    // The engine may return fewer lines than asked (it caps pages); follow its end_line.
+    const end = page.end_line;
+    if (page.start_line !== start || end < start || end > Math.min(requestedEnd, total)) {
+      incomplete(path, `expected a page starting at line ${start}, received lines ${page.start_line}-${end}`);
+    }
+    if (lineCount(page.content) !== end - start + 1) incomplete(path, `lines ${start}-${end} are truncated`);
+    chunks.push(page.content);
+    if (end === total) break;
+    start = end + 1;
+    requestedEnd = start + SOURCE_PAGE_LINES - 1;
+    page = await fetchPage(path, start, requestedEnd);
+  }
 
-  // Pages omit their line terminators; one newline restores each page boundary.
-  // The mutation endpoint preserves the existing terminal newline, so adding one
-  // here would create an extra blank line for files that do not end in newline.
-  const content = chunks.join("\n");
-  const bytes = sourceByteLength(content);
-  if (bytes > MAX_SOURCE_BYTES) fail(`assembled source is ${bytes} bytes; limit is ${MAX_SOURCE_BYTES}`);
+  const content = chunks.join("\n") + (first.final_newline ? "\n" : "");
+  const bytes = new TextEncoder().encode(content).byteLength;
+  if (bytes !== first.bytes) incomplete(path, `assembled ${bytes} bytes, the file has ${first.bytes}`);
 
   return {
     path,
-    revision,
-    language,
-    start_line: 1,
-    end_line: totalLines,
-    total_lines: totalLines,
-    content,
-    complete: true,
+    revision: first.revision,
+    language: first.language,
+    eol: first.eol,
+    final_newline: first.final_newline,
     bytes,
+    total_lines: total,
+    content,
   };
 }

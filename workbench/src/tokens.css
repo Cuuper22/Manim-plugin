@@ -1,0 +1,51 @@
+/* The workbench's design tokens; the only place colors are spelled out. */
+
+:root {
+  color-scheme: light dark;
+
+  --font-ui: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+
+  /* light-dark(): first value for the light theme, second for the dark one. */
+  --bg: light-dark(#f4f5f7, #0e1012);
+  --surface: light-dark(#ffffff, #16181b);
+  --surface-muted: light-dark(#eceef1, #202328);
+  --border: light-dark(#d5d9df, #2e3238);
+  --text: light-dark(#15181c, #e6e8eb);
+  --text-muted: light-dark(#575f6a, #9da4ae);
+  --accent: light-dark(#2453c0, #82adff);
+  --on-accent: light-dark(#ffffff, #0e1012);
+  --danger: light-dark(#b3261e, #ff8f87);
+  --warning: light-dark(#8a5300, #e8b04f);
+  --success: light-dark(#1a7240, #6fd09b);
+  --stage: light-dark(#e3e6ea, #07080a);
+  --scrim: light-dark(rgb(21 24 28 / 0.32), rgb(0 0 0 / 0.6));
+
+  --shadow-1: 0 1px 2px light-dark(rgb(21 24 28 / 0.08), rgb(0 0 0 / 0.5)),
+    0 4px 16px light-dark(rgb(21 24 28 / 0.1), rgb(0 0 0 / 0.4));
+  --shadow-2: 0 12px 40px light-dark(rgb(21 24 28 / 0.18), rgb(0 0 0 / 0.6));
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
