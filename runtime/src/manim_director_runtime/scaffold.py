@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 from .errors import DirectorError, io_error
 from .inspection import DIRECTOR_SCENE_BASES
 from .model import ArtifactKind, RuntimeArtifact, SceneRef
-from .paths import atomic_target, slug
+from .paths import atomic_target, ensure_dir, slug
 from .tasks import InitTask
 from .themes import themes
 
@@ -128,10 +128,15 @@ def _add_scene(task: InitTask, ctx: Context) -> InitResult:
     source = scene_source(task.scene_template)
     source_dir = ctx.require_inside(task.source_dir, "source_dir")
     target = source_dir / f"{task.scene_template}.py"
+    # Neither write follows a symlink at `target`: exclusive creation refuses one, and the
+    # rename behind `_write` replaces the link itself.
     try:
-        source_dir.mkdir(parents=True, exist_ok=True)
-        with target.open("w" if task.force else "x", encoding="utf-8") as handle:
-            handle.write(source)
+        if task.force:
+            _write(target, source)
+        else:
+            ensure_dir(source_dir)
+            with target.open("x", encoding="utf-8") as handle:
+                handle.write(source)
     except FileExistsError:
         raise DirectorError(
             "project_not_empty",

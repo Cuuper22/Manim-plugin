@@ -151,9 +151,14 @@ class Context:
         return RuntimeArtifact(kind=kind, path=self.relative(path), label=label)
 
     def require_inside(self, path: Path, field: str) -> Path:
-        """Write targets come from the engine; refuse any that would leave the project."""
+        """Write targets come from the engine; refuse any that would leave the project.
 
-        if not is_within(Path(os.path.abspath(path)), self.project_root):
+        Symlinks count where they lead: the deepest part of `path` that exists is resolved,
+        so a link inside the project to a directory outside it is refused too.
+        """
+
+        root = Path(os.path.realpath(self.project_root))
+        if not is_within(Path(os.path.realpath(path)), root):
             raise DirectorError(
                 "invalid_params",
                 f"Invalid task field {field}: {path} is outside the project.",

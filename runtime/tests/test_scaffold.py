@@ -148,3 +148,31 @@ def test_add_scene_writes_one_file_exclusively(project: Path, ctx) -> None:
     (project / "scenes/derivation.py").write_text("edited\n")
     init(replace(task, force=True), ctx)
     assert scene_class((project / "scenes/derivation.py").read_text()) == "QuadraticFormula"
+
+
+def test_add_scene_never_writes_through_a_symlink(project: Path, ctx) -> None:
+    outside = project.parent / "profile"
+    outside.write_text("mine\n")
+    target = project / "scenes/derivation.py"
+    target.parent.mkdir()
+    for link in (outside, project.parent / "missing.py"):
+        target.symlink_to(link)
+        with pytest.raises(DirectorError) as raised:
+            init(add_scene(project, "derivation"), ctx)
+        assert raised.value.code == "project_not_empty"
+        target.unlink()
+    assert not (project.parent / "missing.py").exists()
+    target.symlink_to(outside)
+    init(replace(add_scene(project, "derivation"), force=True), ctx)
+    assert not target.is_symlink() and target.read_text() == scene_source("derivation")
+    assert outside.read_text() == "mine\n"
+
+
+def test_add_scene_refuses_a_source_dir_linked_outside(project: Path, ctx) -> None:
+    outside = project.parent / "elsewhere"
+    outside.mkdir()
+    (project / "scenes").symlink_to(outside)
+    with pytest.raises(DirectorError) as raised:
+        init(add_scene(project, "graph"), ctx)
+    assert raised.value.data == {"field": "source_dir", "reason": "outside_project"}
+    assert not any(outside.iterdir())

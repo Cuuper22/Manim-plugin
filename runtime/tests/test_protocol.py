@@ -13,6 +13,7 @@ import pytest
 
 from conftest import SRC, RecordingWriter, request, run_bridge
 from manim_director_runtime import protocol
+from manim_director_runtime.errors import DirectorError
 from manim_director_runtime.protocol import MAX_REQUEST_BYTES, METHODS, handle_request
 
 CANONICAL = [
@@ -240,6 +241,21 @@ def test_unexpected_exceptions_become_internal_errors(
     assert error["message"] == "RuntimeError: boom"
     assert "RuntimeError: boom" in error["data"]["stderr_tail"]
     assert "Traceback" in capsys.readouterr().err
+
+
+def test_require_inside_follows_symlinks_to_where_they_lead(project: Path, ctx) -> None:
+    outside = project.parent / "outside"
+    outside.mkdir()
+    (project / "real").mkdir()
+    (project / "inner").symlink_to(project / "real")
+    (project / "escape").symlink_to(outside)
+    (project / "dangling").symlink_to(outside / "missing.txt")
+    for path in ("new/file.txt", "inner/new/file.txt", "real/../inner"):
+        assert ctx.require_inside(project / path, "output") == project / path
+    for path in ("escape", "escape/new/file.txt", "dangling", "real/../../outside"):
+        with pytest.raises(DirectorError) as raised:
+            ctx.require_inside(project / path, "output")
+        assert raised.value.data == {"field": "output", "reason": "outside_project"}
 
 
 def test_progress_is_coalesced_and_the_last_state_is_flushed(ctx, writer: RecordingWriter) -> None:
