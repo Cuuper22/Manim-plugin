@@ -28,20 +28,44 @@ interface JobTrayProps {
 export function JobTray({ open, onOpenChange, onLogs, onDiagnose }: JobTrayProps) {
   const jobs = useWorkbench((state) => state.jobs);
   const root = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
   const running = jobs.filter(isActive).length;
   const announcement = useAnnouncement(jobs);
-  useDismiss(open, () => onOpenChange(false), root);
+  /** Focus inside the tray goes back to its button rather than to the page. */
+  const close = () => {
+    if (root.current?.contains(document.activeElement)) toggle.current?.focus();
+    onOpenChange(false);
+  };
+  useDismiss(open, close, root);
 
   return (
     <div className="menu-anchor" ref={root}>
-      <button type="button" aria-expanded={open} aria-controls={open ? "job-tray" : undefined} onClick={() => onOpenChange(!open)}>
+      <button
+        ref={toggle}
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? "job-tray" : undefined}
+        onClick={() => onOpenChange(!open)}
+      >
         Jobs
         {running > 0 ? <span className="muted"> · {running} active</span> : null}
       </button>
       <p className="visually-hidden" aria-live="polite">
         {announcement}
       </p>
-      {open ? <TrayPanel jobs={jobs} running={running} onClose={() => onOpenChange(false)} onLogs={onLogs} onDiagnose={onDiagnose} /> : null}
+      {open ? (
+        <TrayPanel
+          jobs={jobs}
+          running={running}
+          onClose={close}
+          onLogs={(jobId) => {
+            // The log dialog returns focus to what had it when it opened: the button, not a row of the closed tray.
+            toggle.current?.focus();
+            onLogs(jobId);
+          }}
+          onDiagnose={onDiagnose}
+        />
+      ) : null}
     </div>
   );
 }
