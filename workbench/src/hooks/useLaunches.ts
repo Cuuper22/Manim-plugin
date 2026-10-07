@@ -15,7 +15,7 @@ export interface Launches {
   launch: (action: string, sceneId: SceneId | null, request: OperationRequest) => Promise<boolean>;
   /** The newest job this button launched for that scene, while it is listed. */
   jobFor: (action: string, sceneId: SceneId | null) => JobSummary | null;
-  /** The pending/error key of `store.actions` for this button and scene. */
+  /** The key `store.pending` lists this button's request under while it is sent. */
   keyOf: (action: string, sceneId: SceneId | null) => string;
 }
 

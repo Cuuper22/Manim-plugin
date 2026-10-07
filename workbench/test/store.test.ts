@@ -79,27 +79,27 @@ test("a rejected session signs out, and signs back in once the browser has a ses
   store.disconnect();
 });
 
-test("actions are pending while they run; failures keep their error and toast unless quiet", async () => {
+test("actions are pending while they run; failures toast unless quiet", async () => {
   const routes: Record<string, Answer> = { "/api/state": json(workspaceState()), "/api/jobs": json(job()) };
   const { store } = setup(routes);
   await store.connect();
 
   const submitted = store.submit("render", { operation: "render", scene: "Recurrence" });
-  assert.deepEqual(store.getState().actions.render, { pending: true, error: null });
+  assert.equal(store.getState().pending.has("render"), true);
   const outcome = await submitted;
   assert.ok(outcome.ok);
-  assert.equal(store.getState().actions.render, undefined);
+  assert.equal(store.getState().pending.has("render"), false);
   assert.equal(store.getState().jobs[0]?.id, job().id);
 
   routes["/api/jobs"] = envelope("queue_full", 429);
   const failed = await store.submit("render", { operation: "render" });
   assert.ok(!failed.ok && failed.error.code === "queue_full");
-  assert.equal(store.getState().actions.render?.error?.code, "queue_full");
+  assert.equal(store.getState().pending.has("render"), false);
   assert.equal(store.getState().toasts.length, 1);
 
   routes["/api/source"] = envelope("revision_conflict", 409);
-  await store.perform("save", (client) => client.writeSource({ path: "a.py", expected_revision: "r", edit: { kind: "replace_all", content: "" } }), ["revision_conflict"]);
-  assert.equal(store.getState().actions.save?.error?.code, "revision_conflict");
+  const saved = await store.perform("save", (client) => client.writeSource({ path: "a.py", expected_revision: "r", edit: { kind: "replace_all", content: "" } }), ["revision_conflict"]);
+  assert.ok(!saved.ok && saved.error.code === "revision_conflict");
   assert.equal(store.getState().toasts.length, 1);
   store.disconnect();
 });

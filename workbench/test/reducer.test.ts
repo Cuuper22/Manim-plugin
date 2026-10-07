@@ -106,20 +106,15 @@ test("the job list keeps the newest and pages from the oldest kept", () => {
   assert.equal(state.jobsNextBefore, "2");
 });
 
-test("actions track pending and errors, and failures toast unless told not to", () => {
-  const error = { code: "queue_full", message: "The queue is full.", data: { capacity: 128 } };
-  let state = run({ type: "action_started", key: "render" });
-  assert.deepEqual(state.actions.render, { pending: true, error: null });
+test("actions are pending until they end; failures toast unless told not to", () => {
+  let state = run({ type: "action_started", key: "render" }, { type: "action_started", key: "save" });
+  assert.deepEqual([...state.pending], ["render", "save"]);
 
-  state = reduce(state, { type: "action_failed", key: "render", error, toast: true });
-  assert.deepEqual(state.actions.render, { pending: false, error });
-  assert.deepEqual(state.toasts, [{ id: 1, code: "queue_full", message: "The queue is full." }]);
+  state = reduce(state, { type: "action_failed", key: "render", toast: "The queue is full." });
+  state = reduce(state, { type: "action_failed", key: "save", toast: null });
+  assert.deepEqual([...state.pending], []);
+  assert.deepEqual(state.toasts, [{ id: 1, message: "The queue is full." }]);
 
-  state = reduce(state, { type: "action_failed", key: "save", error, toast: false });
-  assert.equal(state.toasts.length, 1);
-
-  state = reduce(state, { type: "action_succeeded", key: "render" });
-  assert.equal(state.actions.render, undefined);
   state = reduce(state, { type: "toast_dismissed", id: 1 });
   assert.deepEqual(state.toasts, []);
 });

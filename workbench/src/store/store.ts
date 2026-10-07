@@ -11,8 +11,8 @@ export type Outcome<T> = { ok: true; value: T } | { ok: false; error: ApiError }
 
 /**
  * The one store the workbench reads: a snapshot from `GET /api/state` kept
- * current by the event stream, plus per-action pending/error state and
- * error toasts. Subscribe with `useSyncExternalStore`.
+ * current by the event stream, plus which actions are pending and toasts.
+ * Subscribe with `useSyncExternalStore`.
  */
 export class WorkbenchStore {
   readonly #client: EngineClient;
@@ -66,8 +66,8 @@ export class WorkbenchStore {
   }
 
   /**
-   * Runs `task` as action `key`: pending while it runs, its error kept under
-   * `actions[key]` and shown as a toast unless the caller handles its code
+   * Runs `task` as action `key`, listed in `pending` while it runs. A failure
+   * is returned, and shown as a toast unless the caller handles its code
    * (`quiet`). A lost session or engine switches the connection state instead.
    */
   async perform<T>(
@@ -83,7 +83,8 @@ export class WorkbenchStore {
     } catch (caught) {
       const error = asApiError(caught);
       const lost = isConnectionLoss(error);
-      this.#dispatch({ type: "action_failed", key, error: error.body, toast: !lost && !quiet.includes(error.code) });
+      const toast = lost || quiet.includes(error.code) ? null : error.message;
+      this.#dispatch({ type: "action_failed", key, toast });
       if (lost) this.#lost(error);
       return { ok: false, error };
     }

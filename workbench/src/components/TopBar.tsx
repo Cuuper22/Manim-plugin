@@ -19,8 +19,6 @@ interface TopBarProps {
   jobs: ReactNode;
 }
 
-const THEME_LABELS: Record<ThemeChoice, string> = { system: "system", light: "light", dark: "dark" };
-
 const THEME_ICONS: Record<ThemeChoice, ReactNode> = {
   system: (
     <>
@@ -83,8 +81,8 @@ export function TopBar(props: TopBarProps) {
         <button
           type="button"
           className="icon"
-          aria-label={`Color theme: ${THEME_LABELS[props.theme]}`}
-          title={`Color theme: ${THEME_LABELS[props.theme]}`}
+          aria-label={`Color theme: ${props.theme}`}
+          title={`Color theme: ${props.theme}`}
           onClick={props.onTheme}
         >
           <svg className="stroke" viewBox="0 0 16 16" aria-hidden="true">

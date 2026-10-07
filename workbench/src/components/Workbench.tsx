@@ -50,7 +50,7 @@ interface WorkbenchProps {
 }
 
 export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps) {
-  const actions = useWorkbench((state) => state.actions);
+  const pending = useWorkbench((state) => state.pending);
   const jobs = useWorkbench((state) => state.jobs);
   const { project, scenes, profiles, latest, findings } = workspace;
   const { scene, selectScene, profile, selectProfile } = useSelection(project.root, scenes, profiles);
@@ -135,7 +135,7 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
   const context = { scene, latest: sceneLatest, profile, playhead: 0 };
   const stateOf = (action: string, target: SceneId | null = sceneId): ActionState => {
     const job = jobFor(action, target);
-    const busy = actions[keyOf(action, target)]?.pending === true || (job !== null && isActive(job));
+    const busy = pending.has(keyOf(action, target)) || (job !== null && isActive(job));
     return { busy, fraction: busy && job ? progressFraction(job.progress) : null };
   };
 
