@@ -1,7 +1,7 @@
 # director.yaml
 
-Read this when creating a project's spec or changing its theme, storyboard, profiles or layout
-margins. Only `project.name` is required; unknown keys are ignored. An invalid file fails renders
+Read this when creating a project's spec or changing its viewer, storyboard, theme, profiles or
+layout margins. Only `project.name` is required; unknown keys are ignored. An invalid file fails renders
 with `invalid_spec` and the YAML line, so validate edits by calling `inspect` afterwards.
 
 ```yaml
@@ -22,6 +22,19 @@ direction:
     b: secondary
     c: accent
 safe_area: {top: 0.05, right: 0.05, bottom: 0.08, left: 0.05}
+brief:
+  viewer:
+    who: a first-year student who uses the quadratic formula without knowing why
+    level: general                 # intro | general | expert
+    knows: [solving linear equations, $(x + p)^2$]
+    new: [completing the square]
+    question: Where does the quadratic formula come from?
+    wrong_guess: it is a fact to memorize; no picture or reason behind it
+    aha: adding (b/2a)^2 to both sides makes the left side a perfect square
+    payoff: can rebuild the formula from any quadratic
+    colors: {primary: a, secondary: b, accent: c}
+qa:
+  pacing: {beat_max_seconds: 18}   # a budget from references/viewer.md, for this project
 render:
   profile: preview                 # default profile
 profiles:
@@ -31,17 +44,29 @@ storyboard:
   - id: claim                      # equals the beat id in the scene
     intent: introduce              # introduce | explain | compare | reveal | prove | recap
     audience_question: Which x solve ax^2 + bx + c = 0?
+    changes: the equation appears  # one verb
     takeaway: Any quadratic with a nonzero leading coefficient.
   - id: complete
     intent: prove
     transition: continue           # continue | contrast | reveal | chapter
     audience_question: How can the left side become a perfect square?
+    changes: (b/2a)^2 is added to both sides
     takeaway: Adding (b/2a)^2 to both sides completes the square.
+    keep: [claim]                  # what must stay visible: pass it to keep=
+    aha: true                      # exactly one beat; mirror it with beat(..., aha=True)
 ```
 
-- **Storyboard.** One entry per beat, same ids and order as the `with self.beat("…")` calls. Also
-  accepted: `focus`, `visual_metaphor`, `duration`. It is the plan readers and the workbench see;
-  the scene code is what renders.
+- **Viewer.** `brief.viewer` is who the film is for; write it first ([viewer.md](viewer.md)
+  explains every key). `level` picks the pacing budgets and default holds; `knows` items written
+  `$…$` are notation the viewer already reads; `question`, `wrong_guess` and `aha` are required
+  by `qa`'s `viewer_plan` check, and `question` labels the last tile of `beats.png`.
+- **Storyboard.** One entry per beat, same ids and order as the `with self.beat("…")` calls of
+  `engine.main_scene`. `qa` reads `audience_question` and `takeaway` (each beat needs both),
+  `intent` and `aha` (exactly one beat); `beats.png` prints each beat's question. `changes` and
+  `keep` are for you. Also accepted: `focus`, `visual_metaphor`, `duration`.
+- **QA pacing.** `qa.pacing` overrides budgets by name for this project (the table in
+  [viewer.md](viewer.md#3-budgets)). An unknown name, or a `level` other than `intro`,
+  `general` or `expert`, fails renders with a `composition` finding.
 - **Scenes.** Every `*.py` under `source_dir` (plus `engine.source`) is scanned for scene classes.
   `scenes: [{id, class, file, purpose, duration_seconds}]` gives scenes stable ids that `scene`
   accepts.

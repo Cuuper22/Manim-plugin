@@ -26,6 +26,8 @@ from manim_director_runtime import DirectedScene
 
 
 class Shapes(DirectedScene):
+    final_hold = 0
+
     def construct(self):
         print("this must not reach the protocol stream")
         with self.beat("circle", run_time=0.3, hold=0.2):
@@ -99,10 +101,10 @@ def test_render_moves_video_sections_and_beat_timeline_into_out_dir(project: Pat
         "avg_frame_rate": "10/1",
     }
     timeline = json.loads((project / out / "Shapes.timeline.json").read_text())
-    assert timeline["version"] == 1 and timeline["scene"] == "Shapes"
+    assert timeline["version"] == 2 and timeline["scene"] == "Shapes"
     assert [(b["id"], b["file"], b["line"]) for b in timeline["beats"]] == [
-        ("circle", "scenes/main.py", 8),
-        ("square", "scenes/main.py", 10),
+        ("circle", "scenes/main.py", 10),
+        ("square", "scenes/main.py", 12),
     ]
     assert timeline["beats"][0]["start_seconds"] == 0.0
     assert timeline["beats"][1]["end_seconds"] == pytest.approx(timeline["duration_seconds"])

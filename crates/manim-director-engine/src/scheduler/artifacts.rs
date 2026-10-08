@@ -225,7 +225,9 @@ fn allowed_kinds(task: &Task) -> &'static [ArtifactKind] {
     match task {
         Task::Init(_) | Task::Ingest(_) => &[File],
         Task::Render(_) => &[Video, Section, Captions, Timeline],
-        Task::Still(_) | Task::Frame(_) | Task::Qa(_) => &[Image],
+        Task::Still(_) | Task::Frame(_) => &[Image],
+        // Sampled frames, plus a DirectedScene render's beats.png critique sheet.
+        Task::Qa(_) => &[Image, ContactSheet],
         Task::ContactSheet(_) => &[ContactSheet],
         Task::Captions(_) => &[Captions],
         Task::Export(ExportTask::Zip(_)) => &[Archive],
@@ -310,8 +312,10 @@ fn inspect(path: &Path, artifact: &Artifact) -> Result<Option<MediaInfo>, ErrorB
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<Timeline>(&bytes).ok());
             match timeline {
-                Some(timeline) if timeline.version == 1 => Ok(None),
-                _ => Err(fail(Check::Parse, "not a version 1 beat timeline")),
+                // Version 2 adds pacing records (events, captions, settles) that only the
+                // runtime's qa reads; the beats keep their version 1 shape.
+                Some(timeline) if matches!(timeline.version, 1 | 2) => Ok(None),
+                _ => Err(fail(Check::Parse, "not a version 1 or 2 beat timeline")),
             }
         }
         ArtifactKind::File => Ok(None),
@@ -616,8 +620,8 @@ fn alpha_pixel_format(value: &str) -> bool {
 mod tests {
     use super::*;
     use manim_director_core::{
-        CaptionsResult, CaptionsTask, MediaFormat, RenderResult, RenderSettings, RenderTask,
-        SceneRef, ARTIFACTS_DIR,
+        CaptionsResult, CaptionsTask, MediaFormat, QaTask, RenderResult, RenderSettings,
+        RenderTask, SafeArea, SceneRef, SourceKind, ARTIFACTS_DIR,
     };
 
     fn probe(json: Value) -> ProbeOutput {
@@ -853,6 +857,40 @@ mod tests {
             (data["check"].as_str(), &data["path"]),
             (Some("contract"), &Value::Null)
         );
+    }
+
+    #[test]
+    fn qa_reports_frames_and_a_beat_sheet() {
+        let task = Task::Qa(QaTask {
+            source: "a.mp4".into(),
+            source_kind: SourceKind::Video,
+            frames: 8,
+            safe_area: SafeArea::default(),
+            timeline: None,
+            out_dir: ".manim-director/artifacts/job".into(),
+        });
+        assert_eq!(
+            allowed_kinds(&task),
+            [ArtifactKind::Image, ArtifactKind::ContactSheet]
+        );
+    }
+
+    #[test]
+    fn beat_timelines_of_version_1_and_2_are_accepted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("A.timeline.json");
+        let timeline = artifact(ArtifactKind::Timeline, "A.timeline.json");
+        let check = |version: u32| {
+            let beats = json!([{"id": "a", "start_seconds": 0.0, "end_seconds": 1.0,
+                "file": "a.py", "line": 3}]);
+            let body = json!({"version": version, "scene": "A", "duration_seconds": 1.0,
+                "beats": beats, "events": [], "settles": []});
+            std::fs::write(&path, body.to_string()).unwrap();
+            inspect(&path, &timeline)
+        };
+        assert!(check(1).is_ok());
+        assert!(check(2).is_ok());
+        assert_eq!(check(3).unwrap_err().data.unwrap()["check"], "parse");
     }
 
     #[test]

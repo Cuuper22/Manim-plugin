@@ -12,6 +12,7 @@ from .themes import Role, Theme
 
 if TYPE_CHECKING:
     from .derivation import Derivation
+    from .kit import DotArray, Figure, FunctionPlot, Readout, VectorGrid
     from .scene import Directed, DirectedMovingCameraScene, DirectedScene, DirectedThreeDScene
 
 __version__ = "2.0.0"
@@ -22,6 +23,11 @@ _SCENE_EXPORTS = {
     "DirectedScene": "scene",
     "DirectedMovingCameraScene": "scene",
     "DirectedThreeDScene": "scene",
+    "DotArray": "kit",
+    "Figure": "kit",
+    "FunctionPlot": "kit",
+    "Readout": "kit",
+    "VectorGrid": "kit",
 }
 
 __all__ = [
@@ -33,12 +39,17 @@ __all__ = [
     "DirectedScene",
     "DirectedThreeDScene",
     "DirectorError",
+    "DotArray",
+    "Figure",
+    "FunctionPlot",
     "Intent",
+    "Readout",
     "Rect",
     "Region",
     "Role",
     "Theme",
     "Transition",
+    "VectorGrid",
     "__version__",
 ]
 

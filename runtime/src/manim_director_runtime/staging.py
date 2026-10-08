@@ -33,6 +33,7 @@ class Stage:
     glides: dict[int, tuple[Mobject, Mobject]] = field(default_factory=dict)  # id -> (now, before)
     dimmed: dict[int, tuple[Mobject, dict[int, tuple[float, float]]]] = field(default_factory=dict)
     attached: dict[int, Mobject] = field(default_factory=dict)  # child id -> parent
+    overlays: dict[int, Mobject] = field(default_factory=dict)  # adopted kit overlays (R3)
 
     def place(self, mobject: Mobject, region: Region) -> None:
         self.placed[id(mobject)] = (mobject, region)
@@ -50,14 +51,34 @@ class Stage:
     def prune(self, alive: set[int]) -> None:
         """Forget placements that left the scene by any means (plain Manim included)."""
 
-        waiting = {id(m) for m in self.entering} | {id(new) for _, new in self.morphs}
-        self.placed = {k: v for k, v in self.placed.items() if k in alive or k in waiting}
+        coming = [*self.entering, *(new for _, new in self.morphs)]
+        present = alive | {id(member) for m in coming for member in m.get_family()}
+        # A group that gathered on-stage parts is never on stage itself; its parts are.
+        self.placed = {k: v for k, v in self.placed.items() if on_stage(v[0], present)}
         self.dimmed = {k: v for k, v in self.dimmed.items() if k in alive}
 
 
 def bounds(mobject: Mobject) -> Rect:
     x, y = mobject.get_center()[:2]
     return Rect.around((float(x), float(y)), float(mobject.width), float(mobject.height))
+
+
+def bounds_without(mobject: Mobject, skipped: set[int]) -> Rect | None:
+    """The bounds of `mobject` without the members in `skipped` (None if nothing is left)."""
+
+    if not any(id(member) in skipped for member in mobject.get_family()):
+        return bounds(mobject)
+    rects = [
+        bounds(leaf) for leaf in mobject.family_members_with_points() if id(leaf) not in skipped
+    ]
+    if not rects:
+        return None
+    return Rect(
+        min(r.left for r in rects),
+        min(r.bottom for r in rects),
+        max(r.right for r in rects),
+        max(r.top for r in rects),
+    )
 
 
 def plan(

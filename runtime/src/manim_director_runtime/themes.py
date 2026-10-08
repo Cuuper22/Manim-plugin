@@ -13,7 +13,16 @@ from typing import Any
 
 from .errors import CompositionError
 
-COLOR_TOKENS = ("background", "foreground", "primary", "secondary", "accent", "muted", "success")
+COLOR_TOKENS = (
+    "background",
+    "foreground",
+    "primary",
+    "secondary",
+    "accent",
+    "muted",
+    "success",
+    "highlight",  # the kit's own marks (notes, links, boxes, ✗): never a content meaning
+)
 _HEX = re.compile(r"#[0-9A-F]{6}")
 
 
@@ -28,6 +37,7 @@ class Theme:
     accent: str
     muted: str
     success: str
+    highlight: str
 
     def __post_init__(self) -> None:
         for token in COLOR_TOKENS:
@@ -112,6 +122,7 @@ class Role(StrEnum):
     HEADING = "heading"
     BODY = "body"
     CAPTION = "caption"
+    NOTE = "note"
     LABEL = "label"
 
 
@@ -127,6 +138,7 @@ TEXT_STYLES = {
     Role.HEADING: TextStyle(34, "MEDIUM", "foreground"),
     Role.BODY: TextStyle(30, "NORMAL", "foreground"),
     Role.CAPTION: TextStyle(26, "NORMAL", "foreground"),
+    Role.NOTE: TextStyle(26, "NORMAL", "foreground"),  # what a note says is read, not glanced at
     Role.LABEL: TextStyle(22, "NORMAL", "muted"),
 }
 MATH_FONT_SIZE = 44

@@ -40,7 +40,8 @@ pub enum Command {
     Frame(FrameArgs),
     /// Lay evenly spaced frames of a video out as one image.
     ContactSheet(ContactSheetArgs),
-    /// Check a render for blank frames, low contrast and safe-area violations.
+    /// Check a render for blank frames, low contrast, safe-area violations and pacing
+    /// (writing beats.png, one frame per beat, for a DirectedScene render).
     Qa(QaArgs),
     /// Explain a failed job or a traceback with file:line findings.
     Diagnose(DiagnoseArgs),

@@ -1,17 +1,29 @@
-"""The `qa` operation: measure sampled frames for blankness, contrast and safe-area use."""
+"""The `qa` operation: measure sampled frames for blankness, contrast and safe-area use, and
+judge a DirectedScene render's pacing from its beat timeline."""
 
 from __future__ import annotations
 
 import statistics
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from . import pacing
 from .errors import invalid_source
-from .media import grab_frame, load_timeline, probe_video, require_pillow, sample_times
+from .media import (
+    BeatTile,
+    VideoInfo,
+    beat_sheet,
+    grab_frame,
+    load_timeline,
+    probe_video,
+    require_pillow,
+    sample_times,
+)
 from .model import ArtifactKind, Finding, RuntimeArtifact, Severity, SourceLocation
 from .paths import atomic_target, ensure_dir
+from .project import StoryBeat, Viewer, load_style
 from .tasks import QaTask, SafeArea
 
 if TYPE_CHECKING:
@@ -25,6 +37,7 @@ _MIN_CONTRAST = 3.0  # WCAG AA for large text; video text and formulas are large
 _MAX_UNSAFE_SHARE = 0.02  # of the content: sparse text clipped by the frame is still caught
 _MAX_UNSAFE_FRACTION = 0.012  # of the frame
 _MAX_EDGE_ACTIVITY = 0.2
+_SHEET_TILES = 24  # beats.png: the first 21 beats, two more frames of the aha, the final frame
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +72,7 @@ def qa(task: QaTask, ctx: Context) -> QaResult:
     beats = load_timeline(task.timeline, ctx)
     samples: list[tuple[float | None, Path]] = []
     artifacts: list[RuntimeArtifact] = []
+    info: VideoInfo | None = None
     if task.source_kind == "image":
         samples.append((None, task.source))
     else:
@@ -88,9 +102,64 @@ def qa(task: QaTask, ctx: Context) -> QaResult:
         frames.append(frame)
         findings += _findings(frame, beats)
         ctx.progress("analyze", number, len(samples))
+    if info is not None and beats is not None and beats.version >= 2:  # v2 records pacing
+        paced, sheet = _pacing(task, info, beats, frames, ctx)
+        findings += paced
+        artifacts.append(sheet)
     severities = {finding.severity for finding in findings}
     status = "fail" if Severity.ERROR in severities else "warn" if severities else "pass"
     return QaResult(status=status, frames=frames, findings=findings, artifacts=artifacts)
+
+
+def _pacing(
+    task: QaTask, info: VideoInfo, beats: Timeline, frames: list[QaFrame], ctx: Context
+) -> tuple[list[Finding], RuntimeArtifact]:
+    """Pacing findings, each pointing at the sampled frame nearest to it, and `beats.png`."""
+
+    style = load_style(ctx.project_root)
+    viewer = style.viewer
+    budgets = pacing.settings(viewer.level if viewer is not None else "general", style.pacing)
+    storyboard = style.storyboard_of(beats.scene)
+    found = pacing.check(beats, budgets, viewer, storyboard)
+
+    def nearest(at: float | None) -> str | None:
+        if at is None:
+            return None
+        return min(frames, key=lambda frame: abs((frame.at_seconds or 0.0) - at)).path
+
+    path = ctx.require_inside(task.out_dir, "out_dir") / "beats.png"
+    beat_sheet(task.source, info, _tiles(beats, storyboard, viewer, info), path, ctx)
+    findings = [replace(finding, frame=nearest(finding.at_seconds)) for finding in found]
+    return findings, ctx.artifact(ArtifactKind.CONTACT_SHEET, path, label="beats")
+
+
+def _tiles(
+    beats: Timeline, storyboard: Sequence[StoryBeat], viewer: Viewer | None, info: VideoInfo
+) -> list[BeatTile]:
+    """A tile per beat at its last still (what the beat leaves the viewer with), else its
+    last frame, under its audience question, and before the aha's tile its motion starting
+    and halfway, under the aha; the final frame closes the sheet under the viewer's own
+    question."""
+
+    frame = 1 / info.fps if info.fps else 0.0
+    tiles = []
+    for plan in pacing.planned(beats, storyboard)[: _SHEET_TILES - 3]:
+        beat = plan.beat
+        stills = [settle for settle in beats.settles if settle.beat == beat.id]
+        last = stills[-1] if stills else None
+        at = last.at + last.still_seconds / 2 if last else beat.end_seconds - frame
+        detail = f"{beat.end_seconds - beat.start_seconds:.1f} s" + (" · aha" if plan.aha else "")
+        motions = [e for e in beats.events if e.beat == beat.id] if plan.aha else []
+        if motions:  # the aha's longest motion, starting and halfway: does it show the idea?
+            aha = viewer.aha if viewer is not None else None
+            motion = max(motions, key=lambda e: e.seconds)
+            for share, moment in ((0.0, "motion starts"), (0.5, "mid-motion")):
+                at_motion = info.frame_time(motion.at + share * motion.seconds + frame)
+                tiles.append(BeatTile(at_motion, beat.id, moment, aha or plan.question))
+        tiles.append(BeatTile(info.frame_time(at), beat.id, detail, plan.question))
+    question = viewer.question if viewer is not None else None
+    end = f"{info.duration_seconds:.1f} s"
+    return [*tiles, BeatTile(info.frame_time(info.duration_seconds), "final frame", end, question)]
 
 
 def measure(image: Image, safe_area: SafeArea) -> FrameMetrics:

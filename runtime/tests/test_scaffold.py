@@ -12,7 +12,18 @@ from manim_director_runtime.inspection import discover
 from manim_director_runtime.scaffold import init, scene_class, scene_source, templates
 from manim_director_runtime.tasks import DiscoverTask, InitTask
 
-TEMPLATES = ("explainer", "derivation", "geometry", "graph", "vertical_short")
+TEMPLATES = (
+    "explainer",
+    "concrete_first",
+    "contrast",
+    "derivation",
+    "geometry",
+    "graph",
+    "misconception",
+    "picture_to_formula",
+    "vertical_short",
+    "zoom_detail",
+)
 
 
 def create(name: str | None = "Sequence Lab", **fields) -> InitTask:

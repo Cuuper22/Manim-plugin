@@ -14,12 +14,34 @@ NOTE_BELOW = 0.12  # under its line, much closer than the next line so it reads 
 
 
 class Derivation(VGroup):
-    """The on-stage result of `derive()`; `lines` and `notes` follow the steps in order."""
+    """The on-stage result of `derive()`; `lines` and `notes` follow the steps in order.
+    `stacked` (not in place) and `below` (notes under their lines) say how it was laid out,
+    so `derive(continues=...)` can add lines the same way."""
 
-    def __init__(self, lines: Sequence[MathTex], notes: Sequence[Mobject | None]) -> None:
+    def __init__(
+        self,
+        lines: Sequence[MathTex],
+        notes: Sequence[Mobject | None],
+        *,
+        stacked: bool = True,
+        below: bool = False,
+    ) -> None:
         super().__init__(*lines, *(note for note in notes if note is not None))
         self.lines = list(lines)
         self.notes = list(notes)
+        self.stacked, self.below = stacked, below
+        self.natural_width = float(lines[0].width)  # before placement scaled it
+
+    @property
+    def size(self) -> float:
+        """How much placement has scaled the derivation since it was built."""
+
+        return float(self.lines[0].width) / self.natural_width
+
+    def extend(self, lines: Sequence[MathTex], notes: Sequence[Mobject | None]) -> None:
+        self.add(*lines, *(note for note in notes if note is not None))
+        self.lines += lines
+        self.notes += notes
 
 
 def stack(

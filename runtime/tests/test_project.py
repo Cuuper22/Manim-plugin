@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from manim_director_runtime.errors import CompositionError
-from manim_director_runtime.project import ProjectStyle, find_spec, load_style
+from manim_director_runtime.project import (
+    ProjectStyle,
+    StoryBeat,
+    Viewer,
+    find_spec,
+    load_style,
+)
 from manim_director_runtime.tasks import SAFE_AREA_DEFAULT, SafeArea
 
 
@@ -38,6 +44,44 @@ def test_settings_are_read_with_defaults(tmp_path: Path) -> None:
     assert style.symbols == {r"\phi": "accent", "x": "#123456"}
 
 
+def test_the_viewer_model_storyboard_and_pacing_budgets_are_read(tmp_path: Path) -> None:
+    write(
+        tmp_path / "director.yaml",
+        """engine: {main_scene: OddSquares}
+brief:
+  viewer:
+    who: a curious 16-year-old
+    level: intro
+    knows: [odd numbers, $n^2$]
+    question: Why do sums of odd numbers land on squares?
+storyboard:
+  - id: grow
+    intent: explain
+    audience_question: What shape comes next?
+    takeaway: Adding 7 turns 3x3 into 4x4.
+    aha: true
+  - id: recap
+qa:
+  pacing: {max_new_per_beat: 4}
+""",
+    )
+    style = load_style(tmp_path)
+    assert style.viewer == Viewer(
+        level="intro",
+        knows=("odd numbers", "$n^2$"),
+        question="Why do sums of odd numbers land on squares?",
+        missing=("wrong_guess", "aha"),
+    )
+    assert style.storyboard == (
+        StoryBeat(
+            "grow", "explain", "What shape comes next?", "Adding 7 turns 3x3 into 4x4.", True
+        ),
+        StoryBeat("recap"),
+    )
+    assert style.storyboard_scene == "OddSquares"
+    assert style.pacing == {"max_new_per_beat": 4}
+
+
 def test_no_project_means_defaults(tmp_path: Path) -> None:
     write(tmp_path / "director.yaml", "")
     assert load_style(tmp_path) == ProjectStyle()
@@ -53,6 +97,11 @@ def test_no_project_means_defaults(tmp_path: Path) -> None:
         ("safe_area: {left: 0.6}\n", "safe_area.left must be between 0 and 0.45"),
         ("safe_area: {left: yes}\n", "safe_area.left must be a number"),
         ("direction: {symbols: [x]}\n", "direction.symbols must map"),
+        ("brief: {viewer: [x]}\n", "brief.viewer must be a mapping"),
+        ("brief: {viewer: {level: 2}}\n", "brief.viewer.level must be a name"),
+        ("brief: {viewer: {knows: algebra}}\n", "brief.viewer.knows must be a list"),
+        ("storyboard: [{intent: explain}]\n", "storyboard must be a list of beats"),
+        ("qa: {pacing: {words_per_second: fast}}\n", "qa.pacing must map budget names"),
     ],
 )
 def test_invalid_settings_name_the_file_and_key(tmp_path: Path, text: str, message: str) -> None:

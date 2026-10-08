@@ -55,9 +55,21 @@ def test_ready_frame_comes_first_and_idle_eof_exits_quietly(project: Path) -> No
         "accent",
         "muted",
         "success",
+        "highlight",
     ]
     assert all(color.startswith("#") and color == color.upper() for _, color in themes[0]["tokens"])
-    templates = ["explainer", "derivation", "geometry", "graph", "vertical_short"]
+    templates = [
+        "explainer",
+        "concrete_first",
+        "contrast",
+        "derivation",
+        "geometry",
+        "graph",
+        "misconception",
+        "picture_to_formula",
+        "vertical_short",
+        "zoom_detail",
+    ]
     assert ready["catalog"]["project_templates"] == ready["catalog"]["scene_templates"] == templates
 
 

@@ -1,0 +1,70 @@
+version: 1
+project:
+  name: {{name}}
+  description: Pattern 5, misconception then repair. Predict, test with numbers, then see why on a triangle.
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: RootOfASum
+theme: {{theme}}
+direction:
+  symbols: {a: primary, b: secondary}
+brief:
+  viewer:
+    who: an algebra student who knows square roots and Pythagoras
+    level: general
+    knows: [square roots, "letters $a$ and $b$ for numbers", "$a^2 + b^2 = c^2$"]
+    new: [testing a rule with numbers, '$\sqrt{a+b} \le \sqrt{a} + \sqrt{b}$']
+    question: Does the square root split over a sum, like it does over a product?
+    wrong_guess: yes, since √(ab) = √a·√b, surely √(a+b) = √a + √b
+    aha: √a and √b are the legs of a right triangle whose long side is √(a+b), and straight across is shorter than around
+    payoff: spots the mistake, and knows which side is bigger
+    colors: {primary: a, secondary: b, accent: the long side, success: the repair}
+storyboard:
+  - id: hook
+    intent: introduce
+    audience_question: Does the square root split over a product?
+    changes: √(4·9) = √4 · √9 = 6 appears
+    takeaway: Over a product, the root splits.
+  - id: predict
+    intent: introduce
+    audience_question: Does it split over a sum too?
+    changes: the tempting rule appears on a card
+    takeaway: The viewer commits to yes or no.
+  - id: test
+    intent: explain
+    audience_question: Is it true for real numbers?
+    changes: both sides are computed for a = 9, b = 16
+    takeaway: One side gives 5, the other 7.
+    keep: [card]
+  - id: refute
+    intent: explain
+    audience_question: So is the rule true?
+    changes: the rule is struck out
+    takeaway: 5 is not 7, so the shortcut fails.
+    keep: [card]
+  - id: picture
+    intent: explain
+    audience_question: Can a picture show both sides?
+    changes: √a and √b become the legs of a right triangle
+    takeaway: √a + √b is the way around two sides.
+    keep: [card]
+  - id: hypotenuse
+    intent: reveal
+    audience_question: How long is the third side?
+    changes: the long side is labeled √(a + b)
+    takeaway: By Pythagoras the long side is √(a + b), the way straight across.
+    keep: [card, triangle]
+    aha: true
+  - id: repair
+    intent: prove
+    audience_question: So what is true instead?
+    changes: the rule turns into √(a+b) ≤ √a + √b
+    takeaway: Straight across is never longer than around, so √(a+b) ≤ √a + √b.
+    keep: [card, triangle]
+  - id: recap
+    intent: recap
+    audience_question: So does the square root split over a sum?
+    changes: the long side is labeled again
+    takeaway: Roots split over products, not over sums.
+    keep: [card, triangle]

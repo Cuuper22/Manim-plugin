@@ -34,11 +34,12 @@ class Beat:
     transition: Transition
     focus: Any
     keep: tuple[Any, ...]
-    hold: float
+    hold: float | None  # None: chosen from the viewer's budgets at the beat's end
     run_time: float | None
     intent: Intent | None = None
     question: str | None = None
     takeaway: str | None = None
+    aha: bool = False
     scene: Directed | None = field(default=None, repr=False)
     file: str = field(default="", repr=False)  # where `with self.beat(...)` is written
     line: int = field(default=0, repr=False)
@@ -47,7 +48,21 @@ class Beat:
     carried: set[int] = field(default_factory=set, repr=False)
     transitioned: bool = field(default=False, repr=False)
     focused: bool = field(default=False, repr=False)
+    started: float = field(default=0.0, repr=False)  # video seconds when it was entered
+    answers: bool = field(default=False, repr=False)  # the beat before it asked to predict
     record: int | None = field(default=None, repr=False)
+
+    def notes(self) -> dict[str, Any]:
+        """The fields a v2 timeline records for this beat."""
+
+        return {
+            "transition": self.transition.value,
+            "intent": None if self.intent is None else self.intent.value,
+            "question": self.question,
+            "takeaway": self.takeaway,
+            "aha": self.aha,
+            "hold": self.hold,
+        }
 
     def __enter__(self) -> Beat:
         assert self.scene is not None

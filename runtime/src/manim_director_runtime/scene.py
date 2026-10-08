@@ -10,7 +10,7 @@ import inspect
 import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, nullcontext, suppress
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,9 @@ import numpy as np
 from manim import (
     DOWN,
     LEFT,
+    ORIGIN,
+    RIGHT,
+    UP,
     Animation,
     AnimationGroup,
     AnnotationDot,
@@ -25,6 +28,7 @@ from manim import (
     Annulus,
     Arrow3D,
     Circumscribe,
+    DecimalNumber,
     Dot,
     Dot3D,
     FadeIn,
@@ -39,7 +43,6 @@ from manim import (
     Mobject,
     MovingCameraScene,
     Rectangle,
-    RoundedRectangle,
     Scene,
     SingleStringMathTex,
     SurroundingRectangle,
@@ -55,16 +58,23 @@ from manim import (
     config,
 )
 from manim.constants import RendererType
+from manim.utils.exceptions import EndSceneEarlyException
 
-from . import motion, timeline
+from . import motion, pacing, timeline
 from .beats import Beat, Intent, Transition
-from .derivation import Derivation, overlay, stack
+from .derivation import LINE_GAP, NOTE_GAP, Derivation, overlay, relation_x, stack
+from .devices import Devices
 from .errors import CompositionError, parse_choice
+from .kit import context
+from .kit.labels import backdrop, label, mathlike
+from .kit.overlay import is_overlay
+from .kit.overlay import pacing as declare
 from .layout import LANES, Rect, Region, fit_scale, frame_regions
 from .project import load_style
 from .staging import (
     Stage,
     bounds,
+    bounds_without,
     describe,
     on_stage,
     parts_inside,
@@ -74,15 +84,19 @@ from .staging import (
     within,
 )
 from .terms import term_groups
-from .texscan import atoms, colorize, without_alignment
-from .themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme, theme
+from .texscan import without_alignment
+from .themes import MATH_FONT_SIZE, Role, Theme, default_theme, theme
+from .viewing import Viewing
 
 MIN_SCALE = 0.5
 SPACING = 0.4
-_MATH_DELIMITER = re.compile(r"(?<!\\)\$")
+MIN_FONT_SIZE = 18.0  # smaller text is a smudge on a phone
+MIN_TICK_SIZE = 14.0  # axis numbers are glanced at, not read
+_PLANNED = ("intent", "question", "takeaway", "aha")  # beat notes a storyboard entry may give
+_READING_ORDER = {Region.HEADER: 0, Region.CAPTION: 2}  # content is 1
 
 
-class Directed:
+class Directed(Devices, Viewing):
     """Mixin behind DirectedScene; combine it with other Scene bases (`Directed, ZoomedScene`)."""
 
     theme: Any = None
@@ -92,6 +106,10 @@ class Directed:
     symbols: Mapping[str, str | ManimColor] = {}
     """TeX symbol -> color token, #RRGGBB or Manim color, merged over director.yaml
     `direction.symbols`."""
+
+    final_hold: float | None = None
+    """Seconds the last frame stays still: None takes the viewer's budget (`final_hold` in
+    budgets.json at `brief.viewer.level`); 0 adds nothing, for a film that loops."""
 
     # Lifecycle ------------------------------------------------------------------------------
 
@@ -105,15 +123,41 @@ class Directed:
     def tear_down(self) -> None:
         self._require_entered()
         self._flush(instant=True)
+        self._hold_last_frame()
         super().tear_down()  # type: ignore[misc]
 
     def play(self, *args: Any, **kwargs: Any) -> None:
         self._require_entered()
-        self._flush(introduced=motion.introduced(args))
+        if not self._holding:  # a hold before staged content plays it only afterwards
+            self._flush(introduced=motion.introduced(args))
         frame = getattr(self.camera, "frame", None)
-        with self._transition(frame is not None and motion.animates(args, frame)):
+        moves_camera = frame is not None and motion.animates(args, frame)
+        with self._transition(moves_camera), self._watched(args):
             super().play(*args, **kwargs)  # type: ignore[misc]
         self._unwrap(args)
+
+    def add(self, *mobjects: Mobject) -> Any:
+        """Manim's add; kit overlays are adopted however they enter (R3)."""
+
+        result = super().add(*mobjects)  # type: ignore[misc]
+        if getattr(self, "_stage", None) is not None:
+            for mobject in mobjects:
+                self._adopt(mobject)
+        return result
+
+    def add_mobjects_from_animations(self, animations: list[Animation]) -> None:
+        """Manim adds whatever a non-introducing animation moves when it is not in the scene,
+        including the Group an AnimationGroup wraps around on-stage parts, which splits the
+        groups they belong to. Add only the pieces that are really new (R2)."""
+
+        visible = self._visible_ids()
+        for animation in animations:
+            if animation.is_introducer() or animation.mobject is None:
+                continue
+            _, new = split_by_stage(animation.mobject, visible)
+            for mobject in new:
+                self.add(mobject)
+                visible |= {id(member) for member in mobject.get_family()}
 
     def _direct(self) -> None:
         _require_matching_shape()
@@ -122,16 +166,30 @@ class Directed:
         symbols = {**style.symbols, **type(self).symbols}
         self._symbol_colors = {tex: self.theme.color(value) for tex, value in symbols.items()}
         self._regions = frame_regions(config.frame_width, config.frame_height, style.safe_area)
+        viewer = style.viewer
+        self._budgets = pacing.settings(viewer.level if viewer else "general", style.pacing)
+        self._story = {beat.id: beat for beat in style.storyboard_of(type(self).__name__)}
+        self._start_viewing()
+        self._notes: list[tuple[str | None, Mobject]] = []  # annotate's notes, by beat
         self._stage = Stage()
         self._beat: Beat | None = None
         self._beats_entered = 0
         self._tags = 0
         self._unentered: Beat | None = None
+        self._answering = False  # the next beat answers the prediction asked in the last
+        self._holding = False  # holding still before staged content enters
         if config.renderer == RendererType.OPENGL:
             self.renderer.background_color = self.theme.background
         else:
             self.camera.background_color = self.theme.background
-        self._restore_defaults = _apply_theme_defaults(self.theme)
+        restore_theme = _apply_theme_defaults(self.theme)
+        token = context.enter(self)
+
+        def restore() -> None:
+            restore_theme()
+            context.leave(token)
+
+        self._restore_defaults = restore
         recorder = timeline.active()
         if recorder is not None:
             recorder.attach()
@@ -139,56 +197,31 @@ class Directed:
     # Content --------------------------------------------------------------------------------
 
     def text(self, text: str, role: Role | str = Role.BODY, **kwargs: Any) -> Text:
-        style = TEXT_STYLES[parse_choice(Role, role)]
-        options = {
-            "font": self.theme.font,
-            "font_size": style.font_size,
-            "weight": style.weight,
-            "color": self.theme.color(style.color),
-            "warn_missing_font": False,
-        }
-        return Text(text, **{**options, **kwargs})
+        return context.typeset_text(self.theme, text, role, **kwargs)
 
     def tex(self, *strings: str, role: Role | str = Role.BODY, **kwargs: Any) -> Tex:
         """Text-mode LaTeX; symbols inside `$...$` get their colors."""
 
-        style = TEXT_STYLES[parse_choice(Role, role)]
-        pieces = [colorize(s, self._symbol_colors, math_only=True) for s in strings]
-        options = {"font_size": style.font_size, "color": self.theme.color(style.color)}
-        mobject = Tex(*pieces, **{**options, **kwargs})
-        mobject.authored_tex = mobject.arg_separator.join(strings)  # copies keep it
-        return mobject
+        return context.typeset_tex(self.theme, self._symbol_colors, *strings, role=role, **kwargs)
 
     def math(self, *strings: str, **kwargs: Any) -> MathTex:
         """MathTex with symbol colors, split into atoms so TransformMatchingTex can match them."""
 
-        pieces = [colorize(s, self._symbol_colors) for s in strings]
-        if len(pieces) == 1:
-            pieces = atoms(pieces[0])
-            kwargs.setdefault("arg_separator", "")
-        options = {"font_size": MATH_FONT_SIZE, "color": self.theme.foreground}
-        mobject = MathTex(*pieces, **{**options, **kwargs})
-        source = strings[0] if len(strings) == 1 else mobject.arg_separator.join(strings)
-        mobject.authored_tex = source
-        return mobject
+        return context.typeset_math(self.theme, self._symbol_colors, *strings, **kwargs)
 
     def title(self, text: str, **kwargs: Any) -> Text:
         """Set the title lane; a previous title cross-fades into this one."""
 
         self._retire(self._occupant(Region.HEADER))
         mobject = self.text(text, Role.TITLE, **kwargs)
+        self._lane(mobject, "title", text)
         self.place(mobject, region=Region.HEADER)
         return mobject
 
     def caption(self, text: str | None, **kwargs: Any) -> Mobject | None:
         """Set the caption lane (at most two lines), or clear it with None."""
 
-        self._retire(self._occupant(Region.CAPTION))
-        if text is None:
-            return None
-        mobject = self._caption_lines(" ".join(text.split()), **kwargs)
-        self.place(mobject, region=Region.CAPTION)
-        return mobject
+        return self._set_caption(text, None, **kwargs)
 
     def region(self, region: Region | str) -> Rect:
         return self._regions[parse_choice(Region, region)]
@@ -204,18 +237,17 @@ class Directed:
         min_scale: float = MIN_SCALE,
     ) -> Mobject:
         """Fit mobjects into a region (arranged along `direction`); they enter at the next
-        animation. Parts already on stage glide there instead, so a new VGroup can gather
-        on-stage objects and new ones; `replaces` morphs an on-stage object into this one.
+        animation. Objects already on stage glide there instead, so `place(old, new)` gathers
+        them; `replaces` morphs an on-stage object into the first mobject (the others enter).
         Nothing moves unless the placement is valid."""
 
         if not mobjects:
             raise CompositionError("place() needs at least one mobject.")
         area_name = parse_choice(Region, region)
-        if replaces is not None:
-            if len(mobjects) != 1:
-                raise CompositionError("replaces= morphs one object; place the others separately.")
-            if not self._visible(replaces) and replaces not in self._stage.entering:
-                raise CompositionError(f"replaces={describe(replaces)} is not on stage.")
+        if replaces is not None and not (
+            self._visible(replaces) or replaces in self._stage.entering
+        ):
+            raise CompositionError(f"replaces={describe(replaces)} is not on stage.")
         layout = plan(
             mobjects,
             area_name,
@@ -226,17 +258,31 @@ class Directed:
             min_scale=min_scale,
         )
         self._require_free(layout.bounds, area_name, ignore=[*mobjects, replaces])
+        # Parts of one component placed together read as one group: a selection lined up.
+        sources = {
+            id(_component(self._placed_root(m))) if self._visible(m) else 0 for m in mobjects
+        }
+        lined_up = len(mobjects) > 1 and len(sources) == 1 and 0 not in sources
         visible = self._visible_ids()
         for mobject, center in zip(mobjects, layout.centers, strict=True):
             staged, new = split_by_stage(mobject, visible)
+            _require_apart(mobject, staged, new)
             for part in staged:
-                self._stage.glides.setdefault(id(part), (part, part.copy()))
+                self._detach(part)
+                # Parts already gliding keep the start they have on screen.
+                if not {id(member) for member in part.get_family()} & self._stage.glides.keys():
+                    self._stage.glides[id(part)] = (part, part.copy())
                 self._carry(part)
             followers = [(m, m.copy()) for m in self._followers(staged)]
-            if replaces is None:
+            if replaces is None or mobject is not mobjects[0]:
                 self._stage.entering += [m for m in new if m not in self._stage.entering]
+            for companion in getattr(mobject, "director_companions", ()):
+                if not self._visible(companion) and companion not in self._stage.entering:
+                    self._stage.entering.append(companion)
             mobject.scale(layout.scale).move_to(center)
             _require_held(mobject)
+            _require_readable(mobject)
+            self._placed_by(mobject)
             for member in mobject.get_family()[1:]:  # the group now owns their placement
                 self._stage.placed.pop(id(member), None)
             self._stage.place(mobject, area_name)
@@ -244,6 +290,11 @@ class Directed:
             for follower, before in followers:  # tags glide along instead of jumping
                 follower.update(0)
                 self._stage.glides.setdefault(id(follower), (follower, before))
+        group = mobjects[0] if len(mobjects) == 1 else VGroup(*mobjects)
+        if lined_up:
+            for mobject in mobjects:
+                self._stage.placed.pop(id(mobject), None)
+            self._stage.place(group, area_name)
         if replaces is not None:
             self._stage.placed.pop(id(replaces), None)
             if replaces in self._stage.entering:
@@ -252,7 +303,7 @@ class Directed:
             else:
                 self._stage.morphs.append((replaces, mobjects[0]))
                 self._carry(replaces)
-        return mobjects[0] if len(mobjects) == 1 else VGroup(*mobjects)
+        return group
 
     # Beats and focus ------------------------------------------------------------------------
 
@@ -263,22 +314,26 @@ class Directed:
         focus: Mobject | None = None,
         transition: Transition | str = Transition.CONTINUE,
         keep: Iterable[Mobject] = (),
-        hold: float = motion.HOLD_SECONDS,
+        hold: float | None = None,
         run_time: float | None = None,
         intent: Intent | str | None = None,
         question: str | None = None,
         takeaway: str | None = None,
+        aha: bool = False,
     ) -> Beat:
         """A named stage change: `with self.beat("hook", focus=row): ...`.
 
         On entry nothing moves. At the first animation inside (or at the end) everything on
         stage that was not kept or placed again leaves, carried objects glide or morph, and
         newly placed objects enter, all styled by `transition`. On exit, `focus` is
-        emphasized and the beat holds for `hold` seconds. `intent`, `question` and
-        `takeaway` are narrative notes kept on the Beat.
+        emphasized and the stage holds still: long enough for the viewer to take in the last
+        change and read the beat's caption, and longer after a result (`aha=True`, or intent
+        reveal, prove or recap), at the pace of `brief.viewer.level`; `hold=` sets the
+        seconds instead. `intent`, `question` and `takeaway` are narrative notes kept on the
+        Beat; `aha=True` marks the beat where the viewer should get the idea.
         """
 
-        if hold < 0 or (run_time is not None and run_time < 0):
+        if (hold is not None and hold < 0) or (run_time is not None and run_time < 0):
             raise CompositionError("A beat's hold and run_time cannot be negative.")
         caller = sys._getframe(1)
         self._unentered = Beat(
@@ -291,6 +346,7 @@ class Directed:
             intent=None if intent is None else parse_choice(Intent, intent),
             question=question,
             takeaway=takeaway,
+            aha=aha,
             scene=self,
             file=caller.f_code.co_filename,
             line=caller.f_lineno,
@@ -321,7 +377,7 @@ class Directed:
                 animation = motion.restore(top, base)
             if animation is not None:
                 animations.append(animation)
-        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time, "focus")
 
     def unfocus(self, run_time: float | None = None) -> None:
         self._flush()
@@ -331,7 +387,7 @@ class Directed:
             if self._visible(top)
         ]
         self._stage.dimmed.clear()
-        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time, "focus")
 
     # Math -----------------------------------------------------------------------------------
 
@@ -344,25 +400,90 @@ class Directed:
         run_time: float | None = None,
         pause: float | None = None,
         replaces: Mobject | None = None,
+        continues: Derivation | None = None,
         min_scale: float = MIN_SCALE,
     ) -> Derivation:
         """Play a derivation, one step at a time, with matching terms carried between steps.
 
         Steps are TeX strings (or MathTex), optionally paired with a note: `(r"= x^2", "expand")`;
-        `$...$` in a note is math at the note's size (`r"divide by $a$"`), and a Mobject is used
-        as it is. Lines stack with their relations aligned and notes `"right"` of them or each
-        `"below"` its line; `"auto"` picks the one that needs less shrinking (below, in a tall
-        region). `in_place=True` transforms one line instead. `replaces` morphs an on-stage
-        expression into the first step instead of writing it.
+        `$...$` in a note is math on the note's baseline at its size (`r"divide by $a$"`), and a
+        Mobject is used as it is. Lines stack with their relations aligned and notes `"right"`
+        of them or each `"below"` its line; `"auto"` picks the one that needs less shrinking
+        (below, in a tall region). `in_place=True` transforms one line instead. `replaces`
+        morphs an on-stage expression into the first step instead of writing it.
+        `continues=steps` adds the lines under an on-stage derivation, in its region, column and
+        size, the first coming from its last line, and returns that derivation.
         """
 
         if not steps:
             raise CompositionError("derive() needs at least one step.")
         if replaces is not None and not self._visible(replaces):
             raise CompositionError(f"replaces={describe(replaces)} is not on stage.")
+        if continues is not None and not (
+            isinstance(continues, Derivation)
+            and continues.stacked
+            and self._visible(continues)
+            and replaces is None
+            and not in_place
+        ):
+            raise CompositionError(
+                "continues= takes a stacked derivation that is on stage (keep it in this beat), "
+                "and goes without replaces= and in_place=."
+            )
         if notes not in ("auto", "right", "below"):
             raise CompositionError(f"notes={notes!r}; use 'auto', 'right' or 'below'.")
-        area_name = parse_choice(Region, region)
+        lines, labels = self._steps(steps)
+        if continues is not None:
+            area_name = self._region_around(continues)
+            block = continues
+            self._extend(continues, lines, labels, area_name)
+        else:
+            area_name = parse_choice(Region, region)
+            block = self._lay_out(lines, labels, area_name, in_place, notes, min_scale, replaces)
+        seconds = motion.STEP_SECONDS if run_time is None else run_time
+        self._settle([], seconds)
+        if continues is not None:
+            first = TransformMatchingTex(continues.lines[-1].copy(), lines[0])
+        elif replaces is None:
+            first = Write(lines[0])
+        else:
+            self._carry(replaces)
+            self._stage.placed.pop(id(replaces), None)
+            self._stage.leaving += self._orphans([replaces])
+            first = motion.morph(replaces, lines[0])
+        older = [note for note in block.notes if note is not None and self._visible(note)]
+        self._flush(
+            along=[first, *_note_in(labels[0], older, self.theme.muted)],
+            run_time=seconds,
+            source="derive",
+        )
+        for i in range(1, len(lines)):
+            # By default each line rests long enough to be read before the next one comes.
+            if pause is None:
+                self._settle([], seconds, least=motion.STEP_PAUSE)
+            elif pause > 0:
+                self.wait(pause)
+            source = lines[i - 1] if in_place else lines[i - 1].copy()
+            shown = [label for label in labels[:i] if label is not None]
+            animations = [
+                TransformMatchingTex(source, lines[i]),
+                *_note_in(labels[i], [] if in_place else shown[-1:], self.theme.muted),
+            ]
+            if in_place and labels[i - 1] is not None:
+                animations.append(FadeOut(labels[i - 1]))
+            self._perform(animations, seconds, "derive")
+        if continues is not None:
+            continues.extend(lines, labels)
+        self.remove(*block.submobjects)
+        if in_place:
+            block.remove(*(m for m in block.submobjects if m not in (lines[-1], labels[-1])))
+        self.add(block)
+        self._stage.place(block, area_name)
+        return block
+
+    def _steps(
+        self, steps: Sequence[str | MathTex | tuple[str | MathTex, str | Mobject]]
+    ) -> tuple[list[SingleStringMathTex], list[Mobject | None]]:
         lines, labels = [], []
         for number, step in enumerate(steps, start=1):
             tex, note = step if isinstance(step, tuple) else (step, None)
@@ -375,7 +496,20 @@ class Directed:
                 )
             lines.append(line)
             labels.append(self._note(note, number))
+        return lines, labels
+
+    def _lay_out(
+        self,
+        lines: list[SingleStringMathTex],
+        labels: list[Mobject | None],
+        area_name: Region,
+        in_place: bool,
+        notes: str,
+        min_scale: float,
+        replaces: Mobject | None,
+    ) -> Derivation:
         area = self._regions[area_name]
+        below = False
         if in_place:
             overlay(lines, labels)
         else:
@@ -387,9 +521,9 @@ class Directed:
                 block = VGroup(*lines, *(label for label in labels if label is not None))
                 return fit_scale(block.width, block.height, area)
 
-            best = max(sides, key=lambda side: (fit(side), side == "right"))
-            stack(lines, labels, below=best == "below")
-        block = Derivation(lines, labels)
+            below = max(sides, key=lambda side: (fit(side), side == "right")) == "below"
+            stack(lines, labels, below=below)
+        block = Derivation(lines, labels, stacked=not in_place, below=below)
         layout = plan(
             [block],
             area_name,
@@ -401,73 +535,52 @@ class Directed:
         )
         self._require_free(layout.bounds, area_name, ignore=[replaces])
         block.scale(layout.scale).move_to(layout.centers[0])
+        _require_readable(block)
         self._pin(block)
-        seconds = motion.STEP_SECONDS if run_time is None else run_time
-        rest = motion.STEP_PAUSE if pause is None else pause
-        if replaces is None:
-            first = Write(lines[0])
-        else:
-            self._carry(replaces)
-            self._stage.placed.pop(id(replaces), None)
-            first = motion.morph(replaces, lines[0])
-        self._flush(along=[first, *_fade_in(labels[0])], run_time=seconds)
-        for i in range(1, len(lines)):
-            if rest > 0:
-                self.wait(rest)
-            source = lines[i - 1] if in_place else lines[i - 1].copy()
-            animations = [TransformMatchingTex(source, lines[i]), *_fade_in(labels[i])]
-            if in_place and labels[i - 1] is not None:
-                animations.append(FadeOut(labels[i - 1]))
-            self._perform(animations, seconds)
-        self.remove(*block.submobjects)
-        if in_place:
-            block.remove(*(m for m in block.submobjects if m not in (lines[-1], labels[-1])))
-        self.add(block)
-        self._stage.place(block, area_name)
         return block
+
+    def _extend(
+        self,
+        block: Derivation,
+        lines: list[SingleStringMathTex],
+        labels: list[Mobject | None],
+        area_name: Region,
+    ) -> None:
+        """Lay `lines` out under `block`'s last line, as if they had been derived with it."""
+
+        stack(lines, labels, below=block.below)
+        more = VGroup(*lines, *(label for label in labels if label is not None))
+        more.scale(block.size, about_point=ORIGIN)
+        last = block.lines[-1]
+        under = [last, *([block.notes[-1]] if block.below and block.notes[-1] else [])]
+        top = min(m.get_bottom()[1] for m in under) - LINE_GAP * block.size
+        more.shift(
+            (relation_x(block.lines[0]) - relation_x(lines[0])) * RIGHT
+            + (top - more.get_top()[1]) * UP
+        )
+        column = [note.get_left()[0] for note in block.notes if note is not None]
+        if column and not block.below:  # the new notes join the column beside the lines
+            for line, label in zip(lines, labels, strict=True):
+                if label is not None:
+                    gap = NOTE_GAP * block.size
+                    label.set_x(max(column[0], line.get_right()[0] + gap) + label.width / 2)
+        if not self._regions[area_name].contains(bounds(more)):
+            raise CompositionError(
+                f"No room under the derivation in the {area_name} region for {len(lines)} more "
+                "line(s): continue in a new beat with replaces=steps.lines[-1], or derive in a "
+                "taller region.",
+                region=area_name.value,
+            )
+        self._require_free(bounds(more), area_name, ignore=[block])
+        self._pin(more)
 
     def _note(self, note: str | Mobject | None, step: int) -> Mobject | None:
         if note is None or isinstance(note, Mobject):
             return note
         if not isinstance(note, str):
             raise CompositionError(f"The note of step {step} is {describe(note)}; use a str.")
-        return self._inline_math(note, Role.LABEL) if "$" in note else self.text(note, Role.LABEL)
-
-    def _inline_math(self, source: str, role: Role) -> VGroup:
-        """One line of `role` text whose `$...$` parts are math on its baseline, scaled so that
-        math capitals and lowercase together match the text's: the note reads like plain text,
-        where Tex would set all of it smaller and in serif.
-
-        Every piece starts with reference glyphs (`Hx`), dropped afterwards, that give the
-        baseline, cap height and x-height; text pieces also end with an H, so the H's mark
-        where the neighbors of a piece go."""
-
-        parts = _MATH_DELIMITER.split(source)
-        if len(parts) % 2 == 0 or not all(tex.strip() for tex in parts[1::2]):
-            raise CompositionError(f"{source!r} has an unpaired or empty $...$.", text=source)
-        color = self.theme.color(TEXT_STYLES[role].color)
-        cap, ex = (glyph.height for glyph in self.text("Hx", role))
-        line, end = VGroup(), None
-        for index, part in enumerate(parts):
-            # `first` goes where the previous piece ends; the next piece starts at `last`.
-            if index % 2:
-                # After \mathopen{} the math starts as a formula does: a leading - is unary.
-                typeset = self.math(r"\textstyle\mathrm{Hx}\mathopen{}", part, color=color)
-                h, x = typeset[0]
-                typeset.scale(np.sqrt(cap * ex / (h.height * x.height)))
-                body = typeset[1]
-                first, last = body.get_left()[0], body.get_right()[0]
-            elif part.strip() or 0 < index < len(parts) - 1:  # or the space between two maths
-                typeset = self.text(f"H{part}H".replace(r"\$", "$"), role)
-                body = VGroup(*typeset[1:-1])
-                first, last = typeset[0].get_right()[0], typeset[-1].get_left()[0]
-            else:
-                continue
-            shift = 0.0 if end is None else end - first
-            typeset.shift((shift, -typeset[0].get_bottom()[1], 0))
-            line.add(*body)
-            end = last + shift
-        return line
+        # Words in the theme's font, `$math$` as math: read in full, but not a new thing.
+        return declare(label(mathlike(note), Role.NOTE), "note", chunks=0, read=None)
 
     def term(self, mobject: Mobject, tex: str, *, occurrence: int | None = None) -> VGroup:
         """The glyphs of `tex` inside a MathTex or Tex, e.g. `self.term(eq, r"\\frac{b}{2a}")`."""
@@ -494,8 +607,8 @@ class Directed:
     ) -> VGroup:
         """Recolor sub-terms (or the whole mobject) and optionally back each occurrence with a
         soft box, like a highlighter pen; `color=None` keeps the glyphs' own (symbol) colors
-        and draws accent boxes. Returns the highlighted glyphs; their `.boxes` (or None) travel
-        and leave with `mobject`."""
+        and draws the boxes in `highlight`. Returns the highlighted glyphs; their `.boxes` (or
+        None) travel and leave with `mobject`, and leave when it is replaced."""
 
         if color is None and not box:
             raise CompositionError("highlight(color=None) only boxes; pass box=True.")
@@ -506,22 +619,23 @@ class Directed:
             else [VGroup(*mobject.family_members_with_points())]
         )
         glyphs = Highlight(*dict.fromkeys(glyph for group in groups for glyph in group))
-        hue = self.theme.accent if color is None else self.theme.color(color)
+        hue = self.theme.highlight if color is None else self.theme.color(color)
         recolor = [] if color is None else [FadeToColor(glyph, hue) for glyph in glyphs]
         animations: list[Animation] = recolor
         if box:
             unique = {tuple(map(id, group)): group for group in groups}.values()
-            glyphs.boxes = VGroup(*(_backdrop(group, hue) for group in unique))
+            glyphs.boxes = VGroup(*(backdrop(group, hue) for group in unique))
             glyphs.boxes.set_z_index(mobject.z_index - 1)
             self._stage.attached[id(glyphs.boxes)] = self._placed_root(mobject)
             if self._pinned(mobject):
                 self._pin(glyphs.boxes)
             animations.append(FadeIn(glyphs.boxes))
         self._flush()
-        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        seconds = motion.FOCUS_SECONDS if run_time is None else run_time
+        self._perform(animations, seconds, "highlight", shown=())
         if glyphs.boxes is not None:  # after FadeIn, which suspends updaters
-            for backdrop, group in zip(glyphs.boxes, unique, strict=True):
-                backdrop.add_updater(_following(group))
+            for box, group in zip(glyphs.boxes, unique, strict=True):
+                box.add_updater(_following(group))
         return glyphs
 
     def tag(self, mobject: Mobject, label: str | None = None) -> MathTex:
@@ -589,14 +703,20 @@ class Directed:
             and (chapter or self._stage.region_of(m) not in LANES)
         ]
         beat.carried = {id(leaf) for m in beat.keep for leaf in m.get_family()}
+        beat.started = self._clock()
+        beat.answers, self._answering = self._answering, False
         # Manim names section files after the section: no path separators in them.
         self.next_section(re.sub(r'[\\/:*?"<>|]', "-", beat.id))
         recorder = timeline.active()
         if recorder is not None:
-            beat.record = recorder.enter(beat.id, beat.file, beat.line, self.renderer.time)
+            notes, plan = beat.notes(), self._story.get(beat.id)
+            if plan is not None:  # record what holds use: the storyboard, unless the code says
+                notes |= {key: notes[key] or getattr(plan, key) for key in _PLANNED}
+            beat.record = recorder.enter(beat.id, beat.file, beat.line, self.renderer.time, **notes)
         self._beat = beat
 
     def _exit_beat(self, beat: Beat, *, completed: bool) -> None:
+        hold = 0.0
         try:
             if completed:
                 self._flush()
@@ -606,13 +726,49 @@ class Directed:
                         "the stage; place it, play it in, or keep it.",
                         beat=beat.id,
                     )
-                if beat.hold > 0:
-                    self.wait(beat.hold)
+                if beat.hold is None:
+                    hold = self._auto_hold(beat)
+                    self._still_for(hold)
+                elif beat.hold > 0:
+                    hold = beat.hold
+                    self.wait(hold)
         finally:
             self._beat = None
+            self._answering = self._asked_in == beat.id
             recorder = timeline.active()
             if recorder is not None and beat.record is not None:
-                recorder.exit(beat.record, self.renderer.time)
+                recorder.exit(beat.record, self.renderer.time, hold, auto=beat.hold is None)
+
+    def _auto_hold(self, beat: Beat) -> float:
+        """The still a beat needs at its end, less the stillness it already ends with: time to
+        read its captions and title and then take in its last change, one after the other
+        (R7)."""
+
+        events = [e for e in self._events if e.beat == beat.id]
+        ended, need = pacing.end_still(events, self._budgets, result=self._result(beat))
+        items = [*self._lane_reading(), (beat.started if ended is None else ended, need)]
+        return max(pacing.read_through(items) - self._clock(), 0.0)
+
+    def _result(self, beat: Beat | None) -> bool:
+        """Whether `beat` delivers a result whose point must land (see `pacing.planned`)."""
+
+        if beat is None:
+            return False
+        plan = self._story.get(beat.id)
+        intent = beat.intent.value if beat.intent else plan.intent if plan else None
+        aha = beat.aha or bool(plan and plan.aha)
+        return aha or beat.answers or intent in pacing.RESULT_INTENTS
+
+    def _hold_last_frame(self) -> None:
+        """Keep the final frame on screen for `final_hold` seconds of stillness."""
+
+        hold = type(self).final_hold
+        hold = self._budgets.final_hold if hold is None else hold
+        ended = max(
+            (e.at + e.seconds for e in self._events if e.source not in pacing.SIGNALS), default=0.0
+        )
+        with suppress(EndSceneEarlyException):  # a render of only some animations (-n)
+            self._still_for(hold - (self._clock() - ended))
 
     def _flush(
         self,
@@ -621,15 +777,23 @@ class Directed:
         instant: bool = False,
         along: Sequence[Animation] = (),
         run_time: float | None = None,
+        source: str = "transition",
     ) -> None:
         """Play everything staged since the last animation as one transition, together with
-        `along` (animations that should not wait for it)."""
+        `along` (animations that should not wait for it); `source` names the call for the
+        timeline."""
 
         stage, beat = self._stage, self._beat
         starting = beat is not None and not beat.transitioned
         focusing = beat is not None and beat.focus is not None and not beat.focused
         if not (starting or focusing or along or stage.pending()):
             return
+        if not starting and stage.pending():  # read, then watch: mid-beat, it waits its turn
+            self._holding = True
+            try:
+                self._settle([], motion.TRANSITION_SECONDS[Transition.CONTINUE], staged=True)
+            finally:
+                self._holding = False
         transition = beat.transition if beat is not None else Transition.CONTINUE
         visible = self._visible_ids()
         stage.prune(visible)
@@ -640,12 +804,21 @@ class Directed:
                 if id(m) in visible and not self._carried(m, beat):
                     stage.leaving += parts_outside(m, beat.carried)
             restores = self._release_dimmed(set(map(id, stage.leaving)))
+        # A tag or highlight box belongs to the object it marks, not to what that becomes.
+        followers = self._followers([old for old, _ in stage.morphs])
+        stage.leaving += [m for m in followers if m not in stage.leaving]
+        gone = [*stage.leaving, *(old for old, _ in stage.morphs)]
+        if gone:  # overlays leave with what they are drawn on
+            stage.leaving += self._orphans(gone)
         covered = {id(leaf) for m in introduced for leaf in m.get_family()}
         entering = [m for m in stage.entering if id(m) not in visible | covered]
         leaving, morphs, glides = stage.leaving, stage.morphs, list(stage.glides.values())
         stage.entering, stage.leaving, stage.morphs, stage.glides = [], [], [], {}
         seconds = motion.TRANSITION_SECONDS[transition]
-        if beat is not None and beat.run_time is not None:
+        # The beat's run_time is for what it brings in or moves, not for clearing the stage
+        # or changing the caption.
+        arriving = morphs or glides or along or not all(map(_lane, entering))
+        if beat is not None and beat.run_time is not None and arriving:
             seconds = beat.run_time
         if run_time is not None:
             seconds = run_time
@@ -657,32 +830,59 @@ class Directed:
                 seconds,
             )
             leaving, entering, morphs = [], [new for _, new in morphs] + entering, []
+        if transition is Transition.REVEAL:  # the question first, then content, then caption
+            entering.sort(key=lambda m: _READING_ORDER.get(stage.region_of(m), 1))
         changes = [
-            *(motion.morph(old, new) for old, new in morphs),
-            *(motion.glide(m, before, self._dim_base(m)) for m, before in glides),
-            *(motion.arrive(m, transition) for m in entering),
-            *along,
+            *((new, motion.morph(old, new)) for old, new in morphs),
+            *((m, motion.glide(m, before, self._dim_base(m))) for m, before in glides),
+            *((m, motion.arrive(m, transition)) for m in entering),
+            *((a.mobject, a) for a in along),
         ]
+        # What takes the place of something leaving waits until it is gone: two captions or
+        # two formulas never show at once.
+        vacated = [bounds(m) for m in leaving if m.family_members_with_points()]
+        later = [a for m, a in changes if any(bounds(m).overlaps(r) for r in vacated)]
         departures = [*(motion.depart(m, transition) for m in leaving), *restores]
-        self._perform(motion.staggered(departures, changes, transition), seconds)
+        self._perform(
+            motion.staggered(
+                departures,
+                [a for _, a in changes if a not in later],
+                transition,
+                waiting=later,
+                ordered=transition is Transition.REVEAL,
+            ),
+            seconds,
+            source,
+        )
         focus = None if beat is None or beat.focused else beat.focus
         if focus is not None and self._visible(focus):
             beat.focused = True
             self.focus(focus, run_time=0.0 if seconds == 0 else None)
 
-    def _perform(self, animations: Sequence[Animation], run_time: float) -> None:
+    def _perform(
+        self,
+        animations: Sequence[Animation],
+        run_time: float,
+        source: str = "transition",
+        *,
+        shown: Sequence[Mobject] | None = None,
+    ) -> None:
+        """Play director animations; `source` and `shown` (what enters, when the animations
+        do not introduce it themselves) describe them to the timeline."""
+
         if not animations:
             return
-        if run_time > 0:
-            with self._transition():
-                super().play(*animations, run_time=run_time)  # type: ignore[misc]
-            self._unwrap(animations)
-            return
-        for animation in animations:  # run_time 0: land on the end state without frames
-            animation._setup_scene(self)
-            animation.begin()
-            animation.finish()
-            animation.clean_up_from_scene(self)
+        with self._shown(source, animations, shown):
+            if run_time > 0:
+                with self._transition():
+                    super().play(*animations, run_time=run_time)  # type: ignore[misc]
+                self._unwrap(animations)
+                return
+            for animation in animations:  # run_time 0: land on the end state without frames
+                animation._setup_scene(self)
+                animation.begin()
+                animation.finish()
+                animation.clean_up_from_scene(self)
 
     def _transition(self, applies: bool = True) -> AbstractContextManager[None]:
         """When `applies`, mark what plays inside (the director's own animations, camera moves)
@@ -735,7 +935,55 @@ class Directed:
         """On-stage tags and highlight boxes attached to any of `parts`."""
 
         ids = {id(member) for part in parts for member in part.get_family()}
-        return [m for m in self.mobjects if id(self._stage.attached.get(id(m))) in ids]
+        return [
+            m
+            for m in self.mobjects
+            if id(self._stage.attached.get(id(m))) in ids and id(m) not in self._stage.overlays
+        ]
+
+    def _adopt(self, mobject: Mobject) -> None:
+        """Register a kit overlay with the placed object it is drawn on (R3); overlays follow
+        it by themselves, so they never take part in its glides."""
+
+        if not is_overlay(mobject) or id(mobject) in self._stage.overlays:
+            return
+        self._stage.overlays[id(mobject)] = mobject
+        self._stage.attached[id(mobject)] = self._placed_root(mobject.director_parent)
+
+    def _orphans(self, gone: Sequence[Mobject]) -> list[Mobject]:
+        """On-stage overlays drawn on anything in `gone`, which must leave with it."""
+
+        ids = {id(member) for m in gone for member in m.get_family()}
+        visible = self._visible_ids()
+        return [
+            overlay
+            for key, overlay in self._stage.overlays.items()
+            if id(self._stage.attached[key]) in ids
+            and on_stage(overlay, visible)
+            and not within(overlay, gone)
+        ]
+
+    def _detach(self, part: Mobject) -> None:
+        """A part of a placed group that is placed on its own leaves the group (R6), so the
+        group's bounds no longer count it; it keeps its identity and glides."""
+
+        root = self._placed_root(part)
+        if root is part:
+            return
+        members = {id(member) for member in part.get_family()}
+        for holder in root.get_family():
+            if id(holder) in members:  # the part keeps its own children
+                continue
+            loose = [sub for sub in holder.submobjects if id(sub) in members]
+            if loose:
+                holder.remove(*loose)
+        self.add(part)
+
+    def _holds(self, mobject: Mobject) -> bool:
+        """Whether `mobject` is placed (perhaps still entering) or on stage."""
+
+        placed = [m for m, _ in self._stage.placed.values()]
+        return within(mobject, placed) or self._visible(mobject)
 
     def _placed_root(self, mobject: Mobject) -> Mobject:
         """The placed object that `mobject` is part of (a derivation line's block), if any."""
@@ -754,9 +1002,12 @@ class Directed:
     def _carried(self, mobject: Mobject, beat: Beat) -> bool:
         """Carried as a whole; a group carried only in part leaves its other parts behind."""
 
+        parent = self._stage.attached.get(id(mobject))
+        if id(mobject) in self._stage.overlays:
+            kept = id(mobject) in beat.carried or mobject.director_persist
+            return kept and self._carried(parent, beat)
         if id(mobject) in beat.carried:
             return True
-        parent = self._stage.attached.get(id(mobject))
         return parent is not None and self._carried(parent, beat)
 
     def _staying(self, mobject: Mobject) -> list[Mobject]:
@@ -788,13 +1039,14 @@ class Directed:
             if id(mobject) not in visible and mobject not in self._stage.entering:
                 continue
             for part in self._staying(mobject):
-                if id(part) not in skipped and area.overlaps(bounds(part)):
+                rest = None if id(part) in skipped else bounds_without(part, skipped)
+                if rest is not None and area.overlaps(rest):
                     owner = self._stage.attached.get(id(part))
                     what = describe(part) if owner is None else f"the tag of {describe(owner)}"
                     raise CompositionError(
-                        f"This placement in the {region} region would overlap {what}. "
-                        "Place both in one call (self.place(a, b)), use another region, or let "
-                        "the next beat retire it.",
+                        f"This placement in the {region} region would overlap {what}. If that "
+                        "moves too, place it first; or place both in one call (self.place(a, b)), "
+                        "use another region, or let the next beat retire it.",
                         region=region.value,
                     )
 
@@ -806,6 +1058,19 @@ class Directed:
             if (id(m) in visible or m in self._stage.entering) and not self._leaving(m)
         ]
         return candidates[-1] if candidates else None
+
+    def _set_caption(self, text: str | None, mark: Mobject | None, **kwargs: Any) -> Mobject | None:
+        """The caption lane holds `text`, after `mark` (the "?" of a question) if given."""
+
+        self._retire(self._occupant(Region.CAPTION))
+        if text is None:
+            return None
+        mobject = self._caption_lines(" ".join(text.split()), **kwargs)
+        if mark is not None:
+            mobject = VGroup(mark, mobject).arrange(RIGHT, buff=0.25)
+        self._lane(mobject, "caption", text)
+        self.place(mobject, region=Region.CAPTION)
+        return mobject
 
     def _caption_lines(self, text: str, **kwargs: Any) -> Mobject:
         line = self.text(text, Role.CAPTION, **kwargs)
@@ -899,6 +1164,12 @@ class DirectedThreeDScene(Directed, ThreeDScene):
                 pending += [(member, overlay) for member in animation.animations]
 
 
+def _component(root: Mobject) -> Mobject | None:
+    """`root`, if it is a kit component."""
+
+    return root if hasattr(root, "director_kind") else None
+
+
 def _hold_on_screen(mobject: Mobject, frame: Mobject) -> None:
     """Keep `mobject` where it sits in the unmoved frame, however the camera pans or zooms."""
 
@@ -911,6 +1182,49 @@ def _hold_on_screen(mobject: Mobject, frame: Mobject) -> None:
     follow(mobject)
     follow.director = True  # type: ignore[attr-defined]
     mobject.add_updater(follow)
+
+
+def _require_apart(group: Mobject, staged: Sequence[Mobject], new: Sequence[Mobject]) -> None:
+    """A group of on-stage and new objects keeps where its parts are, so a new formula built
+    at the origin would land on the old one."""
+
+    if hasattr(group, "director_kind"):  # a component lays out its own parts
+        return
+    for old, fresh in ((a, b) for a in staged for b in new):
+        if _has_text(old) and _has_text(fresh) and bounds(old).overlaps(bounds(fresh)):
+            raise CompositionError(
+                f"In this group, {describe(fresh)} would overlap {describe(old)}, which is on "
+                "stage: a VGroup keeps its parts where they are. Pass them as separate "
+                "arguments, self.place(old, new), to line them up."
+            )
+
+
+def _require_readable(mobject: Mobject) -> None:
+    """Fitting a region may shrink text; refuse what would be too small to read."""
+
+    pending = [mobject]
+    while pending:
+        part = pending.pop()
+        if not isinstance(part, Text | MarkupText | SingleStringMathTex | DecimalNumber):
+            pending += part.submobjects
+            continue
+        least = MIN_TICK_SIZE if getattr(part, "director_ticks", False) else MIN_FONT_SIZE
+        if part.font_size < least - 0.05:
+            raise CompositionError(
+                f"{describe(part)} would be set at font size {part.font_size:.0f} to fit; "
+                f"below {least:.0f} it cannot be read on a phone. Give it more room (a larger "
+                "region, less beside it), shorten it, or put derive notes below "
+                "(notes='below').",
+                font_size=round(float(part.font_size), 1),
+            )
+
+
+def _lane(mobject: Mobject) -> bool:
+    return hasattr(mobject, "director_lane")
+
+
+def _has_text(mobject: Mobject) -> bool:
+    return any(isinstance(m, Text | MarkupText | SingleStringMathTex) for m in mobject.get_family())
 
 
 def _require_held(mobject: Mobject) -> None:
@@ -933,19 +1247,6 @@ def _require_held(mobject: Mobject) -> None:
         )
 
 
-def _backdrop(glyphs: VGroup, hue: str) -> RoundedRectangle:
-    # Tight sideways so neighbouring operators keep their space; taller like a marker.
-    pad_x, pad_y = 0.05, 0.05 + 0.12 * glyphs.height
-    return RoundedRectangle(
-        width=glyphs.width + 2 * pad_x,
-        height=glyphs.height + 2 * pad_y,
-        corner_radius=0.08,
-        stroke_width=0,
-        fill_color=hue,
-        fill_opacity=0.16,
-    ).move_to(glyphs)
-
-
 def _following(glyphs: VGroup) -> Callable[[Mobject], None]:
     """An updater that keeps a backdrop on its glyphs as they glide or scale."""
 
@@ -962,8 +1263,12 @@ def _following(glyphs: VGroup) -> Callable[[Mobject], None]:
     return follow
 
 
-def _fade_in(mobject: Mobject | None) -> list[Animation]:
-    return [] if mobject is None else [FadeIn(mobject, shift=LEFT * 0.2)]
+def _note_in(note: Mobject | None, older: Sequence[Mobject], muted: str) -> list[Animation]:
+    """A derivation note slides in; the notes before it turn muted, so the newest one leads."""
+
+    if note is None:
+        return []
+    return [FadeIn(note, shift=LEFT * 0.2), *(FadeToColor(m, muted) for m in older)]
 
 
 def _anchor(anchor: Sequence[float] | None) -> tuple[float, float]:
@@ -1013,7 +1318,7 @@ def _apply_theme_defaults(active: Theme) -> Callable[[], None]:
     below hard-code white or yellow, which vanish on a light theme."""
 
     text = {"font": active.font, "warn_missing_font": False}
-    ink, highlight = {"color": active.foreground}, {"color": active.accent}
+    ink, highlight = {"color": active.foreground}, {"color": active.highlight}
     defaults: list[tuple[type, dict[str, Any]]] = [
         (VMobject, ink),
         (Text, text),

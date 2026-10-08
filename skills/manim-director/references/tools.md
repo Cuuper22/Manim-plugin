@@ -49,9 +49,10 @@ open PNGs from there.
   `cached`, `scene_id`, `progress`, timestamps.
 - `result` (when succeeded): per operation, e.g. `render` gives `scene`, `duration_seconds`,
   `animations` and `artifacts` (video, timeline, per-beat sections, `.srt` from `add_subcaption`;
-  each with `media` details); `qa` gives `status` (`pass`/`warn`/`fail`), `frames` with metrics and
-  `findings`; `validate_math` gives `valid`, and per step pair `equivalent`, the symbolic
-  difference and a numeric `counterexample`.
+  each with `media` details); `qa` gives `status` (`pass`/`warn`/`fail`), `frames` with metrics,
+  `findings` (pixel checks, plus pacing and viewer checks for a `DirectedScene`) and the
+  `beats.png` contact sheet; `validate_math` gives `valid`, and per step pair `equivalent`, the
+  symbolic difference and a numeric `counterexample`.
 - `error` (when failed): `{code, message, data}`; `render_failed` puts `findings`, `exception` and
   the `traceback` tail in `data`.
 
@@ -74,7 +75,8 @@ reads. Renders and stills of one scene run one at a time: the later one reports 
 | Does the final layout fit? | `still` |
 | How does the whole scene flow? | `render` at `draft`, then `contact_sheet` |
 | What happens at 7.5 s? | `submit` `frame` with `at_seconds` |
-| Are frames blank, low contrast, or past the margins? | `qa` |
+| Blank, low-contrast or clipped frames; pacing for the viewer? | `qa` |
+| Does each beat answer its question? | `qa`, then open `beats.png` |
 | Is the algebra right? | `validate_math` |
 | Final file | `render` at `production`, then `submit` `export` |
 

@@ -101,7 +101,7 @@ pub(super) fn tool_list() -> Value {
         ),
         (
             "qa",
-            "Check a rendered video or image for blank frames, low contrast and safe-area violations, mapped to beats and source lines.",
+            "Check a rendered video or image for blank frames, low contrast and safe-area violations, and a DirectedScene render's pacing (caption reading time, holds after reveals, crowded beats and moments, prediction holds), mapped to beats and source lines. A DirectedScene render also gets beats.png: each beat's settled frame under its audience question.",
             object(
                 json!({
                     "source": source,
