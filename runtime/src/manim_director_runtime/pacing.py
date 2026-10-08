@@ -199,12 +199,35 @@ def _once_per_statement(findings: list[Finding]) -> list[Finding]:
 
 
 @dataclass(frozen=True, slots=True)
-class _Beat:
+class PlannedBeat:
+    """A played beat with what its storyboard entry adds."""
+
     beat: TimelineBeat
     question: str | None
     takeaway: str | None
     aha: bool
     result: bool  # its point must land: a longer still at its end
+
+
+def planned(timeline: Timeline, storyboard: Sequence[StoryBeat] = ()) -> list[PlannedBeat]:
+    """The played beats in order, each merged with its storyboard entry; the beat's own
+    `question=`, `takeaway=`, `intent=` and `aha=` win."""
+
+    story = {beat.id: beat for beat in storyboard}
+    merged = []
+    for beat in sorted(timeline.beats, key=lambda b: b.start_seconds):
+        plan = story.get(beat.id, StoryBeat(beat.id))
+        aha = beat.aha or plan.aha
+        merged.append(
+            PlannedBeat(
+                beat=beat,
+                question=beat.question or plan.question,
+                takeaway=beat.takeaway or plan.takeaway,
+                aha=aha,
+                result=aha or (beat.intent or plan.intent) in _RESULT_INTENTS,
+            )
+        )
+    return merged
 
 
 class _Film:
@@ -213,18 +236,7 @@ class _Film:
     ) -> None:
         self.t, self.s, self.viewer, self.storyboard = t, s, viewer, storyboard
         self.events = sorted(t.events, key=lambda e: e.at)
-        story = {beat.id: beat for beat in storyboard}
-        self.beats: dict[str, _Beat] = {}
-        for beat in sorted(t.beats, key=lambda b: b.start_seconds):
-            plan = story.get(beat.id, StoryBeat(beat.id))
-            aha = beat.aha or plan.aha
-            self.beats[beat.id] = _Beat(
-                beat=beat,
-                question=beat.question or plan.question,
-                takeaway=beat.takeaway or plan.takeaway,
-                aha=aha,
-                result=aha or (beat.intent or plan.intent) in _RESULT_INTENTS,
-            )
+        self.beats = {plan.beat.id: plan for plan in planned(t, storyboard)}
 
     def in_beat(self, beat_id: str) -> list[Event]:
         return [e for e in self.events if e.beat == beat_id]

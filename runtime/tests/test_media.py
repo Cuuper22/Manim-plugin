@@ -8,9 +8,11 @@ import pytest
 from conftest import as_json, make_video, requires_ffmpeg
 from manim_director_runtime import pacing
 from manim_director_runtime.errors import CompositionError
-from manim_director_runtime.media import contact_sheet, frame
-from manim_director_runtime.qa import qa
+from manim_director_runtime.media import BeatTile, VideoInfo, contact_sheet, frame
+from manim_director_runtime.project import StoryBeat, Viewer
+from manim_director_runtime.qa import _tiles, qa
 from manim_director_runtime.tasks import SAFE_AREA_DEFAULT, ContactSheetTask, FrameTask, QaTask
+from manim_director_runtime.timeline import Settle, Timeline, TimelineBeat
 
 pytestmark = requires_ffmpeg
 
@@ -162,6 +164,14 @@ def test_qa_judges_the_pacing_of_a_v2_timeline_for_the_brief_s_viewer(
         0.4,
     )
     assert paced["frame"] == result["frames"][0]["path"]  # sampled at 0.1 s
+    sheet = result["artifacts"][-1]
+    assert (sheet["kind"], sheet["path"], sheet["label"]) == (
+        "contact_sheet",
+        ".manim-director/artifacts/qa/beats.png",
+        "beats",
+    )
+    # Two tiles (the beat, then the final frame) under two label lines each.
+    assert png_size(out / "beats.png") == (2 * 480 + 3 * 12, 270 + 10 + 2 * 24 + 2 * 12)
     # A storyboard plans the main scene; another scene's beats are not held to it.
     (project / "director.yaml").write_text(
         "engine: {main_scene: Other}\nstoryboard:\n  - {id: elsewhere}\n"
@@ -171,6 +181,30 @@ def test_qa_judges_the_pacing_of_a_v2_timeline_for_the_brief_s_viewer(
     (project / "director.yaml").write_text("qa:\n  pacing: {words_per_minute: 150}\n")
     with pytest.raises(CompositionError, match="unknown budgets words_per_minute"):
         qa(task, ctx)
+
+
+def test_beats_png_shows_each_beat_at_its_last_still_under_its_question() -> None:
+    beats = Timeline(
+        2,
+        "Demo",
+        6.0,
+        [
+            TimelineBeat("hook", 0.0, 3.0, "s.py", 3, aha=True),
+            TimelineBeat("rule", 3.0, 6.0, "s.py", 9),
+        ],
+        settles=[Settle(1.0, "hook", 0.4, 1, [], []), Settle(2.0, "hook", 1.0, 1, [], [])],
+    )
+    tiles = _tiles(
+        beats,
+        [StoryBeat("hook", question="Why?")],
+        Viewer(question="How?"),
+        VideoInfo(6.0, 10.0, 60),
+    )
+    assert tiles == [
+        BeatTile(2.5, "hook", "3.0 s · aha", "Why?"),  # halfway through its last still
+        BeatTile(5.9, "rule", "3.0 s", None),  # no still: its last frame
+        BeatTile(5.9, "final frame", "6.0 s", "How?"),
+    ]
 
 
 def test_qa_on_images(project: Path, ctx) -> None:

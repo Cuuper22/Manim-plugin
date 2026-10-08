@@ -66,7 +66,12 @@ qa:
 """,
     )
     style = load_style(tmp_path)
-    assert style.viewer == Viewer("intro", ("odd numbers", "$n^2$"), ("wrong_guess", "aha"))
+    assert style.viewer == Viewer(
+        level="intro",
+        knows=("odd numbers", "$n^2$"),
+        question="Why do sums of odd numbers land on squares?",
+        missing=("wrong_guess", "aha"),
+    )
     assert style.storyboard == (
         StoryBeat(
             "grow", "explain", "What shape comes next?", "Adding 7 turns 3x3 into 4x4.", True

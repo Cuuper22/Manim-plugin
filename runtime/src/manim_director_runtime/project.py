@@ -29,6 +29,7 @@ class Viewer:
 
     level: str = "general"
     knows: tuple[str, ...] = ()
+    question: str | None = None  # theirs, in their words
     missing: tuple[str, ...] = ()  # VIEWER_PROTOCOL fields the brief leaves out
 
 
@@ -135,7 +136,7 @@ def _viewer(brief: Any, path: Path) -> Viewer | None:
     if not isinstance(knows, list) or not all(isinstance(item, str) for item in knows):
         raise CompositionError(f"{path}: brief.viewer.knows must be a list.", path=str(path))
     missing = tuple(key for key in VIEWER_PROTOCOL if not str(viewer.get(key) or "").strip())
-    return Viewer(level=level, knows=tuple(knows), missing=missing)
+    return Viewer(level, tuple(knows), _text(viewer.get("question")), missing)
 
 
 def _storyboard(storyboard: Any, path: Path) -> tuple[StoryBeat, ...]:

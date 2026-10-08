@@ -1,4 +1,5 @@
-"""The `frame` and `contact_sheet` operations, plus frame grabbing shared with `qa`."""
+"""The `frame` and `contact_sheet` operations, plus frame grabbing and sheets shared with
+`qa`."""
 
 from __future__ import annotations
 
@@ -6,8 +7,10 @@ import io
 import json
 import math
 import types
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,10 +22,15 @@ from .tasks import ContactSheetTask, FrameTask
 
 if TYPE_CHECKING:
     from PIL.Image import Image
+    from PIL.ImageFont import FreeTypeFont
 
     from .protocol import Context
 
 THUMBNAIL_WIDTH = 480
+_INK, _MUTED = "#F5F7FF", "#9AA3B5"
+_GUTTER, _LINE_HEIGHT = 12, 24
+
+Line = Sequence[tuple[str, str]]  # runs of text, each with its color
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +59,17 @@ class FrameResult:
 class SheetFrame:
     at_seconds: float
     beat: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BeatTile:
+    """A tile of a beat sheet: the frame at `at_seconds` under `name · detail` and the
+    question it should answer."""
+
+    at_seconds: float
+    name: str
+    detail: str
+    question: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,16 +108,42 @@ def contact_sheet(task: ContactSheetTask, ctx: Context) -> ContactSheetResult:
         ctx.progress("extract", done, len(times))
     columns = min(task.columns, len(images))
     rows = math.ceil(len(images) / columns)
-    sheet = _compose(images, frames, columns, rows)
+    labels = [
+        [[(_clock(item.at_seconds) + "  ", _MUTED), *([(item.beat, _INK)] if item.beat else [])]]
+        for item in frames
+    ]
     path = out_dir / "contact-sheet.png"
-    with atomic_target(path) as temp:
-        sheet.save(temp, format="PNG", optimize=True)
+    _save(_compose(images, labels, columns, rows), path)
     return ContactSheetResult(
         frames=frames,
         columns=columns,
         rows=rows,
         artifacts=[ctx.artifact(ArtifactKind.CONTACT_SHEET, path)],
     )
+
+
+def beat_sheet(
+    video: Path, info: VideoInfo, tiles: Sequence[BeatTile], path: Path, ctx: Context
+) -> None:
+    """One frame per tile, three to a row, each under its name and question: the sheet for
+    judging a film from its frames alone."""
+
+    pil = require_pillow()
+    images: list[Image] = []
+    for done, tile in enumerate(tiles, start=1):
+        images.append(pil.open(io.BytesIO(grab_frame(video, tile.at_seconds, info))).convert("RGB"))
+        ctx.progress("extract", done, len(tiles))
+    width = THUMBNAIL_WIDTH - 4
+    labels: list[list[Line]] = []
+    for tile in tiles:
+        lines = [[(tile.name, _INK), (f" · {tile.detail}", _MUTED)]]
+        if tile.question:
+            lines += [[(line, _INK)] for line in _wrapped(tile.question, width, lines=2)]
+        else:
+            lines.append([("(no audience question)", _MUTED)])
+        labels.append(lines)
+    columns = min(3, len(images))
+    _save(_compose(images, labels, columns, math.ceil(len(images) / columns)), path)
 
 
 def sample_times(duration: float, count: int) -> list[float]:
@@ -198,31 +243,69 @@ def require_pillow() -> types.ModuleType:
     return Image
 
 
-def _compose(images: list[Image], frames: list[SheetFrame], columns: int, rows: int) -> Image:
-    from PIL import Image, ImageDraw, ImageFont
+def _compose(
+    images: list[Image], labels: Sequence[Sequence[Line]], columns: int, rows: int
+) -> Image:
+    from PIL import Image, ImageDraw
 
-    gutter, label_height = 12, 34
-    font = ImageFont.load_default(size=18)
+    font = _font()
+    label_height = 10 + _LINE_HEIGHT * max(len(label) for label in labels)
     ratio = max(image.height / image.width for image in images)
     thumb = (THUMBNAIL_WIDTH, max(1, round(THUMBNAIL_WIDTH * ratio)))
     size = (
-        columns * thumb[0] + (columns + 1) * gutter,
-        rows * (thumb[1] + label_height) + (rows + 1) * gutter,
+        columns * thumb[0] + (columns + 1) * _GUTTER,
+        rows * (thumb[1] + label_height) + (rows + 1) * _GUTTER,
     )
     sheet = Image.new("RGB", size, "#111318")
     draw = ImageDraw.Draw(sheet)
-    for index, (image, item) in enumerate(zip(images, frames, strict=True)):
+    for index, (image, label) in enumerate(zip(images, labels, strict=True)):
         row, column = divmod(index, columns)
-        x = gutter + column * (thumb[0] + gutter)
-        y = gutter + row * (thumb[1] + label_height + gutter)
+        x = _GUTTER + column * (thumb[0] + _GUTTER)
+        y = _GUTTER + row * (thumb[1] + label_height + _GUTTER)
         image.thumbnail(thumb)
         sheet.paste(image, (x + (thumb[0] - image.width) // 2, y + (thumb[1] - image.height) // 2))
-        clock = _clock(item.at_seconds)
-        draw.text((x + 2, y + thumb[1] + 8), clock, fill="#9AA3B5", font=font)
-        if item.beat:
-            offset = draw.textlength(clock + "  ", font=font)
-            draw.text((x + 2 + offset, y + thumb[1] + 8), item.beat, fill="#F5F7FF", font=font)
+        for number, line in enumerate(label):
+            left, top = x + 2, y + thumb[1] + 8 + number * _LINE_HEIGHT
+            for text, color in line:
+                draw.text((left, top), text, fill=color, font=font)
+                left += font.getlength(text)
     return sheet
+
+
+def _save(sheet: Image, path: Path) -> None:
+    with atomic_target(path) as temp:
+        sheet.save(temp, format="PNG", optimize=True)
+
+
+@cache
+def _font() -> FreeTypeFont:
+    from PIL import ImageFont
+
+    return ImageFont.load_default(size=18)
+
+
+def _wrapped(text: str, width: float, *, lines: int) -> list[str]:
+    """`text` broken into at most `lines` lines no wider than `width`; a cut ends in "…"."""
+
+    font, words, out = _font(), text.split(), []
+    while words and len(out) < lines:
+        line = words.pop(0)
+        while words and font.getlength(f"{line} {words[0]}") <= width:
+            line += " " + words.pop(0)
+        out.append(line)
+    out = [_clipped(line, width) for line in out]
+    if words and not out[-1].endswith("…"):
+        out[-1] = _clipped(out[-1] + " …", width)
+    return out
+
+
+def _clipped(line: str, width: float) -> str:
+    font = _font()
+    if font.getlength(line) <= width:
+        return line
+    while line and font.getlength(line + "…") > width:
+        line = line[:-1]
+    return line.rstrip() + "…"
 
 
 def _clock(seconds: float) -> str:
