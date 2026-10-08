@@ -68,6 +68,23 @@ What the scene gets from `DirectedScene`:
 Four themes ship, each checked for contrast and color-vision deficiencies: `midnight` (default),
 `paper`, `chalkboard` and `contrast`. Pick one in `director.yaml` or per scene with `theme = "paper"`.
 
+## Explain it to a viewer
+
+A clear explainer is planned from what the viewer believes at each moment, not from the answer.
+The skill makes the agent write `brief.viewer` first (who watches, what they know, their question,
+the wrong guess they will make, the aha) and plan each beat as one change that answers the last
+beat's question. The runtime then helps keep the film honest to that plan:
+
+- **A kit of explainer components** in `manim_director_runtime.kit`: `FunctionPlot` (tracing dot,
+  tangent, secant, area, Riemann bars, zoom inset), `Readout`, `DotArray`, `VectorGrid` and
+  `Figure`, plus scene devices `ask`, `annotate`, `link`, `misconception` and `pause`.
+- **Holds paced for the viewer.** Beats, derivation steps and the final frame wait as long as the
+  viewer's `level` needs to read them; scenes carry no timing code.
+- **Pacing QA.** `qa` reads the beat timeline and flags captions too fast to read, motion while
+  the viewer is still reading, beats that bring in too much at once, unexplained notation and a
+  recap that does not replay the aha. It also writes `beats.png`, one settled frame per beat under
+  its audience question, to judge the film from its frames alone.
+
 ## Install
 
 You need Python 3.11+ with `venv`, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`), a TeX distribution
@@ -176,10 +193,14 @@ directly, so install the engine first and make sure it is on `PATH`.
 
 ## Templates and the example
 
-`manim-director init <dir> --template <name>` starts from a finished scene: `explainer` (geometric
-series, picture then algebra), `derivation` (the quadratic formula), `geometry` (Pythagoras by
-rearrangement), `graph` (secant to tangent) or `vertical_short` (a 9:16 Gauss sum).
-`--scene-template <name>` adds one to an existing project.
+`manim-director init <dir> --template <name>` starts from a finished scene. The
+[explainer gallery](examples/gallery) has one short film per teaching pattern, each planned for its
+viewer and clean under `qa`: `picture_to_formula` (odd numbers make squares), `zoom_detail`
+(sin x ≈ x), `misconception` (√(a + b)), `contrast` (shears keep area) and `concrete_first` (a
+positive test result). The other templates: `explainer` (geometric series, picture then algebra),
+`derivation` (the quadratic formula), `geometry` (Pythagoras by rearrangement), `graph` (secant to
+tangent) and `vertical_short` (a 9:16 Gauss sum). `--scene-template <name>` adds one to an existing
+project.
 
 [`examples/generalized-fibonacci`](examples/generalized-fibonacci) is a five-scene production of
 `x[n+2] = p x[n+1] + q x[n]`: data charts from a CSV, the companion matrix with a camera close-up,

@@ -39,8 +39,10 @@ manim-director init my-film --template derivation --theme paper --name "Completi
 ```
 
 creates `director.yaml`, `scenes/main.py`, `manim.cfg`, `README.md` and a `.gitignore`. Templates:
-`explainer` (default), `derivation`, `geometry`, `graph` and `vertical_short`; each is a finished
-scene whose beats match the storyboard in `director.yaml`. Inside an existing project,
+`explainer` (default), `derivation`, `geometry`, `graph` and `vertical_short`, plus the five
+[gallery](../examples/gallery) films, `picture_to_formula`, `zoom_detail`, `misconception`,
+`contrast` and `concrete_first`, which also carry a `brief.viewer`; each is a finished scene whose
+beats match the storyboard in `director.yaml`. Inside an existing project,
 `manim-director init --scene-template graph` adds `scenes/graph.py`. `init` refuses a non-empty
 directory; `--force` writes the template anyway, replacing files of the same names without a copy.
 
