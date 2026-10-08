@@ -1,0 +1,21 @@
+version: 1
+project:
+  name: Manim Director showcase
+  seed: 105417023
+engine:
+  source: scenes/hero.py
+  main_scene: EulerHero
+theme: midnight
+brief:
+  viewer:
+    who: a mathematically curious reader skimming a README
+    level: expert
+    knows: [algebra, functions, derivatives, vectors]
+    new: []
+    question: What can this plugin animate?
+    wrong_guess: only simple text-and-shape slides
+    aha: real mathematics, typeset and moving the way a teacher would draw it
+    payoff: wants to try it on their own topic
+qa:
+  # README loops are watched again and again: shorter reading pauses than a first viewing needs.
+  pacing: {words_per_second: 4.0, read_base_math: 0.5, read_max: 1.6, result_end_min: 1.2, final_hold: 1.0}

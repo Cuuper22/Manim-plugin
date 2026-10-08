@@ -1,3 +1,12 @@
+<p align="center">
+  <img src="docs/showcase/euler.gif" width="960" alt="Euler's formula drawn: the point e^(iθ) runs around the unit circle while its real and imaginary parts trace cos θ and sin θ as waves; at θ = π the formula e^(iθ) = cos θ + i sin θ becomes e^(iπ) + 1 = 0">
+</p>
+<p align="center"><sub>
+  Euler's formula, drawn: as θ runs around the circle, the real and imaginary parts of e<sup>iθ</sup>
+  trace cos θ and sin θ, and at θ = π the identity e<sup>iπ</sup> + 1 = 0 falls out.
+  <a href="examples/showcase/scenes/hero.py">hero.py</a>
+</sub></p>
+
 # Manim Director
 
 Manim Director is a Claude Code and Codex plugin, plus a local engine, for authoring math-heavy
@@ -6,6 +15,51 @@ math-first layer, `DirectedScene`, handles stepwise derivations, symbol colors, 
 engine renders scenes, makes stills and contact sheets, checks rendered frames, checks the algebra and
 explains failures with `file:line` findings. Your agent drives it through MCP; you can watch and edit
 in a local workbench.
+
+## What it makes
+
+Every animation on this page is one `DirectedScene` of 35 to 100 lines from
+[`examples/showcase`](examples/showcase), rendered and exported to GIF by the engine. Layout, symbol
+colors, entrances and reading pauses come from the runtime; the scenes only say what happens.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/showcase/riemann.gif" width="100%" alt="Left Riemann sums under y = x² on [0, 2]: the bars double from 4 to 64 while the readout L_n climbs toward 2.6667, then the exact area ∫₀² x² dx = 8/3 appears and is boxed">
+      <p><b>Riemann sums close in on the integral.</b> The bars double from 4 to 64 while
+      L<sub>n</sub> climbs toward ∫<sub>0</sub><sup>2</sup> x² dx = 8/3.
+      <a href="examples/showcase/scenes/riemann.py">riemann.py</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/showcase/tangent.gif" width="100%" alt="A secant through x = 1 on y = x² rotates into the tangent as h shrinks from 1.3 to 0; the slope readout settles on 2, then f'(1) = lim (f(1+h) − f(1))/h = 2 appears">
+      <p><b>The derivative is a limit.</b> As h shrinks, the secant through x = 1 turns into the
+      tangent and its slope 2 + h settles on f′(1) = 2.
+      <a href="examples/showcase/scenes/tangent.py">tangent.py</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/showcase/linear_map.gif" width="100%" alt="The matrix A = (2 1; −1 1) moves the whole grid; the shaded unit square becomes a parallelogram while the area readout goes from 1.00 to 3.00, then det A = 2·1 − 1·(−1) = 3 appears">
+      <p><b>A determinant is an area.</b> A matrix carries the whole plane, and the unit square
+      becomes a parallelogram of area det A = 3.
+      <a href="examples/showcase/scenes/linear_map.py">linear_map.py</a></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/showcase/quadratic.gif" width="100%" alt="ax² + bx + c = 0 is rewritten step by step, each step noted (divide by a, add (b/2a)², complete the square, square roots, subtract b/2a), ending at x = (−b ± √(b² − 4ac))/2a with the discriminant boxed">
+      <p><b>Where the quadratic formula comes from.</b> Completing the square, one justified step
+      at a time, with a, b and c keeping their colors from line to line.
+      <a href="examples/showcase/scenes/quadratic.py">quadratic.py</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center" valign="top">
+      <img src="docs/showcase/taylor.gif" width="66%" alt="Taylor polynomials of sin x: the line y = x, then each added term bends the polynomial along more of the sine, until the series sin x = Σ (−1)ⁿ x^(2n+1)/(2n+1)! lies on the sine everywhere in view">
+      <p><b>Polynomials that turn into the sine.</b> Each Taylor term hugs sin x a little further
+      out; all of them together are sin x.
+      <a href="examples/showcase/scenes/taylor.py">taylor.py</a></p>
+    </td>
+  </tr>
+</table>
 
 ## Write the mathematics
 
@@ -205,6 +259,8 @@ project.
 [`examples/generalized-fibonacci`](examples/generalized-fibonacci) is a five-scene production of
 `x[n+2] = p x[n+1] + q x[n]`: data charts from a CSV, the companion matrix with a camera close-up,
 characteristic roots and a 3D orbit, with captions and narration timed to the beats.
+[`examples/showcase`](examples/showcase) holds the scenes behind the animations at the top of this
+page.
 
 ## Documentation
 
