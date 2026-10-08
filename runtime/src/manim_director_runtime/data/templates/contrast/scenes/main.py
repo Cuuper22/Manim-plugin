@@ -35,8 +35,10 @@ class ShearKeepsArea(DirectedScene):
             self.ask("After this shear: bigger, smaller, or the same?")
 
         with self.beat("shear", keep=[grid, square, panel], aha=True):
-            self.caption("The square tilts, but its area stays 1.")
+            self.caption("Watch the area as the grid shears.")
+            self.pause()
             self.shear(grid, run_time=2.5)
+            self.caption("The square tilts, but its area stays 1.")
 
         with self.beat("why", keep=[grid, square, area]):
             self.caption("Same base, same height: the same area.")
@@ -65,5 +67,6 @@ class ShearKeepsArea(DirectedScene):
 
         with self.beat("recap", keep=[grid, square, area, stretched, wide, doubled]):
             self.caption("A shear keeps every area; a stretch changes it.")
+            self.pause()
             self.play(grid.reset())
             self.shear(grid, run_time=1.5)

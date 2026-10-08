@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from manim import Circle, Square, Triangle
+from manim import Circle, Square, Triangle, ValueTracker
 
 from conftest import requires_latex, requires_manim
 from manim_director_runtime import DirectedScene, pacing, timeline
@@ -130,3 +130,46 @@ def test_the_viewer_level_sets_the_pace(render: Render, tmp_path: Path) -> None:
     (ask,) = film.asks
     assert ask.hold == intro.ask_hold
     assert stills(film)["aha"] >= intro.final_hold - EPS
+
+
+def test_devices_wait_until_the_title_and_caption_are_read(render: Render) -> None:
+    class ReadFirst(DirectedScene):
+        def construct(self) -> None:
+            dots = DotArray(3, shown=lambda r, c: r == 0)
+            with self.beat("hook"):
+                self.title("Why do the dots grow?")
+                self.place(dots)
+                self.caption("Watch the second row fill in.")
+                self.show(dots.select(lambda r, c: r == 1))
+
+    film = record(render, ReadFirst)
+    (title,), (caption,) = film.titles, film.captions
+    (show,) = [e for e in film.events if e.source == "show"]
+    reading = sum(pacing.caption_seconds(lane.words, GENERAL) for lane in (title, caption))
+    assert show.at - caption.at >= reading - EPS  # one after the other, before anything moves
+    assert not [f for f in pacing.check(film, GENERAL) if f.code == "motion_while_reading"]
+
+
+def test_an_answer_and_a_changed_readout_land_before_the_next_motion(render: Render) -> None:
+    from manim_director_runtime.kit import Readout
+
+    class Answer(DirectedScene):
+        def construct(self) -> None:
+            x = ValueTracker(0.0)
+            readout = Readout("x", x)
+            with self.beat("predict"):
+                self.place(readout)
+                self.ask("Where does x stop?")
+            with self.beat("answer", keep=[readout]):
+                self.play(x.animate.set_value(2), run_time=2)
+                self.pause()
+                self.play(x.animate.set_value(3), run_time=0.5)
+                self.pause()
+                self.play(x.animate.set_value(4), run_time=0.5)
+
+    film = record(render, Answer)
+    slow, quick, last = [e for e in film.events if e.beat == "answer"]
+    assert slow.changed == quick.changed == 1
+    assert quick.at - (slow.at + slow.seconds) >= GENERAL.result_end_min - EPS  # the answer
+    assert last.at - (quick.at + quick.seconds) >= GENERAL.read_per_value - EPS  # the new value
+    assert film.beats[1].hold >= GENERAL.result_end_min - EPS

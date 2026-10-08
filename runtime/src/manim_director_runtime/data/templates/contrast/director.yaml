@@ -1,12 +1,12 @@
 version: 1
 project:
-  name: A shear keeps area
+  name: {{name}}
   description: Pattern 4, before and after contrast. A shear tilts the unit square without changing its area; a stretch does not.
-  seed: 4
+  seed: {{seed}}
 engine:
   source: scenes/main.py
   main_scene: ShearKeepsArea
-theme: midnight
+theme: {{theme}}
 brief:
   viewer:
     who: a first-year linear algebra student

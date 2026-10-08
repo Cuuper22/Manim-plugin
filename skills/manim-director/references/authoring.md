@@ -151,11 +151,11 @@ critique) is in [viewer.md](viewer.md). Match motion to meaning:
 
 ## Starting points
 
-Start from the closest finished film rather than a blank file. The five gallery films are
-projects in [`examples/gallery`](../../../examples/gallery) to copy (`director.yaml`, `manim.cfg`,
-`scenes/main.py`): each is built on the kit, plans for its viewer, and passes `qa` with no
-findings. The five templates come from `init(template=...)` (or `init(scene_template=...)` to add
-one to a project); they predate the kit, so write their `brief.viewer` when you adopt one.
+Start from the closest finished film rather than a blank file: `init(template=...)` creates a
+project from any row below, and `init(scene_template=...)` adds its scene to an existing project.
+The five gallery films are built on the kit, plan for their viewer, and pass `qa` with no
+findings. The other five templates predate the kit, so write their `brief.viewer` when you adopt
+one.
 
 | Start from | Pattern | Topic | What it shows |
 |---|---|---|---|

@@ -265,7 +265,8 @@ def without_alignment(tex: str) -> str:
 
 
 def is_relation(atom: str) -> bool:
-    return unpaint(atom).strip() in RELATIONS
+    atom = unpaint(atom).strip()
+    return atom in RELATIONS or atom.startswith((r"\xrightarrow", r"\xleftarrow"))
 
 
 def _nucleus(body: str, token: str | None) -> str:

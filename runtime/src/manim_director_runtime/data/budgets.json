@@ -10,6 +10,7 @@
     "morph_base_share": {"general": 0.5, "intro": 0.5, "expert": 0.5, "about": "share of the math base a morph needs (its changed glyphs count in full)"},
     "read_per_shape": {"general": 0.5, "intro": 0.65, "expert": 0.4, "about": "per shape or overlay entering"},
     "read_shapes_max": {"general": 1.0, "intro": 1.3, "expert": 0.8, "about": "cap for shapes in one event"},
+    "read_per_value": {"general": 1.0, "intro": 1.3, "expert": 0.8, "about": "per live value (a readout) a motion changes"},
     "read_max": {"general": 4.0, "intro": 5.0, "expert": 3.2, "about": "cap for any one event"},
     "settle_min": {"general": 0.5, "intro": 0.7, "expert": 0.4, "about": "smallest mid-beat still after a reveal"},
     "beat_end_min": {"general": 1.0, "intro": 1.3, "expert": 0.8, "about": "still at a beat's end"},

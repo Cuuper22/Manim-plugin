@@ -35,7 +35,7 @@ def shape(label: str = "square", chunks: int = 1) -> Seen:
 
 
 def event(at: float, seconds: float = 1.0, **values) -> Event:
-    base = {"beat": "hook", "source": "play", "file": "s.py", "line": 10}
+    base = {"beat": "hook", "source": "show", "file": "s.py", "line": 10}
     return Event(at=at, seconds=seconds, **{**base, **values})
 
 
@@ -309,7 +309,7 @@ def test_the_viewer_plan_is_checked_against_the_film() -> None:
             TimelineBeat("recap", 28.0, 40.0, "s.py", 15, question="q", takeaway="t"),
         ],
         captions=[lane(0.0, 40.0, "Each odd number wraps the square.")],
-        events=[event(14.0, 2.0, beat="turn")],
+        events=[event(14.0, 2.0, beat="turn"), event(30.0, 1.0, beat="recap")],  # a replay
     )
     found = pacing.check(long, GENERAL, VIEWER, ())
     assert [f.message for f in found] == [
@@ -364,3 +364,86 @@ def test_timelines_round_trip_and_v1_files_still_load(tmp_path: Path) -> None:
     v1 = {"version": 1, "scene": "Demo", "duration_seconds": 2.0, "beats": []}
     path.write_text(json.dumps(v1))
     assert load(path) == Timeline(1, "Demo", 2.0, [])
+
+
+def test_a_play_must_wait_until_the_caption_and_title_are_read() -> None:
+    # Title (2 words, 1.5 s) then caption (6 words, 2.9 s): read through by 4.4 s.
+    early = replace(clean(), events=[clean().events[0], event(2.0, source="play", line=14)])
+    (finding,) = pacing.check(early, GENERAL, VIEWER, STORY)
+    assert finding.code == "motion_while_reading" and finding.location.line == 14
+    assert "still being read until 4.4 s" in finding.message
+    read = replace(early.events[1], at=4.5, seconds=0.4)
+    assert codes(replace(early, events=[early.events[0], read])) == []
+    device = replace(early, events=[early.events[0], replace(early.events[1], source="show")])
+    assert codes(device) == []  # devices wait by themselves
+
+
+def test_a_slow_answering_motion_lands_before_the_next_change() -> None:
+    beats = [TimelineBeat("hook", 0.0, 6.0, "s.py", 3, aha=True)]
+    answer = replace(
+        clean(),
+        beats=beats,
+        events=[event(0.0, 2.0), event(3.0, line=11)],
+    )
+    (finding,) = pacing.check(answer, GENERAL, VIEWER, STORY)
+    assert finding.code == "short_hold" and "needs 2.0 s" in finding.message
+    plain = replace(answer, beats=[replace(beats[0], aha=False)])
+    assert codes(plain) == []  # a motion with nothing to read needs no still mid-beat
+
+
+def test_the_beat_after_a_prediction_is_a_result() -> None:
+    beats = [TimelineBeat("hook", 0.0, 4.0, "s.py", 3), TimelineBeat("answer", 4.0, 6.5, "s.py", 9)]
+    film = replace(
+        clean(),
+        duration_seconds=6.5,
+        beats=beats,
+        events=[event(0.0, entered=[shape()]), event(4.0, beat="answer", entered=[shape("L")])],
+        asks=[Ask(1.0, 3.0, "Bigger?", "s.py", 5)],
+    )
+    story = (*STORY, StoryBeat("answer", question="So?", takeaway="Bigger."))
+    assert [plan.result for plan in pacing.planned(film, story)] == [False, True]
+    assert codes(film, storyboard=story) == ["short_hold"]  # 1.5 s; an answer lands in 2 s
+
+
+def test_a_changed_readout_is_read_like_anything_new() -> None:
+    moved = event(0.0, changed=1)
+    assert pacing.reading_seconds(moved, GENERAL) == GENERAL.read_per_value
+    film = replace(clean(), events=[moved, event(1.5, line=11)])
+    assert codes(film) == ["short_hold"]  # 0.5 s to read the new value, which needs 1.0 s
+
+
+def test_notes_are_read_but_add_no_new_thing() -> None:
+    note = Seen(kind="note", label="divide by a", chunks=0, words=3)
+    assert pacing.reading_seconds(event(0.0, entered=[note]), GENERAL) == pytest.approx(1.7)
+    crowded = replace(clean(), events=[event(0.0, entered=[shape(), shape("L"), shape("T"), note])])
+    assert "crowded_beat" not in codes(crowded)
+
+
+def test_reading_runs_one_thing_after_another() -> None:
+    assert pacing.read_through([(0.0, 2.0), (1.0, 1.0), (5.0, 0.5)]) == 5.5
+    lanes = pacing.lane_reading([(0.0, 6)], GENERAL)  # a 6-word caption needs 2.9 s
+    content = [event(0.0, 0.8, entered=[shape()])]  # 0.5 s to take in once it stops
+    assert pacing.owed(content, GENERAL, now=0.8, of=None, seconds=1.0, lanes=lanes) == (
+        pytest.approx(2.9 + 0.5 - 0.8)
+    )
+
+
+def test_the_recap_should_replay_the_aha() -> None:
+    beats = [
+        TimelineBeat("hook", 0.0, 14.0, "s.py", 3, question="q", takeaway="t"),
+        TimelineBeat("turn", 14.0, 28.0, "s.py", 9, question="q", takeaway="t", aha=True),
+        TimelineBeat("recap", 28.0, 40.0, "s.py", 15, question="q", takeaway="t"),
+    ]
+    aha = event(14.0, 2.0, beat="turn", line=30, of="dots-1")
+    film = replace(
+        clean(),
+        duration_seconds=40.0,
+        beats=beats,
+        captions=[lane(0.0, 40.0, "Each odd number wraps the square.")],
+        events=[aha, event(30.0, beat="recap", line=40)],
+        asks=[Ask(10.0, 3.0, "Next?", "s.py", 7)],
+    )
+    (finding,) = pacing.check(film, GENERAL, VIEWER, ())
+    assert finding.code == "recap_without_replay" and "line 30" in finding.message
+    same_part = replace(film, events=[aha, event(30.0, beat="recap", line=40, of="dots-1")])
+    assert codes(same_part, storyboard=()) == []

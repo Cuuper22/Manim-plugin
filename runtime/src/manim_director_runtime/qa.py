@@ -37,7 +37,7 @@ _MIN_CONTRAST = 3.0  # WCAG AA for large text; video text and formulas are large
 _MAX_UNSAFE_SHARE = 0.02  # of the content: sparse text clipped by the frame is still caught
 _MAX_UNSAFE_FRACTION = 0.012  # of the frame
 _MAX_EDGE_ACTIVITY = 0.2
-_SHEET_TILES = 24  # beats.png: the first 23 beats and the final frame
+_SHEET_TILES = 24  # beats.png: the first 21 beats, two more frames of the aha, the final frame
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,17 +133,25 @@ def _tiles(
     beats: Timeline, storyboard: Sequence[StoryBeat], viewer: Viewer | None, info: VideoInfo
 ) -> list[BeatTile]:
     """A tile per beat at its last still (what the beat leaves the viewer with), else its
-    last frame, under its audience question; the final frame closes the sheet under the
-    viewer's own question."""
+    last frame, under its audience question, and before the aha's tile its motion starting
+    and halfway, under the aha; the final frame closes the sheet under the viewer's own
+    question."""
 
     frame = 1 / info.fps if info.fps else 0.0
     tiles = []
-    for plan in pacing.planned(beats, storyboard)[: _SHEET_TILES - 1]:
+    for plan in pacing.planned(beats, storyboard)[: _SHEET_TILES - 3]:
         beat = plan.beat
         stills = [settle for settle in beats.settles if settle.beat == beat.id]
         last = stills[-1] if stills else None
         at = last.at + last.still_seconds / 2 if last else beat.end_seconds - frame
         detail = f"{beat.end_seconds - beat.start_seconds:.1f} s" + (" · aha" if plan.aha else "")
+        motions = [e for e in beats.events if e.beat == beat.id] if plan.aha else []
+        if motions:  # the aha's longest motion, starting and halfway: does it show the idea?
+            aha = viewer.aha if viewer is not None else None
+            motion = max(motions, key=lambda e: e.seconds)
+            for share, moment in ((0.0, "motion starts"), (0.5, "mid-motion")):
+                at_motion = info.frame_time(motion.at + share * motion.seconds + frame)
+                tiles.append(BeatTile(at_motion, beat.id, moment, aha or plan.question))
         tiles.append(BeatTile(info.frame_time(at), beat.id, detail, plan.question))
     question = viewer.question if viewer is not None else None
     end = f"{info.duration_seconds:.1f} s"

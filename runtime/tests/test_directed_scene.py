@@ -115,8 +115,8 @@ def test_theme_applies_to_the_camera_and_plain_manim_objects(
         "line": ink,
         "dot": ink,
         "square": ink,
-        "box": PAPER.accent,
-        "indicate": PAPER.accent,
+        "box": PAPER.highlight,
+        "indicate": PAPER.highlight,
         "backing": PAPER.background,
     }
     with tempconfig({"media_dir": str(tmp_path / "media")}):  # Text caches its SVG there
@@ -544,7 +544,7 @@ def test_derive_puts_notes_under_their_lines_when_the_region_is_tall(tmp_path, t
             (_, line, after), note = steps.lines, steps.notes[1]
             seen["under"] = line.get_bottom()[1] > note.get_top()[1] > after.get_top()[1]
             seen["left"] = note.get_left()[0] - line.get_left()[0]
-            seen["tex note"] = type(note).__name__
+            seen["label note"] = getattr(note, "authored_text", None)
             seen["scale"] = line.font_size / 44
             with pytest.raises(CompositionError, match="notes='left'"):
                 self.derive("a = b", notes="left")
@@ -554,7 +554,7 @@ def test_derive_puts_notes_under_their_lines_when_the_region_is_tall(tmp_path, t
     with tempconfig({**settings, "save_last_frame": True, "write_to_movie": False}):
         Portrait().render()  # notes beside the lines would need 0.46x, below the 0.5x minimum
     assert seen["under"] and seen["left"] == pytest.approx(0)
-    assert seen["tex note"] == "Tex" and seen["scale"] > 0.6
+    assert seen["label note"] == "divide by $a$" and seen["scale"] > 0.6
 
 
 @requires_latex
@@ -793,3 +793,126 @@ def test_beats_leave_cameras_zoom_displays_and_trackers_alone(render: Render) ->
     assert seen["frame"] == ({1.0}, True)  # the camera did not pan with the departures
     assert seen["tracker"] == (1.0, True)
     assert seen["zoom"] is True
+
+
+@requires_latex
+def test_a_replaced_formula_takes_its_highlight_boxes_along(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Boxed(DirectedScene):
+        def construct(self):
+            eq = self.math(r"s \approx e^x \cdot m")
+            with self.beat("a"):
+                self.place(eq, region="right")
+                seen["boxes"] = self.highlight(eq, "m", color=None, box=True).boxes
+            with self.beat("b"):
+                self.place(self.math(r"s = e^x", font_size=56), region="left", replaces=eq)
+
+    scene = render(Boxed)
+    assert id(seen["boxes"]) not in drawn(scene)
+
+
+@requires_latex
+def test_one_placement_can_replace_one_object_and_bring_in_others(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Swap(DirectedScene):
+        def construct(self):
+            old = self.math("a = b")
+            with self.beat("a"):
+                self.place(old)
+            new, other = self.math("a = c"), self.math("c = b")
+            with self.beat("b"):
+                self.place(new, other, replaces=old)
+            seen["parts"] = (old, new, other)
+
+    scene = render(Swap)
+    old, new, other = seen["parts"]
+    assert {id(new), id(other)} <= drawn(scene) and id(old) not in drawn(scene)
+
+
+@requires_latex
+def test_a_group_that_would_stack_a_new_formula_on_an_old_one_is_refused(render: Render) -> None:
+    class Gather(DirectedScene):
+        def construct(self):
+            with self.beat("a"):
+                f = self.derive(r"1 + 3 + \cdots + (2n-1) = n^2", region="right")
+            with self.beat("b", keep=[f]):
+                big = self.math(r"1 + 3 + \cdots + 19 = 10^2")
+                big.move_to(f)
+                with pytest.raises(CompositionError, match=r"self.place\(old, new\)"):
+                    self.place(VGroup(f, big), region="right")
+                self.place(f, big, region="right")
+
+    render(Gather)
+
+
+def test_text_too_small_to_read_is_refused(render: Render) -> None:
+    class Tiny(DirectedScene):
+        def construct(self):
+            words = self.text("a label line far too long to keep its size " * 2, role="label")
+            with pytest.raises(CompositionError, match="font size 1[0-9] to fit; below 18"):
+                self.place(words, region="left")
+
+    render(Tiny)
+
+
+@requires_latex
+def test_a_derivation_continues_under_its_kept_lines(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class More(DirectedScene):
+        def construct(self):
+            with self.beat("a"):
+                steps = self.derive(r"(a+b)^2 = (a+b)(a+b)", r"= a^2 + ab + ba + b^2")
+            with self.beat("b", keep=[steps]):
+                seen["same"] = self.derive(r"= a^2 + 2ab + b^2", continues=steps) is steps
+            seen["lines"] = steps.lines
+            with self.beat("c", keep=[steps]):
+                taller = [r"= x"] * 12
+                with pytest.raises(CompositionError, match="No room under the derivation"):
+                    self.derive(*taller, continues=steps)
+
+    scene = render(More)
+    lines = seen["lines"]
+    assert seen["same"] and len(lines) == 3
+    assert np.allclose([relation_x(line) for line in lines], relation_x(lines[0]), atol=1e-6)
+    assert lines[1].get_bottom()[1] > lines[2].get_top()[1]
+    assert np.isclose(lines[2].font_size, lines[1].font_size)
+    assert all(id(line) in drawn(scene) for line in lines)
+
+
+@requires_latex
+def test_replacing_a_derivation_morphs_its_closest_line_and_fades_the_rest() -> None:
+    from manim import FadeOut, TransformMatchingTex
+
+    from manim_director_runtime import motion
+    from manim_director_runtime.derivation import Derivation
+
+    lines = [MathTex("x", "=", "1"), MathTex("=", "e^x", r"\cdot", "1")]
+    morph = motion.morph(Derivation(lines, [None, None]), MathTex("s", "=", "e^x"))
+    first, *rest = morph.animations
+    assert isinstance(first, TransformMatchingTex) and first.to_remove[0] is lines[1]
+    assert [type(a) for a in rest] == [FadeOut]
+
+
+def test_a_new_caption_comes_in_only_once_the_old_one_has_gone(render: Render) -> None:
+    seen: list[tuple[float, float]] = []
+
+    class Captions(DirectedScene):
+        def construct(self):
+            with self.beat("a"):
+                old = self.caption("The first caption.")
+            new = self.caption("The second caption, in the same place.")
+            probe = Dot().set_opacity(0)
+            probe.add_updater(lambda _: seen.append((shown(self, old), shown(self, new))))
+            self.add(probe)
+            self.pause()
+
+    def shown(scene: Any, mobject: Any) -> float:
+        if id(mobject) not in drawn(scene):
+            return 0.0
+        return max(leaf.get_fill_opacity() for leaf in mobject.family_members_with_points())
+
+    render(Captions, every_frame=True)
+    assert seen and not [pair for pair in seen if min(pair) > 0.05]

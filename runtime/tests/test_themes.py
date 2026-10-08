@@ -27,7 +27,7 @@ CVD = {
         [0.004733, 0.691367, 0.303900],
     ],
 }
-SIGNAL_TOKENS = ("foreground", "primary", "secondary", "accent", "muted", "success")
+SIGNAL_TOKENS = ("foreground", "primary", "secondary", "accent", "muted", "success", "highlight")
 
 
 def linear(hex_color: str) -> np.ndarray:

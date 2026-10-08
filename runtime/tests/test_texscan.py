@@ -126,6 +126,7 @@ def test_colored_symbols_stay_inside_their_atoms() -> None:
 
 def test_relations() -> None:
     assert all(is_relation(r) for r in ["=", r"\le", r" \approx ", r"\Rightarrow"])
+    assert is_relation(r"\xrightarrow{h \to 0}")  # a limit step aligns like =
     assert not any(is_relation(r) for r in ["+", "x", r"\cdot"])
 
 

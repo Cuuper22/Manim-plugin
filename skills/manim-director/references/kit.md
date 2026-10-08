@@ -97,6 +97,7 @@ with self.beat("bars"):
     self.show(bars)
 with self.beat("refine", keep=[plot, bars]):
     self.caption("Thinner bars hug the curve more closely.")
+    self.pause()
     self.play(plot.refine(bars), run_time=1.5)
 with self.beat("zoom", keep=[plot], run_time=2):
     self.place(plot, region="left")
@@ -193,12 +194,15 @@ with self.beat("predict"):
     self.ask("Does the root split over a sum? Decide first.")
 with self.beat("test", keep=[card]):
     self.caption("Try a = 9 and b = 16.")
+    self.pause()
     self.play(card.test(r"\sqrt{9 + 16} = 5", r"\sqrt{9} + \sqrt{16} = 7"), run_time=2)
 with self.beat("refute", keep=[card]):
     self.caption("5 is not 7: the shortcut fails.")
+    self.pause()
     self.play(card.refute())
 with self.beat("repair", keep=[card]):
     self.caption("The root of a sum is at most the sum of roots.")
+    self.pause()
     self.play(card.repair(r"\sqrt{a + b} \le \sqrt{a} + \sqrt{b}"), run_time=2)
 ```
 
@@ -219,6 +223,7 @@ class ShearKeepsArea(DirectedScene):
             self.shear(grid, run_time=2.5)
         with self.beat("recap", keep=[grid]):
             self.caption("A shear tilts the grid but keeps every area.")
+            self.pause()
             self.play(grid.reset())
             self.shear(grid, run_time=1.2)
 ```
@@ -229,22 +234,22 @@ Signatures are exact; each example is a line of a rendered sample above or of a 
 
 | Signature | Example |
 |---|---|
-| `FunctionPlot(*functions, x_range=(-1, 3), y_range=None, size=(6.0, 4.5), labels=(), colors=('primary', 'secondary', 'foreground'), numbers=True, axis_labels=None, breaks=())` | `plot = FunctionPlot(lambda x: x**2, x_range=(0, 2), labels=["y = x^2"])` |
+| `FunctionPlot(*functions, x_range=(-1, 3), y_range=None, size=(6.0, 4.5), labels=(), colors=('primary', 'secondary', 'foreground'), numbers=True, axis_labels=None, breaks=(), equal_scale=False)` | `plot = FunctionPlot(lambda x: x**2, x_range=(0, 2), labels=["y = x^2"])` |
 | `FunctionPlot.f(x, curve=0)` | `plot.f(1)` |
 | `FunctionPlot.dot(x, curve=0, *, color='foreground', label=None)` | `plot.dot(1, label="P")` |
-| `FunctionPlot.guides(x, curve=0)` | `plot.guides(1)` |
+| `FunctionPlot.guides(x, curve=0, *, label=None, color='muted')` | `plot.guides(1)` |
 | `FunctionPlot.tangent(x, curve=0, *, length=0.45, color='accent')` | `self.show(plot.tangent(1))` |
-| `FunctionPlot.secant(x, h, curve=0, *, color='accent', legs=True)` | `self.show(plot.secant(1, h))` |
+| `FunctionPlot.secant(x, h, curve=0, *, color='accent', legs=True, labels=None)` | `self.show(plot.secant(1, h))` |
 | `FunctionPlot.area(a, b, curve=0, *, under=None, color='primary', opacity=0.35)` | `self.show(plot.area(0, np.pi))` |
 | `FunctionPlot.riemann(a, b, n, *, rule='left', curve=0, color='primary')` | `bars = plot.riemann(0, 2, 4)` |
 | `FunctionPlot.refine(bars, factor=2)` | `self.play(plot.refine(bars), run_time=1.5)` |
 | `FunctionPlot.inset(around, radius, *, size=(3.2, 3.2))` | `self.place(plot.inset(around=(1, 1), radius=0.2), region="right")` |
 | `Readout(label, value, *, decimals=2, unit=None, color='foreground', width=6)` | `Readout("area", grid.det)` |
-| `DotArray(rows, cols=None, *, shown=True, radius=0.1, gap=0.2, color='muted')` | `crowd = DotArray(10, radius=0.15, gap=0.22)` |
-| `DotArray.at(r, c)` | `sick = crowd.at(*SICK)` |
-| `DotArray.select(where, *, color=None)` | `ring = dots.select(ell(k), color="accent")` |
+| `DotArray(rows, cols=None, *, shown=True, radius=0.1, gap=0.2, color='muted', ghost=True)` | `crowd = DotArray(10, radius=0.15, gap=0.22)` |
+| `DotArray.at(r, c)` | `copies = [crowd.at(*SICK).copy(), *(crowd.at(*rc).copy() for rc in FLAGGED)]` |
+| `DotArray.select(where, *, color=None)` | `ell = dots.select(lambda r, c: max(r, c) == k, color=COLORS[k % 2])` |
 | `DotArray.paint(where, color)` | `self.play(crowd.paint(positive, "accent"))` |
-| `DotArray.hide(where=None)` | `self.play(dots.hide(ell(3)))` |
+| `DotArray.hide(where=None)` | `self.play(dots.hide(lambda r, c: max(r, c) == 3))` |
 | `VectorGrid(extent=3, *, unit=0.8, fits=(), ghost=True, basis=True, colors=None)` | `grid = VectorGrid(extent=1, unit=1.3, fits=[shear])` |
 | `VectorGrid.vector(coords, *, label=None, color='foreground')` | |
 | `VectorGrid.unit_square(*, color='foreground', opacity=0.15)` | `square = grid.unit_square(color="accent", opacity=0.3)` |
@@ -260,16 +265,16 @@ Signatures are exact; each example is a line of a rendered sample above or of a 
 | `Figure.right_angle(abc, *, size=0.25, color='muted')` | `fig.right_angle("CAB")` |
 | `Figure.ticks(*segments, count=1, color='muted')` | `iso.ticks("AB", "AC")` |
 | `Figure.length(ab, label, *, side=0, color=None)` | `long_side = fig.length("BC", "5")` |
-| `reserve(mobject)` | `sums = VGroup(*done, reserve(VGroup(last, guess)))` |
+| `reserve(mobject)` | `doubled = reserve(Readout("area", stretched.det))` |
 | `hide(*mobjects, run_time=0.8)` | `self.play(hide(long_side))` |
 | `self.show(*mobjects, run_time=None, lag=0.15)` | `self.show(long_side, run_time=1.5)` |
-| `self.annotate(target, note, *, term=None, occurrence=None, style='arrow', side='auto', color='accent', mark=True, persist=False, run_time=None)` | `self.annotate(roots, "decides how many real roots", term="b^2 - 4ac")` |
-| `self.link(*targets, color='accent', run_time=None, persist=False)` | `self.link(self.term(product, "4"), dots.select(lambda r, c: r == 0))` |
+| `self.annotate(target, note, *, term=None, occurrence=None, style='arrow', side='auto', color='highlight', mark=True, persist=False, run_time=None)` | `self.annotate(roots, "decides how many real roots", term="b^2 - 4ac")` |
+| `self.link(*targets, color='highlight', run_time=None, persist=False)` | `self.link(self.term(product, "4"), dots.select(lambda r, c: r == 0))` |
 | `self.ask(question, *, hold=None)` | `self.ask("Does the root split over a sum? Decide first.")` |
-| `self.misconception(claim, *, tag='Tempting', region='left', evidence=2)` | `card = self.misconception(r"\sqrt{a + b} = \sqrt{a} + \sqrt{b}")` |
+| `self.misconception(claim, *, tag='Your guess', region='left', evidence=2, fix=None, refuted='Tempting')` | `card = self.misconception(r"\sqrt{a + b} = \sqrt{a} + \sqrt{b}")` |
 | `Misconception.test(*evidence)` | `self.play(card.test(r"\sqrt{9 + 16} = 5", r"\sqrt{9} + \sqrt{16} = 7"), run_time=2)` |
 | `Misconception.refute()` | `self.play(card.refute())` |
-| `Misconception.repair(fix)` | `self.play(card.repair(r"\sqrt{a + b} \le \sqrt{a} + \sqrt{b}"), run_time=2)` |
+| `Misconception.repair(fix=None)` | `self.play(card.repair(r"\sqrt{a + b} \le \sqrt{a} + \sqrt{b}"), run_time=2)` |
 | `self.pause()` | `self.pause()` |
 
 `annotate` styles: `arrow` (a note and an arrow), `brace` (along a term's long side) and `label`

@@ -40,7 +40,7 @@ from . import motion
 from .beats import Transition
 from .errors import CompositionError
 from .kit.card import Misconception
-from .kit.labels import backdrop, halo, label, trace
+from .kit.labels import backdrop, halo, label, mathlike, trace
 from .kit.overlay import derived, is_overlay, pacing, reserved, reveal
 from .layout import LANES, Rect, Region
 from .staging import bounds, describe
@@ -127,7 +127,7 @@ class Devices:
         occurrence: int | None = None,
         style: Style = "arrow",
         side: str | Sequence[float] = "auto",
-        color: str = "accent",
+        color: str = "highlight",
         mark: bool = True,
         persist: bool = False,
         run_time: float | None = None,
@@ -151,7 +151,7 @@ class Devices:
         seconds = NOTE_SECONDS if run_time is None else run_time
         self._settle([target], seconds)
         hue = self.theme.color(color)
-        words = halo(label(note, color=color))
+        words = halo(label(mathlike(note), Role.NOTE, color=color))
         # A brace hugs its term, closer than notes keep to anything else.
         avoid = self._obstacles(reserved=persist, besides=glyphs if style == "brace" else None)
         spot = _free_side(
@@ -170,6 +170,7 @@ class Devices:
             )
         boxed = mark and term is not None
         drawn = derived(_note_builder(glyphs, words, spot, style, hue, boxed))
+        pacing(drawn, "note", chunks=0, read=None)  # read in full, but adds no new thing
         drawn.director_parent = self._placed_root(glyphs.family_members_with_points()[0])
         drawn.director_persist = persist
         muted = self.theme.muted
@@ -197,7 +198,7 @@ class Devices:
     def link(
         self: Any,
         *targets: Mobject,
-        color: str = "accent",
+        color: str = "highlight",
         run_time: float | None = None,
         persist: bool = False,
     ) -> VGroup:
@@ -221,7 +222,7 @@ class Devices:
         marks = []
         for target in targets:
             leaves = _inked(target)
-            drawn = derived(lambda leaves=leaves: _link_mark(leaves, hue))
+            drawn = derived(_link_mark(leaves, hue))
             drawn.director_parent = self._placed_root(leaves[0])
             drawn.director_persist = persist
             marks.append(pacing(drawn, "link", chunks=0, read=0.0))  # points at, adds nothing
@@ -249,16 +250,20 @@ class Devices:
         self: Any,
         claim: str | Mobject,
         *,
-        tag: str = "Tempting",
+        tag: str = "Your guess",
         region: Region | str = Region.LEFT,
-        evidence: int = 2,
+        evidence: int | Sequence[str | Mobject] = 2,
+        fix: str | Mobject | None = None,
+        refuted: str | None = "Tempting",
     ) -> Misconception:
-        """Stage a tempting wrong idea as a card, in neutral ink so the viewer recognizes it as
-        their own, with room kept for `evidence` tests, a ✗ and a repair row. Then play its
-        story, a beat each: `card.test(...)`, `card.refute()`, `card.repair(...)`. The struck
+        """Stage the viewer's tempting wrong idea as a card under `tag`, in neutral ink so they
+        recognize it as their own, with room kept for the evidence, a ✗ and a repair row.
+        Then play its story, a beat each: `card.test()`, `card.refute()` (the tag becomes
+        `refuted`), `card.repair()`. Give `evidence` (the rows) and `fix` up front so each row
+        gets room of its own height; text with `$math$` is set in the theme's font. The struck
         claim stays in view to compare with its repair. It enters like placed content."""
 
-        card = Misconception(claim, tag=tag, evidence=evidence)
+        card = Misconception(claim, tag=tag, evidence=evidence, fix=fix, refuted=refuted)
         self.place(card, region=region)
         return card
 
@@ -318,8 +323,8 @@ class Devices:
         return rects
 
     def _ask_mark(self: Any) -> VGroup:
-        ring = Circle(radius=0.2, stroke_color=self.theme.accent, stroke_width=2.5)
-        glyph = self.text("?", Role.CAPTION, weight="BOLD", color=self.theme.accent)
+        ring = Circle(radius=0.2, stroke_color=self.theme.highlight, stroke_width=2.5)
+        glyph = self.text("?", Role.CAPTION, weight="BOLD", color=self.theme.highlight)
         return VGroup(ring, glyph.scale_to_fit_height(0.22).move_to(ring))
 
 
@@ -362,14 +367,33 @@ def _free_side(
                 return d, words.get_center() - glyphs.get_critical_point(d)
         return None
     target = bounds(glyphs)
+    crossed = [r for r in avoid if not target.contains(r)]  # an arrow may end on its target
+    fallback = None
     for gap in _LABEL_GAPS if style == "label" else _ARROW_GAPS:
         for d in directions:
             x = target.center[0] + d[0] * (target.width / 2 + words.width / 2 + gap)
             y = target.center[1] + d[1] * (target.height / 2 + words.height / 2 + gap)
-            if free(Rect.around((x, y), words.width, words.height)):
-                center = np.array([x, y, 0.0])
-                return d, center - glyphs.get_critical_point(d)
-    return None
+            if not free(Rect.around((x, y), words.width, words.height)):
+                continue
+            center, tip = np.array([x, y, 0.0]), glyphs.get_critical_point(d)
+            spot = (d, center - tip)
+            tail = center - d * np.array([words.width / 2, words.height / 2, 0.0])
+            if style != "arrow" or _clear(tail, tip, crossed):
+                return spot
+            fallback = fallback or spot  # better a crossed arrow than no note
+    return fallback
+
+
+def _clear(tail: np.ndarray, tip: np.ndarray, avoid: Sequence[Rect]) -> bool:
+    """Whether an arrow from `tail` to `tip` passes clear of `avoid` (other dots, glyphs)."""
+
+    steps = max(2, int(np.linalg.norm(tip - tail) / 0.08))
+    for i in range(steps):  # the last step reaches the target itself
+        x, y = (tail + (tip - tail) * i / steps)[:2]
+        probe = Rect.around((float(x), float(y)), 0.04, 0.04)
+        if any(probe.overlaps(r) for r in avoid):
+            return False
+    return True
 
 
 def _note_builder(
@@ -410,27 +434,39 @@ def _note_builder(
     return build
 
 
-def _link_mark(leaves: Sequence[VMobject], hue: str) -> VMobject:
-    """A soft halo behind each dot, a box behind glyphs, a glow behind lines and shapes."""
+def _link_mark(leaves: Sequence[VMobject], hue: str) -> Callable[[], VMobject]:
+    """Draws a soft halo behind each dot, a box behind glyphs, a glow behind lines and shapes.
+    The kind is chosen once: a mark that changed shape as its target fades out would break
+    the target's exit."""
 
     depth = min(leaf.z_index for leaf in leaves) - 1
-    if all(isinstance(leaf, Dot) for leaf in leaves):
-        mark = VGroup(
+
+    def halos() -> VMobject:
+        return VGroup(
             *(
                 Dot(leaf.get_center(), radius=0.95 * leaf.width, color=hue, fill_opacity=0.4)
                 for leaf in leaves
             )
         )
-    elif all(leaf.get_fill_opacity() > 0 and leaf.get_stroke_width() == 0 for leaf in leaves):
-        mark = backdrop(VGroup(*leaves), hue, opacity=0.3)  # as strong as the dots' halos
-    else:
-        mark = VGroup(
+
+    def box() -> VMobject:
+        return backdrop(VGroup(*leaves), hue, opacity=0.3)  # as strong as the dots' halos
+
+    def glow() -> VMobject:
+        return VGroup(
             *(
                 leaf.copy().set_fill(opacity=0).set_stroke(hue, width=10, opacity=0.45)
                 for leaf in leaves
             )
         )
-    return mark.set_z_index(depth)
+
+    if all(isinstance(leaf, Dot) for leaf in leaves):
+        draw = halos
+    elif all(leaf.get_fill_opacity() > 0 and leaf.get_stroke_width() == 0 for leaf in leaves):
+        draw = box
+    else:
+        draw = glow
+    return lambda: draw().set_z_index(depth)
 
 
 def _inked(mobject: Mobject) -> list[VMobject]:

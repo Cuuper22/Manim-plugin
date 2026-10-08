@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections import Counter
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 
 from manim import (
     LEFT,
@@ -21,6 +22,7 @@ from manim import (
     Mobject,
     ReplacementTransform,
     SingleStringMathTex,
+    Succession,
     Text,
     Transform,
     TransformMatchingShapes,
@@ -45,6 +47,7 @@ SHOW_SECONDS = 1.0
 WRITE_GLYPHS = 12  # longer text and math fade in: writing them out takes too long
 _RISE = 0.15
 _SLIDE = 0.6
+_ORDER_LAG = 0.35
 # How far into the departures the arrivals start, so outgoing and incoming objects never
 # share the stage at full strength.
 _LAG = {
@@ -97,20 +100,47 @@ def depart(mobject: Mobject, transition: Transition) -> Animation:
 
 
 def staggered(
-    departures: list[Animation], arrivals: list[Animation], transition: Transition
+    departures: list[Animation],
+    arrivals: list[Animation],
+    transition: Transition,
+    *,
+    waiting: Sequence[Animation] = (),
+    ordered: bool = False,
 ) -> list[Animation]:
-    if not (departures and arrivals):
-        return departures + arrivals
-    return [
-        AnimationGroup(
-            AnimationGroup(*departures), AnimationGroup(*arrivals), lag_ratio=_LAG[transition]
-        )
-    ]
+    """Departures, with `arrivals` starting partway into them and `waiting` (what takes the
+    place of something leaving) once they are done; `ordered` arrivals come one after the
+    other."""
+
+    arriving = (
+        [LaggedStart(*arrivals, lag_ratio=_ORDER_LAG)]
+        if ordered and len(arrivals) > 1
+        else arrivals
+    )
+    if not departures:
+        return [*arriving, *waiting]
+    leave = AnimationGroup(*departures)
+    if not waiting:
+        if not arriving:
+            return departures
+        return [AnimationGroup(leave, AnimationGroup(*arriving), lag_ratio=_LAG[transition])]
+    if not arriving:
+        return [Succession(leave, AnimationGroup(*waiting))]
+    lag = _LAG[transition]
+    # Arrivals start at `lag` into the departures; the waiting ones exactly when they end.
+    after = AnimationGroup(AnimationGroup(*arriving), AnimationGroup(*waiting), lag_ratio=1 - lag)
+    return [AnimationGroup(leave, after, lag_ratio=lag)]
 
 
 def morph(old: Mobject, new: Mobject) -> Animation:
-    """The most legible continuation from `old` to `new`."""
+    """The most legible continuation from `old` to `new`. From several lines (a derivation),
+    the line sharing the most terms with `new` turns into it and the rest fade, rather than
+    every glyph flying to the nearest shape."""
 
+    lines = [m for m in old.submobjects if _tex_parts(m)]
+    if _tex_parts(new) and not _tex_parts(old) and len(lines) > 1:
+        source = max(lines, key=lambda line: _shared_terms(line, new))
+        rest = [FadeOut(m) for m in old.submobjects if m is not source]
+        return AnimationGroup(TransformMatchingTex(source, new), *rest)
     if _tex_parts(old) and _tex_parts(new):
         return TransformMatchingTex(old, new)
     if _is_text(old) or _is_text(new):
@@ -210,6 +240,14 @@ def _has_fill(mobject: Mobject) -> bool:
 
 def _tex_parts(mobject: Mobject) -> bool:
     return isinstance(mobject, SingleStringMathTex) and len(mobject.submobjects) > 1
+
+
+def _shared_terms(a: Mobject, b: Mobject) -> int:
+    """How many of `b`'s atoms TransformMatchingTex would carry over from `a`."""
+
+    have = Counter(part.tex_string for part in a.submobjects)
+    want = Counter(part.tex_string for part in b.submobjects)
+    return sum((have & want).values())
 
 
 def _written(mobject: Mobject) -> bool:

@@ -71,6 +71,7 @@ class Event:
     spread: float = 0.0  # the widest gap between them, as a fraction of the frame width
     morph_glyphs: int = 0  # glyphs a text or math morph did not carry over
     of: str | None = None  # the one component that everything entering belongs to
+    changed: int = 0  # live values on screen (readouts) that it changed
 
 
 @dataclass(slots=True)
@@ -83,6 +84,12 @@ class Lane:
     words: int
     file: str
     line: int
+
+
+def word_count(text: str) -> int:
+    """Words a viewer reads: tokens with a letter or digit in them ("=" and "→" are not)."""
+
+    return sum(any(ch.isalnum() for ch in token) for token in text.split())
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +212,7 @@ class BeatRecorder:
             self._lanes.pop(key).until = at
         for key, text in shown.items():
             if key not in self._lanes:
-                words = len(text.text.split())
+                words = word_count(text.text)
                 lane = Lane(at, None, text.text, words, self.where(text.file), text.line)
                 (self.titles if text.kind == "title" else self.captions).append(lane)
                 self._lanes[key] = lane

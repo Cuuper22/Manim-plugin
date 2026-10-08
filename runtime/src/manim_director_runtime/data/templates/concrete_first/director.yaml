@@ -1,65 +1,65 @@
 version: 1
 project:
-  name: You test positive
+  name: {{name}}
   description: Pattern 2, concrete first. Count 100 people before any formula, and the base rate does the rest.
-  seed: 5
+  seed: {{seed}}
 engine:
   source: scenes/main.py
   main_scene: PositiveTest
-theme: midnight
+theme: {{theme}}
 direction:
-  symbols: {"1": accent, "5": secondary}
+  symbols: {"1": accent}
 brief:
   viewer:
     who: an adult, comfortable with percentages, who has never seen probability notation
     level: intro
     knows: [percentages, fractions]
-    new: [counting everyone who tests positive]
+    new: [false alarms, counting everyone who tests positive]
     question: You test positive. How worried should you be?
-    wrong_guess: about 95% sure to be sick, since the test is usually right
+    wrong_guess: about 95% sure to be sick, since the test is right 95% of the time
     aha: of everyone who tests positive, only 1 in 6 is sick, because healthy people far outnumber sick ones
-    payoff: answers such questions by imagining 100 people
-    colors: {accent: sick, secondary: healthy but flagged, muted: everyone else}
+    payoff: answers such questions by imagining 100 people and counting the positives
+    colors: {accent: sick, foreground: the ring of a positive test, muted: healthy}
 storyboard:
   - id: people
     intent: introduce
     audience_question: Who gets tested?
     changes: 100 people appear as dots
     takeaway: 100 people; 1 in 100 has the disease.
-  - id: sick
-    intent: explain
-    audience_question: Which of them is sick?
-    changes: one dot turns accent
-    takeaway: 1 person is sick, and tests positive.
-    keep: [crowd]
-  - id: flagged
-    intent: explain
-    audience_question: Does the test make mistakes?
-    changes: five healthy dots turn secondary
-    takeaway: The test also flags 5 healthy people.
+  - id: rates
+    intent: introduce
+    audience_question: How good is the test?
+    changes: the facts appear beside the crowd
+    takeaway: 1 in 100 is sick; the test flags the sick, and 5% of healthy people.
     keep: [crowd]
   - id: predict
     intent: introduce
     audience_question: If you test positive, how likely are you sick?
     changes: nothing moves while the viewer guesses
-    takeaway: The viewer commits to a number.
-    keep: [crowd]
+    takeaway: The viewer commits to a number before seeing any positives.
+    keep: [crowd, facts]
+  - id: positives
+    intent: explain
+    audience_question: Who tests positive?
+    changes: the sick dot turns accent, and rings mark the 6 positives
+    takeaway: 1 sick person and 5 healthy people test positive.
+    keep: [crowd, facts]
   - id: gather
     intent: reveal
-    audience_question: Who tested positive?
-    changes: the six positive dots leave the crowd and line up
-    takeaway: Six people test positive, and only one of them is sick.
-    keep: [crowd]
+    audience_question: Among the positives, how many are sick?
+    changes: the six ringed people line up
+    takeaway: Of the 6 who test positive, only 1 is sick.
+    keep: [crowd, rings]
     aha: true
   - id: answer
     intent: prove
     audience_question: What fraction of them is sick?
     changes: 1 / (1 + 5) = 1/6 ≈ 17% appears under the row
     takeaway: A positive test means about a 17% chance of being sick.
-    keep: [crowd, positives]
+    keep: [crowd, rings, positives]
   - id: recap
     intent: recap
     audience_question: So how worried should you be?
-    changes: everyone who tested negative fades back
+    changes: the positives line up again, with the answer beneath
     takeaway: About 17%, not 95%; count the positives first.
-    keep: [crowd, positives, answer]
+    keep: [crowd, rings]

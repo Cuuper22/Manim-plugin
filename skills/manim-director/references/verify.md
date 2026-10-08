@@ -52,7 +52,8 @@ finding in the handoff.
 
 | Code | Severity | Fires when | Hint |
 |---|---|---|---|
-| `caption_too_fast` | warning | a caption leaves before max(`caption_min_seconds`, `read_base_text` + words ÷ `words_per_second`) | Hold the beat longer (hold= or self.wait), or shorten or split the caption. |
+| `caption_too_fast` | warning | a caption leaves before max(`caption_min_seconds`, `read_base_text` + words ÷ `words_per_second`) | Call self.pause() before the next caption or change, or use fewer words. |
+| `motion_while_reading` | warning | the scene's own play starts moving while the newest caption is still being read | Call self.pause() before the motion: it waits until the caption has been read. |
 | `short_hold` | warning | the stage changes again before the last reveal could be read, or a beat ends with less than `beat_end_min` (`result_end_min` for a result beat) of stillness | Call self.pause() before the next change (it waits as long as the viewer needs), or drop an explicit hold= or pause=. |
 | `question_hold_short` | warning | something moves less than `ask_hold` after an `ask` | Keep everything still while the viewer predicts: leave ask's hold at its default. |
 | `rushed_step` | warning | a derive step or morph is shorter than `motion_min`, a derive pause than `step_pause_min`, too many glyphs change at once, or the aha's motion is shorter than `aha_motion_min` | Raise run_time= or pause=; give the aha its own slow motion. |
@@ -65,6 +66,7 @@ finding in the handoff.
 | `too_dense` | info | more than `max_visible_chunks` lit chunks at a still | Let old objects leave (drop them from keep=), or focus the one that matters. |
 | `palette_overload` | info | more than `max_colors` meaningful colors at a still | Give fewer things their own color; context can be muted. |
 | `unexplained_notation` | info | a symbol-colored token or a mark (right angle, equal ticks) appears before anything names it, unless `knows` lists it as `$…$` | Name it once where it appears: a label on the picture, a caption or a note. |
+| `recap_without_replay` | info | in a film over `plan_min_seconds` with one aha, the last beat does not replay the aha's longest motion | Write the aha as a method and call it again, faster, in the last beat. |
 | `viewer_plan` | info | the brief lacks `question`, `wrong_guess` or `aha`; a beat lacks an audience question or takeaway; storyboard and beats differ; or a film over `plan_min_seconds` lacks an `ask` or exactly one aha | Fill brief.viewer and the storyboard (see the skill's template). |
 
 `qa` also writes `beats.png` (a `contact_sheet` artifact labelled `beats`). It cannot tell whether

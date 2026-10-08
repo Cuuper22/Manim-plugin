@@ -281,7 +281,10 @@ def _save(sheet: Image, path: Path) -> None:
 def _font() -> FreeTypeFont:
     from PIL import ImageFont
 
-    return ImageFont.load_default(size=18)
+    try:  # questions and the aha quote ×, ⋯ and Greek, which Pillow's own font lacks
+        return ImageFont.truetype("DejaVuSans.ttf", 18)
+    except OSError:
+        return ImageFont.load_default(size=18)
 
 
 def _wrapped(text: str, width: float, *, lines: int) -> list[str]:

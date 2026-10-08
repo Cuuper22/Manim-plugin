@@ -20,19 +20,21 @@ class RootOfASum(DirectedScene):
             self.caption("Over a product it does: both sides make 6.")
 
         with self.beat("predict"):
-            card = self.misconception(r"\sqrt{a + b} = \sqrt{a} + \sqrt{b}")
+            card = self.misconception(
+                r"\sqrt{a + b} = \sqrt{a} + \sqrt{b}",
+                evidence=[r"\sqrt{9 + 16} = \sqrt{25} = 5", r"\sqrt{9} + \sqrt{16} = 3 + 4 = 7"],
+                fix=r"\sqrt{a + b} \le \sqrt{a} + \sqrt{b}",
+            )
             self.ask("Does it split over sums too? Decide first.")
 
         with self.beat("test", keep=[card]):
             self.caption("Try it with a = 9 and b = 16.")
-            self.play(
-                card.test(r"\sqrt{9 + 16} = \sqrt{25} = 5", r"\sqrt{9} + \sqrt{16} = 3 + 4 = 7"),
-                run_time=2,
-            )
+            self.pause()
+            self.play(card.test(), run_time=2)
 
         with self.beat("refute", keep=[card]):
-            self.caption("5 is not 7: the shortcut fails.")
             self.play(card.refute())
+            self.caption("5 is not 7: the shortcut fails.")
 
         triangle = Figure({"A": (0, 0), "B": (4, 0), "C": (0, 3)}, unit=1.05, labels=False)
         triangle.polygon("ABC")
@@ -46,16 +48,18 @@ class RootOfASum(DirectedScene):
 
         long_side = triangle.length("BC", r"\sqrt{a + b}")
         with self.beat("hypotenuse", keep=[card, triangle], aha=True):
-            self.caption("Pythagoras: the long side is √(a + b).")
+            self.caption("Pythagoras gives the long side.")
             self.show(long_side, run_time=2)
             self.annotate(long_side, r"$(\sqrt{a})^2 + (\sqrt{b})^2 = a + b$")
 
         with self.beat("repair", keep=[card, triangle]):
-            self.caption("For a, b ≥ 0, straight across is never longer than around.")
-            self.play(card.repair(r"\sqrt{a + b} \le \sqrt{a} + \sqrt{b}"), run_time=2)
+            self.caption("Straight across is never longer than around.")
+            self.pause()
+            self.play(card.repair(), run_time=2)
             self.link(self.term(card.fix, r"\sqrt{a + b}"), across)
 
         with self.beat("recap", keep=[card, triangle]):
             self.caption("Roots split over products, not over sums.")
+            self.pause()
             self.play(hide(long_side))
             self.show(long_side, run_time=1)

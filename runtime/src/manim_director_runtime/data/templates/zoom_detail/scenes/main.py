@@ -53,12 +53,17 @@ class SinNearZero(DirectedScene):
             Readout("x", x),
             Readout(r"\frac{\sin x}{x}", lambda: np.sin(x.get_value()) / x.get_value(), decimals=3),
         ).arrange(DOWN, aligned_edge=LEFT, buff=0.5)
+        chord = plot.secant(0, x)
         with self.beat("measure", keep=[plot]):
             self.place(readouts, region="right")
-            self.caption("As x shrinks, the slope sin x / x heads to 1.")
-            self.show(plot.secant(0, x))
+            self.caption("The chord from 0 has slope sin x / x.")
+            self.show(chord)
+
+        with self.beat("shrink", keep=[plot, readouts, chord]):
+            self.caption("Watch that slope as x shrinks.")
             self.pause()
             self.play(x.animate.set_value(0.05), run_time=3)
+            self.caption("It heads to 1: the chord lies along y = x.")
 
         with self.beat("recap", keep=[plot], transition="reveal"):
             self.zoom(plot, self.math(r"\sin x \approx x"))

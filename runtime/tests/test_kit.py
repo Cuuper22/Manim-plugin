@@ -564,3 +564,65 @@ def test_a_reserved_readout_stays_hidden_while_its_value_changes(render: Render)
 
     render(Hidden, every_frame=True)
     assert seen == {"while reserved": False, "shown": True}
+
+
+def test_a_slope_triangle_climbs_the_slope_times_its_run(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Climb(DirectedScene):
+        def construct(self):
+            plot = FunctionPlot(np.exp, x_range=(-1, 2), labels=["y = e^x"])
+            x = ValueTracker(0.0)
+            self.place(plot)
+            triangle = plot.slope_triangle(x)
+            guides = plot.guides(x, label="height", color="primary")
+            self.show(triangle, guides)
+            self.play(x.animate.set_value(1.0))
+            seen["parts"] = triangle.submobjects
+            seen["guides"] = guides.submobjects
+            seen["plot"] = plot
+
+    render(Climb, every_frame=True)
+    run, climb, slope, across, rise = seen["parts"]
+    plot = seen["plot"]
+    assert close(climb.get_end(), plot.axes.c2p(2, np.e + np.e))  # rise e over a run of 1
+    assert rise.get_left()[0] > climb.get_x() and across.get_top()[1] < run.get_y()
+    *drops, name = seen["guides"]
+    assert name.get_left()[0] > drops[0].get_x()  # beside the drop, under the rising curve
+    assert hex_of(drops[0]) == MIDNIGHT.primary
+
+
+def test_secant_legs_carry_their_names_until_they_vanish() -> None:
+    plot = FunctionPlot(np.exp, x_range=(-1, 2))
+    h = ValueTracker(1.0)
+    secant = plot.secant(0, h, labels=("h", "e^h - 1"))
+    run, rise = secant.submobjects[2:4]  # after the two legs
+    assert run.get_top()[1] < plot.point(0)[1] and rise.get_left()[0] > plot.point(1)[0]
+    h.set_value(0.001)
+    secant.update(0)
+    assert max(part.width for part in secant.submobjects[2:4]) < 0.05
+    with pytest.raises(CompositionError, match="two labels"):
+        plot.secant(0, h, labels=("h",))
+
+
+def test_equal_scale_draws_slope_one_at_45_degrees() -> None:
+    plot = FunctionPlot(lambda x: x, x_range=(0, 4), y_range=(0, 2), equal_scale=True)
+    corner, top = plot.axes.c2p(0, 0), plot.axes.c2p(1, 1)
+    assert top[0] - corner[0] == pytest.approx(top[1] - corner[1])
+    assert all(n.director_ticks for axis in plot.axes for n in axis.numbers)
+
+
+def test_dots_to_come_show_as_rings_and_rings_mark_a_second_fact() -> None:
+    dots = DotArray(3, shown=lambda r, c: r == 0)
+    assert len(dots.ghosts) == 6 and dots.ghosts.director_ground
+    assert len(DotArray(2).ghosts) == 0
+    rings = dots.ring(lambda r, c: r == 0, color="secondary")
+    assert len(rings.submobjects) == 3 and rings.director_parent is dots
+    assert close(rings[0].get_center(), dots.at(0, 0).get_center())
+
+
+def test_theme_text_keeps_its_size_and_the_fonts_spacing() -> None:
+    from manim_director_runtime.kit import context
+
+    caption = context.text("Odd numbers are the Ls of a growing square.", "caption")
+    assert caption.font_size == pytest.approx(26)

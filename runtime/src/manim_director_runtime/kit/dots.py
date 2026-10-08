@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from manim import Animation, Dot, FadeToColor, LaggedStart, VGroup
+from manim import Animation, Circle, Dot, FadeToColor, LaggedStart, VGroup, VMobject
 
 from ..errors import CompositionError
 from . import context
-from .overlay import hide, pacing, reserve
+from .overlay import derived, hide, overlay, pacing, reserve
 
 Where = Callable[[int, int], bool]
 
@@ -17,9 +17,10 @@ class DotArray(VGroup):
     """`rows` × `cols` dots, row by row from the top left: `at(r, c)`.
 
     Dots that `shown` leaves out are reserved: laid out, invisible, and revealed with
-    `self.show(dots.select(...))`, so the picture never reflows. A selection is the dots
-    themselves: show it, `place()` it elsewhere (the dots glide out of the array), annotate it,
-    or `paint()` it.
+    `self.show(dots.select(...))`, so the picture never reflows; with `ghost` their places
+    are faint rings meanwhile, so the shape to be filled shows from the start. A selection is
+    the dots themselves: show it, `place()` it elsewhere (the dots glide out of the array),
+    annotate it, `paint()` it, or `ring()` it.
     """
 
     def __init__(
@@ -31,6 +32,7 @@ class DotArray(VGroup):
         radius: float = 0.1,
         gap: float = 0.2,
         color: str = "muted",
+        ghost: bool = True,
     ) -> None:
         super().__init__()
         cols = rows if cols is None else cols
@@ -49,9 +51,22 @@ class DotArray(VGroup):
                 self.add(dot)
         self.center()
         visible = shown if callable(shown) else (lambda r, c: bool(shown))
-        for (r, c), dot in self._grid.items():
-            if not visible(r, c):
-                reserve(dot)
+        hidden = [dot for (r, c), dot in self._grid.items() if not visible(r, c)]
+        self.ghosts = VGroup()
+        if ghost and hidden:
+            muted = context.color("muted")
+            self.ghosts.add(
+                *(
+                    Circle(radius=radius * 0.85, stroke_color=muted, stroke_width=1.5)
+                    .set_stroke(opacity=0.5)
+                    .move_to(dot)
+                    for dot in hidden
+                )
+            )
+            self.ghosts.director_ground = True  # notes may sit over the rings
+            self.add_to_back(self.ghosts)
+        for dot in hidden:
+            reserve(dot)
         pacing(self, "dots", chunks=1, read=0.5)
 
     def at(self, r: int, c: int) -> Dot:
@@ -88,6 +103,22 @@ class DotArray(VGroup):
         if not visible:
             raise CompositionError("paint() selected no visible dots; show() them first.")
         return LaggedStart(*(FadeToColor(dot, hue) for dot in visible), lag_ratio=0.1)
+
+    def ring(self, where: Where | int, color: str = "foreground") -> VMobject:
+        """Rings around the selected dots, to `show()`: a second fact about each one (tested
+        positive) that leaves its color for the first (sick). The rings follow the dots."""
+
+        dots, hue = self._where(where), context.color(color)
+
+        def build() -> VMobject:
+            return VGroup(
+                *(
+                    Circle(radius=0.85 * dot.width, stroke_color=hue, stroke_width=3).move_to(dot)
+                    for dot in dots
+                )
+            )
+
+        return overlay(derived(build), self, "rings")
 
     def hide(self, where: Where | None = None) -> Animation:
         """Fade the selected (default: all) visible dots back to reserved, for a replay."""

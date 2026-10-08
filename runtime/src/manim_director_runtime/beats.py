@@ -49,6 +49,7 @@ class Beat:
     transitioned: bool = field(default=False, repr=False)
     focused: bool = field(default=False, repr=False)
     started: float = field(default=0.0, repr=False)  # video seconds when it was entered
+    answers: bool = field(default=False, repr=False)  # the beat before it asked to predict
     record: int | None = field(default=None, repr=False)
 
     def notes(self) -> dict[str, Any]:

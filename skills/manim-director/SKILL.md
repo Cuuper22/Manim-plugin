@@ -72,7 +72,7 @@ storyboard:
   Titles: at most 8 words.
 - End by replaying the aha quickly, with the question and its answer both on screen.
 
-Build on the gallery film whose pattern fits (`<this skill's directory>/../../examples/gallery`).
+Start from the gallery template whose pattern fits (`init --template <name>`).
 Infer ordinary aesthetic choices; ask one focused question only when two readings of the request
 would produce different mathematics. Budgets, patterns, anti-patterns and the critique
 checklist are in [references/viewer.md](references/viewer.md).

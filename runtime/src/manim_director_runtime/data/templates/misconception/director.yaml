@@ -1,25 +1,25 @@
 version: 1
 project:
-  name: The root of a sum
+  name: {{name}}
   description: Pattern 5, misconception then repair. Predict, test with numbers, then see why on a triangle.
-  seed: 3
+  seed: {{seed}}
 engine:
   source: scenes/main.py
   main_scene: RootOfASum
-theme: midnight
+theme: {{theme}}
 direction:
   symbols: {a: primary, b: secondary}
 brief:
   viewer:
     who: an algebra student who knows square roots and Pythagoras
     level: general
-    knows: [square roots, letters $a$ and $b$ for numbers, $a^2 + b^2 = c^2$]
+    knows: [square roots, "letters $a$ and $b$ for numbers", "$a^2 + b^2 = c^2$"]
     new: [testing a rule with numbers, '$\sqrt{a+b} \le \sqrt{a} + \sqrt{b}$']
     question: Does the square root split over a sum, like it does over a product?
     wrong_guess: yes, since √(ab) = √a·√b, surely √(a+b) = √a + √b
     aha: √a and √b are the legs of a right triangle whose long side is √(a+b), and straight across is shorter than around
     payoff: spots the mistake, and knows which side is bigger
-    colors: {primary: a, secondary: b, accent: what is wrong or new, success: the repair}
+    colors: {primary: a, secondary: b, accent: the long side, success: the repair}
 storyboard:
   - id: hook
     intent: introduce

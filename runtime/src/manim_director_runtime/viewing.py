@@ -16,6 +16,7 @@ from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from itertools import combinations
+from pathlib import Path
 from typing import Any
 
 from manim import (
@@ -33,6 +34,7 @@ from manim import (
     config,
 )
 from manim.animation.transform_matching_parts import TransformMatchingAbstractBase
+from manim.mobject.text.tex_mobject import MathTexPart
 
 from . import pacing, timeline
 from .kit.overlay import is_overlay
@@ -40,7 +42,7 @@ from .layout import LANES, Rect
 from .motion import DIM_OPACITY
 from .staging import bounds, within
 from .texscan import occurrences
-from .timeline import Ask, Definition, Event, LaneText, Seen, Settle, TextBox
+from .timeline import Ask, Definition, Event, LaneText, Seen, Settle, TextBox, word_count
 
 _MOTIONS = frozenset({"play", "tracker", "show"})  # sources whose targets count as motions
 _LABEL_CHARS = 48
@@ -64,17 +66,23 @@ class Viewing:
         introduced = _introduced(played)
         content = [m for m in introduced if self._stage.region_of(m) not in LANES]
         morphed = [m for a in played if (m := _morph_target(a)) is not None]
+        moved = [a.mobject for a in played if getattr(a, "mobject", None) is not None]
         # A transition plays what earlier statements staged: point at the first of them.
         staged = [
             m.director_statement
-            for m in content + morphed + introduced
+            for m in content + morphed + introduced + moved
             if hasattr(m, "director_statement")
         ]
         file, line = staged[0] if staged and source == "transition" else self._statement()
         if shown is None:
             shown = content
         symbols = list(self._symbol_colors)
-        entered = [seen for m in shown if (seen := describe(m, symbols)).chunks or seen.read]
+        revealing = {id(m) for m in _revealed(animations)}
+        entered = [
+            seen
+            for m in shown
+            if _counts(seen := describe(m, symbols, revealing=id(m) in revealing))
+        ]
         # What a morph brings in costs its changed glyphs (morph_glyphs), but its notation
         # is new to the viewer all the same.
         entered += [
@@ -82,12 +90,20 @@ class Viewing:
             for m in morphed
             if (seen := describe(m, symbols)).symbols or seen.conventions
         ]
-        moved = [a.mobject for a in played if getattr(a, "mobject", None) is not None]
         units, tracked = self._targets(list(shown) + moved) if source in _MOTIONS else ([], False)
         if source == "play" and tracked and not units:
             source = "tracker"
         unit = self._unit_of(shown)
-        yield
+        live = self._live_values()
+        try:
+            yield
+        except Exception as error:  # Manim's own traceback ends inside Manim
+            beat = f"beat {self._beat.id!r}" if self._beat is not None else "the scene"
+            error.add_note(
+                f"Manim Director: raised while playing the {source} of {beat}, from "
+                f"{Path(file).name}:{line}; what leaves or morphs there was staged earlier."
+            )
+            raise
         recorder = timeline.active()
         event = Event(
             at=at,
@@ -101,6 +117,10 @@ class Viewing:
             spread=_spread(units),
             morph_glyphs=sum(_changed_glyphs(a) for a in played),
             of=unit,
+            changed=sum(
+                abs(number.get_value() - value) >= 0.5 * 10.0**-number.num_decimal_places
+                for number, value in live
+            ),
         )
         self._events.append(event)
         lanes = self._lane_texts()
@@ -152,8 +172,10 @@ class Viewing:
         mobject.director_lane = LaneText(kind, text, *self._statement())  # type: ignore[arg-type]
 
     def _asked(self: Any, question: str, hold: float) -> None:
-        """Record a prediction prompt that is on screen now (for `ask`)."""
+        """Record a prediction prompt that is on screen now (for `ask`); the next beat
+        answers it."""
 
+        self._asked_in = self._beat.id if self._beat is not None else None
         recorder = timeline.active()
         if recorder is not None:
             file, line = self._statement()
@@ -174,6 +196,7 @@ class Viewing:
         self._events: list[Event] = []  # every change shown so far, recorded or not
         self._lanes_since: dict[int, tuple[float, LaneText]] = {}  # captions/titles on screen
         self._units: dict[int, str] = {}
+        self._asked_in: str | None = None  # the beat of the latest ask
 
     def _clock(self: Any) -> float:
         """Seconds into the video: the recorder's count of frames written when recording."""
@@ -196,6 +219,15 @@ class Viewing:
             duration = math.nextafter(duration, math.inf)
         self.wait(duration)
 
+    def _live_values(self: Any) -> list[tuple[DecimalNumber, float]]:
+        """The numbers of the readouts the viewer can see now, with their values."""
+
+        return [
+            (m.number, m.number.get_value())
+            for m in self.get_mobject_family_members()
+            if getattr(m, "director_kind", None) == "readout" and _drawn(m.number)
+        ]
+
     def _unit_of(self, shown: Sequence[Mobject]) -> str | None:
         """A name, stable within this render (`plot-1`, `dots-2`), for the one component that
         everything in `shown` belongs to, if there is one."""
@@ -206,19 +238,39 @@ class Viewing:
             return None
         return self._units.setdefault(id(owners[0]), f"{kind}-{len(self._units) + 1}")
 
-    def _settle(self: Any, shown: Sequence[Mobject], seconds: float) -> None:
-        """Before a device plays: hold still until the viewer has taken in the beat's last
-        change, unless the device continues that same reveal (R7). Content staged for this
-        beat enters with the device instead, so nothing is held for it."""
+    def _settle(
+        self: Any,
+        shown: Sequence[Mobject],
+        seconds: float,
+        least: float = 0.0,
+        *,
+        staged: bool = False,
+    ) -> None:
+        """Before a device plays: hold still (at least `least`) until the viewer has read the
+        beat's captions and taken in its last change, unless the device continues that same
+        reveal (R7). Content staged meanwhile enters with the device, after the hold its own
+        flush makes (`staged`) mid-beat, or at once in the beat's first transition."""
 
-        if self._stage.pending():
+        if self._stage.pending() and not staged:
             return
         beat = self._beat.id if self._beat is not None else None
-        events = [e for e in self._events if e.beat == beat]
         rest = pacing.owed(
-            events, self._budgets, now=self._clock(), of=self._unit_of(shown), seconds=seconds
+            [e for e in self._events if e.beat == beat],
+            self._budgets,
+            now=self._clock(),
+            of=self._unit_of(shown),
+            seconds=seconds,
+            result=self._result(self._beat),
+            lanes=self._lane_reading(),
         )
-        self._still_for(rest)
+        self._still_for(max(rest, least))
+
+    def _lane_reading(self: Any) -> list[tuple[float, float]]:
+        """When each caption or title that entered in this beat appeared, and its reading."""
+
+        start = self._beat.started if self._beat is not None else 0.0
+        shown = [(at, word_count(lane.text)) for at, lane in self._lanes_since.values()]
+        return pacing.lane_reading([lane for lane in shown if lane[0] >= start], self._budgets)
 
     def _statement(self) -> tuple[str, int]:
         """The innermost line of the scene's own file on the stack: the statement that caused
@@ -289,19 +341,21 @@ class Viewing:
             if self._stage.region_of(top) not in LANES and not follower and id(unit) not in counted:
                 counted.add(id(unit))
                 chunks += describe(unit, ()).chunks
-        boxes = [
-            TextBox(_label(unit), _frame_box(bounds(unit)))
+        units = {  # a text can sit in two groups at once, e.g. a card's slots and its rows
+            id(unit): unit
             for top in self.mobjects
             if not self._backstage(top)
             for unit in _text_units(top)
             if _drawn(unit)
-        ]
+        }
+        boxes = [TextBox(_label(unit), _frame_box(bounds(unit))) for unit in units.values()]
         return chunks, sorted(colors), boxes
 
 
-def describe(mobject: Mobject, symbols: Collection[str]) -> Seen:
-    """What a viewer must take in when `mobject` enters. Components and overlays declare their
-    own load (`director_chunks`, `director_read`); plain content counts as one chunk whose
+def describe(mobject: Mobject, symbols: Collection[str], *, revealing: bool = False) -> Seen:
+    """What a viewer must take in when `mobject` enters (`revealing`: reserved parts count, as
+    they are being shown). Components and overlays declare their own load (`director_chunks`,
+    `director_read`; a read of None is measured); plain content counts as one chunk whose
     reading time comes from its words and math glyphs."""
 
     family = mobject.get_family()
@@ -309,8 +363,8 @@ def describe(mobject: Mobject, symbols: Collection[str]) -> Seen:
     conventions = list(
         dict.fromkeys(c for m in family for c in getattr(m, "director_conventions", ()))
     )
-    if hasattr(mobject, "director_chunks"):
-        held_back = _reserved(mobject)  # it counts when show() reveals it
+    held_back = not revealing and _reserved(mobject)  # it counts when show() reveals it
+    if getattr(mobject, "director_read", None) is not None:
         return Seen(
             kind=mobject.director_kind,
             label=_label(mobject),
@@ -326,28 +380,33 @@ def describe(mobject: Mobject, symbols: Collection[str]) -> Seen:
     while pending:
         m = pending.popleft()
         if m is not mobject and hasattr(m, "director_chunks"):
-            if not _reserved(m):
+            if revealing or not _reserved(m):
                 declared.append(m)
+        elif isinstance(m, Tex | Text | MarkupText) and not (revealing or _drawn(m)):
+            continue  # reserved: it counts when it is shown
         elif isinstance(m, Tex):
             words += len(_MATH_SPAN.sub(" x ", getattr(m, "authored_tex", m.tex_string)).split())
-        elif isinstance(m, SingleStringMathTex | DecimalNumber):  # reserved glyphs come later
-            glyphs += sum(not _hidden(g) for g in m.family_members_with_points())
+        elif isinstance(m, SingleStringMathTex | MathTexPart | DecimalNumber):
+            glyphs += sum(revealing or not _hidden(g) for g in m.family_members_with_points())
         elif isinstance(m, Text):  # `.text` has its spaces removed
             words += len(m.original_text.split())
         elif isinstance(m, MarkupText):
             words += len(_MARKUP.sub(" ", m.original_text).split())
         else:
-            shapes = shapes or bool(_drawn(m, family=False))
+            shapes = shapes or bool(_drawn(m, family=False, revealing=revealing))
             pending += m.submobjects
     plain = bool(words or glyphs or shapes)
     kinds = [m.director_kind for m in declared]
+    chunks = sum(m.director_chunks for m in declared) + int(plain)
+    if hasattr(mobject, "director_chunks"):  # a note: read in full, but not a new thing
+        chunks = 0 if held_back else mobject.director_chunks
     return Seen(
-        kind=_kind(words, glyphs, kinds),
+        kind=getattr(mobject, "director_kind", None) or _kind(words, glyphs, kinds),
         label=_label(mobject, declared),
-        chunks=sum(m.director_chunks for m in declared) + int(plain),
-        read=sum(m.director_read for m in declared) if declared else None,
-        words=words,
-        glyphs=glyphs,
+        chunks=chunks,
+        read=sum(m.director_read or 0.0 for m in declared) if declared else None,
+        words=0 if held_back else words,
+        glyphs=0 if held_back else glyphs,
         symbols=found,
         conventions=conventions,
     )
@@ -402,6 +461,22 @@ def _flat(animations: Iterable[Any]) -> Iterator[Any]:
             yield animation
 
 
+def _revealed(animations: Iterable[Any]) -> Iterator[Mobject]:
+    """What animations declare they reveal as they begin (`director_shown`): reserved parts
+    that are still hidden when the play is recorded."""
+
+    for animation in animations:
+        yield from getattr(animation, "director_shown", ())
+        if isinstance(animation, AnimationGroup):
+            yield from _revealed(animation.animations)
+
+
+def _counts(seen: Seen) -> bool:
+    """Whether it gives the viewer anything to find or read."""
+
+    return bool(seen.chunks or seen.read or seen.words or seen.glyphs)
+
+
 def _introduced(animations: Iterable[Any]) -> list[Mobject]:
     return [
         a.mobject
@@ -440,17 +515,20 @@ def _gap(a: Rect, b: Rect) -> float:
     return float((dx * dx + dy * dy) ** 0.5)
 
 
-def _drawn(mobject: Mobject, *, family: bool = True) -> list[VMobject]:
-    """The leaves of `mobject` that put ink on screen (reserved parts are not drawn yet)."""
+def _drawn(mobject: Mobject, *, family: bool = True, revealing: bool = False) -> list[VMobject]:
+    """The leaves of `mobject` that put ink on screen; reserved parts are not drawn yet,
+    unless they are `revealing` (being shown now)."""
+
+    def inked(leaf: VMobject) -> bool:
+        if _hidden(leaf):
+            return revealing and max(leaf.director_opacity) > 0
+        return _opacity(leaf) > 0
 
     leaves = mobject.family_members_with_points() if family else [mobject]
     return [
         leaf
         for leaf in leaves
-        if isinstance(leaf, VMobject)
-        and len(leaf.points) > 1
-        and not _hidden(leaf)
-        and _opacity(leaf) > 0
+        if isinstance(leaf, VMobject) and len(leaf.points) > 1 and inked(leaf)
     ]
 
 

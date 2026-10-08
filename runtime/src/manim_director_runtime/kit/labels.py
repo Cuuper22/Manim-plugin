@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from functools import cache
 from statistics import median
@@ -14,9 +15,11 @@ from ..errors import CompositionError, parse_choice
 from ..layout import Rect
 from ..themes import TEXT_STYLES, Role
 from . import context
+from .context import HINTING
 
 M = TypeVar("M", bound=Mobject)
 _DESCENDERS = frozenset("gjpqyQ,;()[]{}/|@$_")
+_FORMULA = re.compile(r"[0-9A-Za-z+\-=()/^_.,<> ]+")
 HALO_WIDTH = 5.0
 
 
@@ -47,6 +50,15 @@ def label(text: str, role: Role | str = Role.LABEL, color: str | None = None) ->
         raise CompositionError("A label needs some text.")
     row.authored_text = text
     return row
+
+
+def mathlike(text: str) -> str:
+    """`text` as `$math$` when it is a short formula, such as "n - 1" or "7": a note on a
+    picture should look like the formula it names. Words stay words."""
+
+    if "$" in text or not _FORMULA.fullmatch(text) or re.search(r"[A-Za-z]{2}", text):
+        return text
+    return f"${text}$"
 
 
 def halo(mobject: Mobject) -> Mobject:
@@ -178,8 +190,8 @@ def _math_size(font: str, role: Role) -> float:
     """The math font size whose x-height matches the role's text."""
 
     size = TEXT_STYLES[role].font_size
-    words = Text("x", font=font, font_size=size, warn_missing_font=False)
-    return size * words.height / MathTex(r"\mathrm{x}", font_size=size).height
+    words = Text("x", font=font, font_size=size * HINTING, warn_missing_font=False)
+    return size * words.height / HINTING / MathTex(r"\mathrm{x}", font_size=size).height
 
 
 @cache
@@ -187,6 +199,8 @@ def _space(font: str, role: Role) -> float:
     size = TEXT_STYLES[role].font_size
 
     def width(text: str) -> float:
-        return Text(text, font=font, font_size=size, warn_missing_font=False).width
+        return (
+            Text(text, font=font, font_size=size * HINTING, warn_missing_font=False).width / HINTING
+        )
 
     return width("x x") - width("xx")

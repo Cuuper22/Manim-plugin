@@ -39,7 +39,10 @@ def now(live: Live) -> float:
     return number
 
 
-def pacing(mobject: M, kind: str, *, chunks: int = 1, read: float = 0.5) -> M:
+def pacing(mobject: M, kind: str, *, chunks: int = 1, read: float | None = 0.5) -> M:
+    """Declare what a viewer must take in when `mobject` enters: `chunks` new things, read in
+    `read` seconds (None: measured from its words and glyphs)."""
+
     mobject.director_kind = kind
     mobject.director_chunks = chunks
     mobject.director_read = read

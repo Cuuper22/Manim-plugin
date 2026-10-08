@@ -25,7 +25,7 @@ from manim_director_runtime.project import load_style
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "manim-director"
 DOCS = sorted([SKILL / "SKILL.md", *(SKILL / "references").glob("*.md")])
-GALLERY = ROOT / "examples" / "gallery"
+GALLERY = ROOT / "runtime/src/manim_director_runtime/data/templates"
 BUDGETS = json.loads(
     (ROOT / "runtime/src/manim_director_runtime/data/budgets.json").read_text(encoding="utf-8")
 )

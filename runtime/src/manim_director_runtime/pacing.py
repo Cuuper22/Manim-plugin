@@ -33,7 +33,11 @@ _WARNING, _INFO = Severity.WARNING, Severity.INFO
 CODES: dict[str, tuple[Severity, str]] = {
     "caption_too_fast": (
         _WARNING,
-        "Hold the beat longer (hold= or self.wait), or shorten or split the caption.",
+        "Call self.pause() before the next caption or change, or use fewer words.",
+    ),
+    "motion_while_reading": (
+        _WARNING,
+        "Call self.pause() before the motion: it waits until the caption has been read.",
     ),
     "short_hold": (
         _WARNING,
@@ -66,13 +70,18 @@ CODES: dict[str, tuple[Severity, str]] = {
         _INFO,
         "Name it once where it appears: a label on the picture, a caption or a note.",
     ),
+    "recap_without_replay": (
+        _INFO,
+        "Write the aha as a method and call it again, faster, in the last beat.",
+    ),
     "viewer_plan": (_INFO, "Fill brief.viewer and the storyboard (see the skill's template)."),
 }
 
 SIGNALS = frozenset({"focus", "highlight"})  # direct the eye without adding anything to read
+_PLAYED = frozenset({"play", "tracker"})  # the scene's own plays, which do not wait by themselves
 _POINTERS = SIGNALS | {"annotate", "link", "ask"}  # sources that tell the viewer where to look
 RESULT_INTENTS = frozenset({"reveal", "prove", "recap"})
-_NEUTRAL_COLORS = frozenset({"foreground", "muted", "background"})
+_NEUTRAL_COLORS = frozenset({"foreground", "muted", "background", "highlight"})  # no meaning
 _LISTED = 3  # labels a message names before "and N more"
 _CONVENTION_WORDS = {
     "right angle": ("right angle", "90", "perpendicular", "⊥"),
@@ -93,6 +102,7 @@ class Settings:
     morph_base_share: float
     read_per_shape: float
     read_shapes_max: float
+    read_per_value: float
     read_max: float
     settle_min: float
     beat_end_min: float
@@ -150,8 +160,8 @@ def reading_seconds(event: Event, s: Settings) -> float:
 
     total, shapes = 0.0, 0
     for seen in event.entered:
-        if not seen.chunks:  # a morph's target: its changed glyphs count below
-            continue
+        if not (seen.chunks or seen.read or seen.words or seen.glyphs):
+            continue  # a morph's target (its changed glyphs count below) or a pointer
         part = (seen.read or 0.0) + _text_read(seen.words, s) + _math_read(seen.glyphs, s)
         if part:
             total += part
@@ -159,6 +169,7 @@ def reading_seconds(event: Event, s: Settings) -> float:
             shapes += 1
     total += min(shapes * s.read_per_shape, s.read_shapes_max)
     total += _math_read(event.morph_glyphs, s, s.read_base_math * s.morph_base_share)
+    total += event.changed * s.read_per_value
     return min(total, s.read_max)
 
 
@@ -186,20 +197,45 @@ def end_still(events: Sequence[Event], s: Settings, *, result: bool) -> tuple[fl
 
 
 def owed(
-    events: Sequence[Event], s: Settings, *, now: float, of: str | None, seconds: float
+    events: Sequence[Event],
+    s: Settings,
+    *,
+    now: float,
+    of: str | None,
+    seconds: float,
+    result: bool = False,
+    lanes: Sequence[tuple[float, float]] = (),
 ) -> float:
     """How much longer the stage must stay still before a change of `seconds` (revealing part
-    of component `of`, if any) can start at `now`, so the viewer has taken in `events` (the
-    beat's changes so far). Nothing is owed when the change continues the same reveal."""
+    of component `of`, if any) can start at `now`, so the viewer has read `lanes` (when each
+    caption or title of the beat appeared, and its reading time) and taken in `events` (the
+    beat's changes so far; in a `result` beat a slow motion lands first). The change never
+    waits for the reveal it continues."""
 
+    items = list(lanes)
     chains = list(_chains([e for e in events if e.source not in SIGNALS], s))
-    if not chains:
-        return 0.0
-    chain, last = chains[-1], chains[-1][-1]
-    upcoming = replace(last, at=now, seconds=seconds, of=of)
-    if _chained(last, upcoming, s) or not _chain_read(chain, s):
-        return 0.0
-    return max(_still_needed(chain, s, beat_end=False, result=False) - (now - _end(last)), 0.0)
+    if chains:
+        chain, last = chains[-1], chains[-1][-1]
+        upcoming = replace(last, at=now, seconds=seconds, of=of)
+        if not _chained(last, upcoming, s) and _needs_still(chain, s, result=result):
+            items.append((_end(last), _still_needed(chain, s, beat_end=False, result=result)))
+    return max(read_through(items) - now, 0.0)
+
+
+def read_through(items: Sequence[tuple[float, float]]) -> float:
+    """When a viewer who takes in one thing at a time is done with `items`, each a (moment it
+    can start, seconds it takes); -inf for nothing."""
+
+    done = -math.inf
+    for start, seconds in sorted(items):
+        done = max(done, start) + seconds
+    return done
+
+
+def lane_reading(lanes: Sequence[tuple[float, int]], s: Settings) -> list[tuple[float, float]]:
+    """(when it appeared, seconds to read it) for captions and titles of `words` words."""
+
+    return [(at, caption_seconds(words, s)) for at, words in lanes]
 
 
 def check(
@@ -252,22 +288,26 @@ class PlannedBeat:
 
 def planned(timeline: Timeline, storyboard: Sequence[StoryBeat] = ()) -> list[PlannedBeat]:
     """The played beats in order, each merged with its storyboard entry; the beat's own
-    `question=`, `takeaway=`, `intent=` and `aha=` win."""
+    `question=`, `takeaway=`, `intent=` and `aha=` win. A result beat (aha, reveal, prove,
+    recap, or the one after an `ask`) lets its point land before it moves on."""
 
     story = {beat.id: beat for beat in storyboard}
     merged = []
+    asked = False  # the beat before asked the viewer to predict: this one answers
     for beat in sorted(timeline.beats, key=lambda b: b.start_seconds):
         plan = story.get(beat.id, StoryBeat(beat.id))
         aha = beat.aha or plan.aha
+        result = aha or asked or (beat.intent or plan.intent) in RESULT_INTENTS
         merged.append(
             PlannedBeat(
                 beat=beat,
                 question=beat.question or plan.question,
                 takeaway=beat.takeaway or plan.takeaway,
                 aha=aha,
-                result=aha or (beat.intent or plan.intent) in RESULT_INTENTS,
+                result=result,
             )
         )
+        asked = any(beat.start_seconds <= ask.at < beat.end_seconds for ask in timeline.asks)
     return merged
 
 
@@ -333,13 +373,13 @@ def _short_holds(film: _Film) -> Iterator[Finding]:
         following = None if after is None else after[0]
         read = _chain_read(chain, s)
         beat_end = following is None or following.beat != last.beat
-        if not (read or beat_end):
+        beat = film.beats.get(last.beat or "")
+        result = beat is not None and beat.result
+        if not (beat_end or _needs_still(chain, s, result=result)):
             continue
         still = max(
             (film.t.duration_seconds if following is None else following.at) - _end(last), 0
         )
-        beat = film.beats.get(last.beat or "")
-        result = beat is not None and beat.result
         need = _still_needed(chain, s, beat_end=beat_end, result=result)
         if still + s.frame_slack_seconds >= need:
             continue
@@ -378,7 +418,20 @@ def _still_needed(chain: Sequence[Event], s: Settings, *, beat_end: bool, result
     read = _chain_read(chain, s)
     if beat_end:
         return max(s.result_end_min if result else s.beat_end_min, read)
-    return min(max(read, s.settle_min), s.read_max)
+    need = min(max(read, s.settle_min), s.read_max)
+    return max(need, s.result_end_min) if result and _answers(chain, s) else need
+
+
+def _needs_still(chain: Sequence[Event], s: Settings, *, result: bool) -> bool:
+    """Whether the stage must stay still after `chain` before anything else moves."""
+
+    return bool(_chain_read(chain, s)) or (result and _answers(chain, s))
+
+
+def _answers(chain: Sequence[Event], s: Settings) -> bool:
+    """A slow motion (the aha's, or the one a prediction waits for) is the answer to land."""
+
+    return any(e.seconds + s.frame_slack_seconds >= s.aha_motion_min for e in chain)
 
 
 def _chained(previous: Event, event: Event, s: Settings) -> bool:
@@ -391,6 +444,60 @@ def _chained(previous: Event, event: Event, s: Settings) -> bool:
         and max(previous.seconds, event.seconds) <= s.chain_seconds
         and event.at - _end(previous) <= s.frame_slack_seconds
     )
+
+
+def _motions_while_reading(film: _Film) -> Iterator[Finding]:
+    """Read, then watch: a plain play that starts while the beat's caption or title is still
+    being read splits the viewer's eyes between them."""
+
+    s = film.s
+    lanes = sorted([*film.t.captions, *film.t.titles], key=lambda lane: lane.at)
+    for event in film.events:
+        beat = film.t.beat_at(event.at)
+        if event.source not in _PLAYED or beat is None:
+            continue
+        reading = [
+            lane
+            for lane in lanes
+            if beat.start_seconds <= lane.at < event.at
+            and (lane.until is None or lane.until > event.at)
+        ]
+        done = read_through(lane_reading([(lane.at, lane.words) for lane in reading], s))
+        if reading and event.at + s.frame_slack_seconds < done:
+            lane = reading[-1]
+            yield _finding(
+                "motion_while_reading",
+                f"This starts moving at {event.at:.1f} s, while {_quote(lane.text)} (in at "
+                f"{lane.at:.1f} s) is still being read until {done:.1f} s.",
+                film,
+                event=event,
+            )
+
+
+def _recap_replays(film: _Film) -> Iterator[Finding]:
+    """The last beat should replay the aha's motion, so the film ends on the idea itself."""
+
+    plans = list(film.beats.values())
+    ahas = [plan for plan in plans if plan.aha]
+    if len(ahas) != 1 or plans[-1] is ahas[0] or film.t.duration_seconds <= film.s.plan_min_seconds:
+        return
+    motion = max(film.in_beat(ahas[0].beat.id), key=lambda e: e.seconds, default=None)
+    if motion is None:
+        return
+    recap = plans[-1].beat
+    replayed = any(
+        (e.file, e.line) == (motion.file, motion.line)
+        or (e.source == motion.source and e.of is not None and e.of == motion.of)
+        for e in film.in_beat(recap.id)
+    )
+    if not replayed:
+        yield _finding(
+            "recap_without_replay",
+            f"The last beat {recap.id!r} does not replay the aha's motion (line {motion.line}, "
+            f"{motion.seconds:.1f} s in beat {ahas[0].beat.id!r}).",
+            film,
+            beat=recap,
+        )
 
 
 def _question_holds(film: _Film) -> Iterator[Finding]:
@@ -661,6 +768,7 @@ _RULES: tuple[Callable[[_Film], Iterator[Finding]], ...] = (
     _caption_pace,
     _long_text,
     _short_holds,
+    _motions_while_reading,
     _question_holds,
     _rushed_steps,
     _crowded_beats,
@@ -670,6 +778,7 @@ _RULES: tuple[Callable[[_Film], Iterator[Finding]], ...] = (
     _unsignaled_reveals,
     _density,
     _unexplained_notation,
+    _recap_replays,
     _viewer_plan,
 )
 

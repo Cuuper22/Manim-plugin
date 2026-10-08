@@ -35,14 +35,16 @@ from manim import (
 from ..errors import CompositionError
 from ..layout import Rect
 from ..texscan import atoms, is_relation, upright_words
+from ..themes import Role
 from . import context
-from .labels import beside, box, first_free, halo, inside, trace
+from .labels import beside, box, first_free, halo, inside, mathlike, trace
+from .labels import label as text_label
 from .overlay import Live, derived, now, overlay, pacing, reserve, reserved
 
 Function = Callable[[float], float]
 
 LABEL_SCALE = 0.72  # math labels drawn on a component, relative to formulas
-NUMBER_SIZE = 22
+NUMBER_SIZE = 24
 CURVE_WIDTH = 4.0
 DOT_RADIUS = 0.07
 _SAMPLES = 400
@@ -52,9 +54,10 @@ _GUIDE = {"stroke_width": 2.0, "dashed_ratio": 0.55}
 class FunctionPlot(VGroup):
     """Axes with one or more curves, each labeled at its right end in its own color.
 
-    Overlays (`dot`, `guides`, `tangent`, `secant`, `area`, `riemann`) are recomputed from the
-    axes every frame, so they stay exact wherever `place()` moves or scales the plot, and they
-    are clipped to its window. Curves are clipped to the window too, and split at `breaks`.
+    Overlays (`dot`, `guides`, `tangent`, `slope_triangle`, `secant`, `area`, `riemann`) are
+    recomputed from the axes every frame, so they stay exact wherever `place()` moves or
+    scales the plot, and they are clipped to its window. Curves are clipped to the window too,
+    and split at `breaks`. `equal_scale` draws one unit as long on both axes.
     """
 
     def __init__(
@@ -68,6 +71,7 @@ class FunctionPlot(VGroup):
         numbers: bool = True,
         axis_labels: tuple[str, str] | None = None,
         breaks: Sequence[float] = (),
+        equal_scale: bool = False,
     ) -> None:
         super().__init__()
         if not functions:
@@ -92,6 +96,9 @@ class FunctionPlot(VGroup):
             y0, y1, y_step = _range(y_range, "y_range")
         self.y_range = (y0, y1)
         self._size = (float(size[0]), float(size[1]))
+        if equal_scale:  # one unit as long on both axes, within `size`: slopes keep their angle
+            unit = min(self._size[0] / (x1 - x0), self._size[1] / (y1 - y0))
+            self._size = ((x1 - x0) * unit, (y1 - y0) * unit)
         self.colors = [context.color(colors[i % len(colors)]) for i in range(len(functions))]
         muted = context.color("muted")
         self.axes = Axes(
@@ -148,20 +155,29 @@ class FunctionPlot(VGroup):
 
         return overlay(derived(build), self, "dot")
 
-    def guides(self, x: Live, curve: int = 0) -> VMobject:
-        """Dashed drops from the curve's point at `x` to both axes."""
+    def guides(
+        self, x: Live, curve: int = 0, *, label: str | None = None, color: str = "muted"
+    ) -> VMobject:
+        """Dashed drops from the curve's point at `x` to both axes; `label` (words or
+        `$math$`, e.g. "height") names the vertical one beside it."""
 
         self._require(x, curve=curve)
-        muted = context.color("muted")
+        hue = context.color(color)
+        name = None if label is None else halo(text_label(mathlike(label), Role.NOTE, color))
 
         def build() -> VMobject:
             at, k = self._x(x), self._scale()
             y = self.f(at, curve)
-            p = self.axes.c2p(at, y)
-            return VGroup(
-                _dashed(self.axes.c2p(at, self._cross[1]), p, muted, k),
-                _dashed(self.axes.c2p(self._cross[0], y), p, muted, k),
+            p, foot = self.axes.c2p(at, y), self.axes.c2p(at, self._cross[1])
+            drops = VGroup(
+                _dashed(foot, p, hue, k), _dashed(self.axes.c2p(self._cross[0], y), p, hue, k)
             )
+            if name is None:
+                return drops
+            # Below a rising curve, on the side where it climbs away from the point, is free.
+            side = RIGHT if self._slope(at, curve) >= 0 else LEFT
+            drops.add(beside(name.copy().scale(k), (foot + p) / 2, side, 0.12 * k))
+            return drops
 
         return overlay(derived(build), self, "guides")
 
@@ -182,14 +198,62 @@ class FunctionPlot(VGroup):
 
         return overlay(derived(build), self, "tangent")
 
+    def slope_triangle(
+        self,
+        x: Live,
+        curve: int = 0,
+        *,
+        run: float = 1.0,
+        color: str = "accent",
+        decimals: int = 2,
+    ) -> VMobject:
+        """The tangent at `x` over a step of `run`, with the run and the rise it climbs: the
+        rise is a live number, the slope times `run` (with `run=1`, the slope itself)."""
+
+        self._require(x, lambda: now(x) + run, curve=curve)
+        if run <= 0:
+            raise CompositionError(f"slope_triangle(run={run:g}) needs a positive run.")
+        hue, muted = context.color(color), context.color("muted")
+        across = self._mark(f"{run:g}", muted)
+        rise = DecimalNumber(0, num_decimal_places=decimals, color=hue)
+        rise.scale(across.height / _digit(rise).height)
+
+        def build() -> VMobject:
+            at, k = self._x(x), self._scale()
+            slope, y = self._slope(at, curve), self.f(at, curve)
+            p, corner = self.axes.c2p(at, y), self.axes.c2p(at + run, y)
+            top = self.axes.c2p(at + run, y + slope * run)
+            rise.set_value(slope * run)
+            climb = Line(corner, top, color=hue, stroke_width=CURVE_WIDTH)
+            return VGroup(
+                _dashed(p, corner, muted, k),
+                climb,
+                Line(p, top, color=hue, stroke_width=CURVE_WIDTH),
+                _on_leg(across, p, corner, DOWN if slope >= 0 else UP, k),
+                _on_leg(halo(rise.copy()), corner, top, RIGHT, k),
+            )
+
+        return overlay(derived(build), self, "slope triangle")
+
     def secant(
-        self, x: Live, h: Live, curve: int = 0, *, color: str = "accent", legs: bool = True
+        self,
+        x: Live,
+        h: Live,
+        curve: int = 0,
+        *,
+        color: str = "accent",
+        legs: bool = True,
+        labels: tuple[str, str] | None = None,
     ) -> VMobject:
         """The line through the points at `x` and `x + h`, with dashed legs showing the run
-        and the rise; shrink `h` and it turns into the tangent."""
+        and the rise, named by `labels` (TeX, e.g. `("h", "e^{x+h} - e^x")`); shrink `h` and it
+        turns into the tangent, its labels shrinking with the legs."""
 
         self._require(x, lambda: now(x) + now(h), curve=curve)
         hue, muted, ink = context.color(color), context.color("muted"), context.color("foreground")
+        if labels is not None and len(labels) != 2:
+            raise CompositionError("secant(labels=...) names the run and the rise: two labels.")
+        names = [] if labels is None else [self._mark(text, hue) for text in labels]
 
         def build() -> VMobject:
             at, step, k = self._x(x), now(h), self._scale()
@@ -200,9 +264,15 @@ class FunctionPlot(VGroup):
             reach = float(np.dot(q - p, d))
             margin = 0.12 * self._width()
             parts = VGroup()
+            corner = self.axes.c2p(at + step, fp)
             if legs:
-                corner = self.axes.c2p(at + step, fp)
                 parts.add(_dashed(p, corner, muted, k), _dashed(corner, q, muted, k))
+            if names:  # the run under (or over) its leg, the rise outside the triangle
+                run_side, rise_side = DOWN if fq >= fp else UP, RIGHT if step > 0 else LEFT
+                parts.add(
+                    _on_leg(names[0], p, corner, run_side, k),
+                    _on_leg(names[1], corner, q, rise_side, k),
+                )
             start, end = min(0.0, reach) - margin, max(0.0, reach) + margin
             parts.add(self._clipped(p + start * d, p + end * d, hue))
             radius = DOT_RADIUS * k
@@ -340,6 +410,11 @@ class FunctionPlot(VGroup):
 
     # Internals --------------------------------------------------------------------------
 
+    def _mark(self, tex: str, hue: str) -> Mobject:
+        """A math label for an overlay, at the plot's label size, with a halo."""
+
+        return halo(context.math(tex, color=hue).scale(LABEL_SCALE))
+
     def _function(self, curve: int) -> Function:
         if not 0 <= curve < len(self.functions):
             raise CompositionError(
@@ -462,6 +537,8 @@ class FunctionPlot(VGroup):
             ticks = [t for t in _ticks(lo, hi, step) if abs(t - cross) > step / 2]
             axis.add_numbers(ticks, font_size=NUMBER_SIZE, num_decimal_places=_places(step))
             axis.numbers.set_color(muted)
+            for number in axis.numbers:
+                number.director_ticks = True  # glanced at: a smaller size still reads
 
     def _label_axes(self, x_name: str, y_name: str, muted: str) -> None:
         x_end = self.axes.c2p(self.x_range[1], self._cross[1])
@@ -716,6 +793,16 @@ def _dashed(a: np.ndarray, b: np.ndarray, hue: str, k: float) -> VMobject:
     if np.linalg.norm(b - a) < 1e-3:
         return Line(a, a + 1e-4 * RIGHT, color=hue, stroke_width=_GUIDE["stroke_width"])
     return DashedLine(a, b, color=hue, dash_length=0.08 * k, **_GUIDE)
+
+
+def _on_leg(name: Mobject, a: np.ndarray, b: np.ndarray, side: np.ndarray, k: float) -> Mobject:
+    """A copy of `name` beside the middle of the segment ab, shrinking with it when the
+    segment gets shorter than the name, so a vanishing leg takes its name along."""
+
+    length = float(np.linalg.norm(b - a))
+    along = abs(b - a)[:2] @ np.array([name.width, name.height]) / max(length, 1e-9)
+    fit = min(1.0, 2 * length / max(k * along, 1e-6))  # full size down to half its extent
+    return beside(name.copy().scale(k * max(fit, 1e-3)), (a + b) / 2, side, 0.1 * k * fit)
 
 
 def _facing_corners(near: Rect, far: Rect) -> list[tuple[np.ndarray, np.ndarray]]:

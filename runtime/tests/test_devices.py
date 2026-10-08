@@ -18,7 +18,8 @@ manim = pytest.importorskip("manim")
 from manim import RIGHT, Brace, Dot, Line, Mobject, Square  # noqa: E402
 
 from manim_director_runtime import CompositionError, DirectedScene, pacing, timeline  # noqa: E402
-from manim_director_runtime.kit import DotArray, Figure, VectorGrid, hide  # noqa: E402
+from manim_director_runtime.kit import DotArray, Figure, VectorGrid, hide, label  # noqa: E402
+from manim_director_runtime.kit.card import Misconception  # noqa: E402
 from manim_director_runtime.layout import Rect  # noqa: E402
 from manim_director_runtime.themes import theme  # noqa: E402
 
@@ -146,7 +147,7 @@ def test_link_marks_both_ends_in_one_motion_and_leaves_with_the_beat(render: Ren
     film = recorder.timeline("Linked", scene.renderer.time)
     glyph_box, halos = seen["marks"]
     assert len(halos.family_members_with_points()) == 6  # one halo per dot
-    assert glyph_box.get_fill_color().to_hex() == MIDNIGHT.accent
+    assert glyph_box.get_fill_color().to_hex() == MIDNIGHT.highlight
     assert seen["lit"] and not seen["after"]
     (event,) = [e for e in film.events if e.source == "link"]
     assert (event.entered, event.targets) == ([], 0)
@@ -295,3 +296,100 @@ def test_an_overlay_made_before_placement_enters_where_its_parent_is(render: Ren
 
     render(Early, every_frame=True)
     assert seen["path"] and np.allclose(seen["path"], seen["corner"])
+
+
+@pytest.mark.parametrize("leave", ["caption", "place", "derive"])
+def test_links_leave_cleanly_with_what_they_link(render: Render, leave: str) -> None:
+    class Linked(DirectedScene):
+        def construct(self):
+            two = self.math("2")
+            with self.beat("a"):
+                self.place(two, region="left")
+                eq = self.derive(r"y = 2x + 1", region="right")
+                self.link(self.term(eq.lines[0], "2x"), two)
+            with self.beat("b"):  # both ends leave, glyphs and marks fading together
+                if leave == "caption":
+                    self.caption("next")
+                    self.pause()
+                elif leave == "place":
+                    self.place(self.math("z"))
+                else:
+                    self.derive(r"y = 1 + 2x", replaces=eq.lines[0])
+
+    render(Linked, every_frame=True)
+
+
+def test_notes_are_read_but_are_not_new_things(render: Render) -> None:
+    class Noted(DirectedScene):
+        def construct(self):
+            with self.beat("only"):
+                square = Square()
+                self.place(square)
+                self.annotate(square, "the whole square", style="label")
+                self.annotate(square, "n - 1", style="brace")
+
+    with timeline.recording(HERE) as recorder:
+        scene = render(Noted, every_frame=True)
+    film = recorder.timeline("Noted", scene.renderer.time)
+    notes = [seen for e in film.events if e.source == "annotate" for seen in e.entered]
+    assert [(n.kind, n.chunks) for n in notes] == [("note", 0), ("note", 0)]
+    words, formula = notes
+    assert words.words == 3 and formula.glyphs == 3  # "n - 1" is set as math
+    assert pacing.reading_seconds(film.events[-1], pacing.settings()) > 0
+
+
+def test_a_card_declared_up_front_gives_each_row_its_height(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Declared(DirectedScene):
+        def construct(self):
+            card = self.misconception(
+                "Positive means $95\\%$ sick",
+                evidence=[r"\frac{1}{1 + 5} = \frac{1}{6}", "only 1 of the 6 is sick"],
+                fix="Positive means about $17\\%$ sick",
+                region="content",
+            )
+            with self.beat("predict"):
+                self.ask("Is that right?")
+            seen["tag"] = card.tag.authored_text
+            with self.beat("test", keep=[card]):
+                self.play(card.test(), run_time=2)
+            with self.beat("refute", keep=[card]):
+                self.play(card.refute())
+            seen["refuted tag"] = card.tag.width / label("Tempting").width
+            with self.beat("repair", keep=[card]):
+                self.play(card.repair(), run_time=2)
+            seen["card"] = card
+            plain = Misconception(r"x = 1", evidence=1)
+            with pytest.raises(CompositionError, match="taller than the room"):
+                plain.test(r"\frac{1}{2} = \frac{2}{4}")
+
+    with timeline.recording(HERE) as recorder:
+        scene = render(Declared, every_frame=True)
+    film = recorder.timeline("Declared", scene.renderer.time)
+    card = seen["card"]
+    assert seen["tag"] == "Your guess" and seen["refuted tag"] == pytest.approx(1, abs=0.02)
+    fraction, words = card.rows
+    assert fraction.height > card.claim.height and not hasattr(words, "tex_string")
+    rows = [card.claim, *card.rows, card.fix]
+    assert all(not box(a).overlaps(box(b)) for a, b in combinations(rows, 2))
+    assert all(box(row).right < card.check.get_left()[0] for row in rows)  # marks stand clear
+    (test,) = [e for e in film.events if e.beat == "test" and e.source == "play"]
+    assert sum(seen.glyphs + seen.words for seen in test.entered) > 10  # the rows are read
+    assert card.strike.get_stroke_color().to_hex() == MIDNIGHT.highlight
+
+
+def test_an_arrow_finds_a_way_in_that_crosses_no_other_dot(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Pointed(DirectedScene):
+        def construct(self):
+            dots = DotArray(3, radius=0.2, gap=0.4)
+            self.place(dots)
+            target = dots.at(1, 0)
+            seen["note"] = self.annotate(target, "this one")
+            seen["others"] = [d for d in dots.submobjects if d is not target]
+
+    render(Pointed, every_frame=True)
+    pointer = seen["note"].pointer
+    assert not any(box(pointer).overlaps(box(d)) for d in seen["others"])

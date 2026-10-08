@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any
 
-from manim import MathTex, Tex, Text
+from manim import MathTex, Tex, Text, config
 
 from ..errors import parse_choice
 from ..texscan import atoms, colorize
@@ -20,6 +20,7 @@ from ..themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme
 if TYPE_CHECKING:
     from ..scene import Directed
 
+HINTING = 4  # text is laid out this many times larger, then scaled down
 _SCENE: ContextVar[Directed | None] = ContextVar("manim_director_scene", default=None)
 
 
@@ -74,7 +75,16 @@ def typeset_text(active: Theme, content: str, role: Role | str, **kwargs: Any) -
         "color": active.color(style.color),
         "warn_missing_font": False,
     }
-    return Text(content, **{**options, **kwargs})
+    options |= kwargs
+    text = Text(content, **options)
+    # Pango hints glyph spacing to the requested size, which at caption sizes opens gaps
+    # ("O dd"); laid out larger and scaled down, the spacing is the font's own. Pango wraps
+    # what outgrows its canvas, which is as many units wide as the frame has pixels / 20.
+    larger = min(HINTING, 0.9 * config.pixel_width / 20 / max(text.width, 1e-6))
+    if larger < 1.5:
+        return text
+    size = options.pop("font_size")
+    return Text(content, font_size=size * larger, **options).scale(1 / larger)
 
 
 def typeset_tex(

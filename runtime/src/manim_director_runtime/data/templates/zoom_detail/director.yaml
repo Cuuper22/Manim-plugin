@@ -1,12 +1,12 @@
 version: 1
 project:
-  name: Sine near zero
+  name: {{name}}
   description: Pattern 6, zoom in on a detail. Close to 0 the sine curve is the line y = x.
-  seed: 2
+  seed: {{seed}}
 engine:
   source: scenes/main.py
   main_scene: SinNearZero
-theme: midnight
+theme: {{theme}}
 brief:
   viewer:
     who: a student who knows sine from triangles and radians, and uses a calculator
@@ -44,11 +44,17 @@ storyboard:
     keep: [plot]
     aha: true
   - id: measure
-    intent: prove
+    intent: explain
     audience_question: How close are they, in numbers?
-    changes: the chord from 0 to the curve shrinks toward y = x
-    takeaway: The slope sin x / x heads to 1 as x shrinks, so sin x ≈ x.
+    changes: a chord from 0 to the curve appears, with x and its slope sin x / x read out
+    takeaway: The chord's slope, sin x / x, measures how far sine is from y = x.
     keep: [plot]
+  - id: shrink
+    intent: prove
+    audience_question: What happens to that slope as x shrinks?
+    changes: x slides toward 0 and the chord turns onto y = x
+    takeaway: The slope sin x / x heads to 1 as x shrinks, so sin x ≈ x.
+    keep: [plot, readouts, chord]
   - id: recap
     intent: recap
     audience_question: So why is sin(0.01) almost 0.01?

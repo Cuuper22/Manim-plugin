@@ -1,7 +1,7 @@
 # Planning for the viewer
 
-Read this before planning an explainer and again when judging its frames: how to model the
-viewer, the budgets QA holds you to, a beat template, seven patterns, and a frames-only critique.
+Read this before planning an explainer and when judging its frames: the viewer model, QA's
+budgets, a beat template, seven patterns, and a frames-only critique.
 
 ## 1. The viewer you are planning for
 
@@ -16,7 +16,7 @@ expect next? What must still be on screen?
 
 Engagement is tension and release: each beat opens a small question and closes the one before
 it; curiosity just before a surprising answer makes it stick [7]. A beat answering a question
-nobody asked needs a question beat in front of it, or should go.
+nobody asked needs a question beat first, or should go.
 
 ## 2. The viewer model
 
@@ -60,6 +60,7 @@ glyphs_per_term_group   3     3     3      glyphs read as one term group
 morph_base_share        0.5   0.5   0.5    share of the math base a morph needs
 read_per_shape          0.5   0.65  0.4    per shape or overlay entering
 read_shapes_max         1.0   1.3   0.8    cap for shapes in one event
+read_per_value          1.0   1.3   0.8    per live value (a readout) a motion changes
 read_max                4.0   5.0   3.2    cap for any one event
 settle_min              0.5   0.7   0.4    shortest still after a reveal, mid-beat
 beat_end_min            1.0   1.3   0.8    shortest still at a beat's end
@@ -116,10 +117,10 @@ Its code has no hold, pause or wait; its one `run_time` is the aha's 2 s.
 
 ## 5. Seven patterns
 
-Every film uses 1 and 7. Pick one more by what the viewer lacks, then copy that gallery film
-([`examples/gallery/<folder>`](../../../examples/gallery)): keep its beats, swap in your mathematics.
+Every film uses 1 and 7. Add the one the viewer lacks and start from its template
+(`init --template <name>`): keep its beats, swap in your mathematics.
 
-| Pattern | Use when | Gallery | Kit |
+| Pattern | Use when | Template | Kit |
 |---|---|---|---|
 | 1. Hook by question | Always first: a surprising concrete fact under the question as title; never a definition [15]. | all | `title`, `place` |
 | 2. Concrete first | The symbols are new: objects, a labeled picture, then notation, the concrete still in view [4]. | `concrete_first` | `DotArray`, `paint`, `place` a selection |

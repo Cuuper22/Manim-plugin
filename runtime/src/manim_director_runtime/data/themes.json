@@ -11,7 +11,8 @@
         "secondary": "#FCB835",
         "accent": "#E7725B",
         "muted": "#8C95A8",
-        "success": "#6AEEA6"
+        "success": "#6AEEA6",
+        "highlight": "#A15AF2"
       }
     },
     {
@@ -24,7 +25,8 @@
         "secondary": "#9F620E",
         "accent": "#900C13",
         "muted": "#646C79",
-        "success": "#25743F"
+        "success": "#25743F",
+        "highlight": "#7813EC"
       }
     },
     {
@@ -37,7 +39,8 @@
         "secondary": "#E8B45E",
         "accent": "#F0907C",
         "muted": "#9AA7A1",
-        "success": "#8DE8AE"
+        "success": "#8DE8AE",
+        "highlight": "#B771F4"
       }
     },
     {
@@ -50,7 +53,8 @@
         "secondary": "#FFB01F",
         "accent": "#FF6A5C",
         "muted": "#B0B0B0",
-        "success": "#6FE3A0"
+        "success": "#6FE3A0",
+        "highlight": "#9F42F0"
       }
     }
   ]

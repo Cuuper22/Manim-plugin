@@ -135,3 +135,37 @@ def test_component_reveals_chain_and_morphs_carry_their_notation(render) -> None
     found = pacing.check(film, pacing.settings())
     notation = [f for f in found if f.code == "unexplained_notation"]
     assert [(f.location.line, f.beat) for f in notation] == [(line("derive"), "sum")]
+
+
+def test_words_are_tokens_with_a_letter_or_digit() -> None:
+    assert timeline.word_count("At 0, slope = height → 1") == 5
+
+
+@requires_latex
+def test_reserved_text_counts_only_when_it_is_shown() -> None:
+    from manim import MathTex, Text
+
+    from manim_director_runtime.kit import reserve
+    from manim_director_runtime.viewing import describe
+
+    words, formula = reserve(Text("later on")), reserve(MathTex("x^2"))
+    assert (describe(words, ()).words, describe(formula, ()).glyphs) == (0, 0)
+    assert describe(words, (), revealing=True).words == 2
+    assert describe(formula, (), revealing=True).glyphs == 2
+
+
+class Shared(DirectedScene):
+    def construct(self) -> None:
+        from manim import Text, VGroup
+
+        words = Text("one line")
+        card = VGroup(words)
+        card.add(VGroup(words))  # the same text in two groups, as a card's slots and rows are
+        with self.beat("only"):
+            self.place(card)
+
+
+def test_a_text_in_two_groups_is_one_box(render) -> None:
+    film = record(render, Shared)
+    assert [box.label for box in film.settles[0].text_boxes] == ["one line"]
+    assert "text_overlap" not in [f.code for f in pacing.check(film, pacing.settings())]
