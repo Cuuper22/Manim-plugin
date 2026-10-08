@@ -38,9 +38,8 @@ TRANSITION_SECONDS = {
     Transition.CHAPTER: 0.7,
 }
 FOCUS_SECONDS = 0.5
-HOLD_SECONDS = 1.0
 STEP_SECONDS = 1.1
-STEP_PAUSE = 0.7
+STEP_PAUSE = 0.7  # the shortest pause between derive steps
 DIM_OPACITY = 0.28
 SHOW_SECONDS = 1.0
 WRITE_GLYPHS = 12  # longer text and math fade in: writing them out takes too long

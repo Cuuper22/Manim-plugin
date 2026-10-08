@@ -20,7 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from functools import cache
 from importlib import resources
-from itertools import combinations
+from itertools import combinations, zip_longest
 from typing import Any
 
 from .errors import CompositionError
@@ -37,7 +37,8 @@ CODES: dict[str, tuple[Severity, str]] = {
     ),
     "short_hold": (
         _WARNING,
-        "Add self.wait(...) before the next change, or raise the beat's hold= or derive's pause=.",
+        "Call self.pause() before the next change (it waits as long as the viewer needs), or "
+        "drop an explicit hold= or pause=.",
     ),
     "question_hold_short": (
         _WARNING,
@@ -70,7 +71,7 @@ CODES: dict[str, tuple[Severity, str]] = {
 
 SIGNALS = frozenset({"focus", "highlight"})  # direct the eye without adding anything to read
 _POINTERS = SIGNALS | {"annotate", "link", "ask"}  # sources that tell the viewer where to look
-_RESULT_INTENTS = frozenset({"reveal", "prove", "recap"})
+RESULT_INTENTS = frozenset({"reveal", "prove", "recap"})
 _NEUTRAL_COLORS = frozenset({"foreground", "muted", "background"})
 _LISTED = 3  # labels a message names before "and N more"
 _CONVENTION_WORDS = {
@@ -161,6 +162,46 @@ def reading_seconds(event: Event, s: Settings) -> float:
     return min(total, s.read_max)
 
 
+def caption_seconds(words: int, s: Settings) -> float:
+    """How long a caption of `words` words must stay on screen."""
+
+    return max(s.caption_min_seconds, _text_read(words, s))
+
+
+def settle_seconds(event: Event, s: Settings) -> float:
+    """The still a reveal needs before the next change in the same beat."""
+
+    return min(max(reading_seconds(event, s), s.settle_min), s.read_max)
+
+
+def end_still(events: Sequence[Event], s: Settings, *, result: bool) -> tuple[float | None, float]:
+    """For the end of a beat whose events are `events` (in order): when its last change ended
+    (None if it has none) and how long the stage must then stay still. A `result` beat (aha,
+    reveal, prove, recap) needs longer for its point to land."""
+
+    chains = list(_chains([e for e in events if e.source not in SIGNALS], s))
+    if not chains:
+        return None, s.result_end_min if result else s.beat_end_min
+    return _end(chains[-1][-1]), _still_needed(chains[-1], s, beat_end=True, result=result)
+
+
+def owed(
+    events: Sequence[Event], s: Settings, *, now: float, of: str | None, seconds: float
+) -> float:
+    """How much longer the stage must stay still before a change of `seconds` (revealing part
+    of component `of`, if any) can start at `now`, so the viewer has taken in `events` (the
+    beat's changes so far). Nothing is owed when the change continues the same reveal."""
+
+    chains = list(_chains([e for e in events if e.source not in SIGNALS], s))
+    if not chains:
+        return 0.0
+    chain, last = chains[-1], chains[-1][-1]
+    upcoming = replace(last, at=now, seconds=seconds, of=of)
+    if _chained(last, upcoming, s) or not _chain_read(chain, s):
+        return 0.0
+    return max(_still_needed(chain, s, beat_end=False, result=False) - (now - _end(last)), 0.0)
+
+
 def check(
     timeline: Timeline,
     s: Settings,
@@ -224,7 +265,7 @@ def planned(timeline: Timeline, storyboard: Sequence[StoryBeat] = ()) -> list[Pl
                 question=beat.question or plan.question,
                 takeaway=beat.takeaway or plan.takeaway,
                 aha=aha,
-                result=aha or (beat.intent or plan.intent) in _RESULT_INTENTS,
+                result=aha or (beat.intent or plan.intent) in RESULT_INTENTS,
             )
         )
     return merged
@@ -286,29 +327,20 @@ def _short_holds(film: _Film) -> Iterator[Finding]:
     mid-beat, and more at a beat's end. Focus and highlight do not end a still."""
 
     s = film.s
-    changes = [e for e in film.events if e.source not in SIGNALS]
-    i = 0
-    while i < len(changes):
-        chain = [changes[i]]
-        while i + 1 < len(changes) and _chained(chain[-1], changes[i + 1], s):
-            i += 1
-            chain.append(changes[i])
+    chains = list(_chains([e for e in film.events if e.source not in SIGNALS], s))
+    for chain, after in zip_longest(chains, chains[1:]):
         first, last = chain[0], chain[-1]
-        following = changes[i + 1] if i + 1 < len(changes) else None
-        i += 1
-        read = min(sum(reading_seconds(e, s) for e in chain), s.read_max)
+        following = None if after is None else after[0]
+        read = _chain_read(chain, s)
         beat_end = following is None or following.beat != last.beat
         if not (read or beat_end):
             continue
         still = max(
             (film.t.duration_seconds if following is None else following.at) - _end(last), 0
         )
-        if beat_end:
-            beat = film.beats.get(last.beat or "")
-            floor = s.result_end_min if beat is not None and beat.result else s.beat_end_min
-            need = max(floor, read)
-        else:
-            need = min(max(read, s.settle_min), s.read_max)
+        beat = film.beats.get(last.beat or "")
+        result = beat is not None and beat.result
+        need = _still_needed(chain, s, beat_end=beat_end, result=result)
         if still + s.frame_slack_seconds >= need:
             continue
         subject = f"{_what(chain)} (in at {first.at:.1f} s)" if read else "The last change"
@@ -323,6 +355,30 @@ def _short_holds(film: _Film) -> Iterator[Finding]:
             film,
             event=first,
         )
+
+
+def _chains(changes: Sequence[Event], s: Settings) -> Iterator[list[Event]]:
+    """`changes` grouped into what the viewer takes in as one reveal each."""
+
+    chain: list[Event] = []
+    for event in changes:
+        if chain and not _chained(chain[-1], event, s):
+            yield chain
+            chain = []
+        chain.append(event)
+    if chain:
+        yield chain
+
+
+def _chain_read(chain: Sequence[Event], s: Settings) -> float:
+    return min(sum(reading_seconds(e, s) for e in chain), s.read_max)
+
+
+def _still_needed(chain: Sequence[Event], s: Settings, *, beat_end: bool, result: bool) -> float:
+    read = _chain_read(chain, s)
+    if beat_end:
+        return max(s.result_end_min if result else s.beat_end_min, read)
+    return min(max(read, s.settle_min), s.read_max)
 
 
 def _chained(previous: Event, event: Event, s: Settings) -> bool:

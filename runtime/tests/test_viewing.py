@@ -80,7 +80,7 @@ def test_reveals_captions_and_stills_are_recorded_with_their_statements(render) 
         ("Odd numbers make squares", 0.0, film.duration_seconds)
     ]
 
-    held, final = film.settles
+    held, ending, final = film.settles
     assert (held.beat, held.at, held.still_seconds, held.visible_chunks) == (
         "hook",
         staged.seconds,
@@ -92,7 +92,9 @@ def test_reveals_captions_and_stills_are_recorded_with_their_statements(render) 
         "Odd numbers make squares",
         "Each odd number wraps the square.",
     ]
-    assert final.visible_chunks == 1  # focus dimmed the squares
+    assert (rule.hold, rule.hold_auto) == (2.0, True)  # an aha beat ends on 2 s by itself
+    assert (ending.beat, ending.still_seconds, ending.visible_chunks) == ("rule", 2.0, 1)
+    assert (final.beat, ending.still_seconds + final.still_seconds) == (None, 3.0)  # final still
 
 
 def test_a_recorded_film_is_judged_against_its_beats(render) -> None:
@@ -100,8 +102,7 @@ def test_a_recorded_film_is_judged_against_its_beats(render) -> None:
     assert [(f.code, f.beat, f.location.line) for f in found if f.code != "viewer_plan"] == [
         ("short_hold", "hook", line("place")),  # 0.5 s hold; a beat ends on 1 s
         ("rushed_step", "rule", line("move")),  # the aha's longest motion is 1 s, not 1.5 s
-        ("short_hold", "rule", line("rule")),  # an aha beat ends on 2 s
-    ]
+    ]  # the aha beat's own hold is automatic, so its end is not short
 
 
 class Grown(DirectedScene):

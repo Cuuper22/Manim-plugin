@@ -52,6 +52,11 @@ class ProjectStyle:
     storyboard_scene: str | None = None  # `engine.main_scene`: the scene the storyboard plans
     pacing: dict[str, float] = field(default_factory=dict)  # `qa.pacing` budget overrides
 
+    def storyboard_of(self, scene: str) -> tuple[StoryBeat, ...]:
+        """The storyboard, if it plans `scene` (the main scene, or any when none is named)."""
+
+        return self.storyboard if self.storyboard_scene in (None, scene) else ()
+
 
 def find_spec(start: Path) -> Path | None:
     for directory in (start, *start.parents):

@@ -115,7 +115,7 @@ def _pacing(
     style = load_style(ctx.project_root)
     viewer = style.viewer
     budgets = pacing.settings(viewer.level if viewer is not None else "general", style.pacing)
-    storyboard = style.storyboard if style.storyboard_scene in (None, beats.scene) else ()
+    storyboard = style.storyboard_of(beats.scene)
     found = pacing.check(beats, budgets, viewer, storyboard)
 
     def nearest(at: float | None) -> str | None:

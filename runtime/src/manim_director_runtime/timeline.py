@@ -37,7 +37,8 @@ class TimelineBeat:
     question: str | None = None
     takeaway: str | None = None
     aha: bool = False
-    hold: float | None = None
+    hold: float | None = None  # the still at its end
+    hold_auto: bool = False  # chosen by the scene from the viewer's budgets (R7)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +164,6 @@ class BeatRecorder:
     settles: list[Settle] = field(default_factory=list)
     _beats: list[tuple[TimelineBeat, bool]] = field(default_factory=list)  # (beat, exited)
     _lanes: dict[int, Lane] = field(default_factory=dict)  # on screen, by mobject id
-    _units: dict[int, str] = field(default_factory=dict)
 
     def attach(self) -> None:
         """Called by a scene that records beats, so its render gets a timeline."""
@@ -191,9 +191,10 @@ class BeatRecorder:
         )
         return len(self._beats) - 1
 
-    def exit(self, handle: int, at_seconds: float) -> None:
+    def exit(self, handle: int, at_seconds: float, hold: float, *, auto: bool) -> None:
         beat, _ = self._beats[handle]
         beat.end_seconds = self.clock(at_seconds)
+        beat.hold, beat.hold_auto = round(hold, 6), auto
         self._beats[handle] = (beat, True)
 
     def lanes(self, shown: Mapping[int, LaneText], at: float) -> None:
@@ -208,11 +209,6 @@ class BeatRecorder:
                 lane = Lane(at, None, text.text, words, self.where(text.file), text.line)
                 (self.titles if text.kind == "title" else self.captions).append(lane)
                 self._lanes[key] = lane
-
-    def unit(self, key: int, kind: str) -> str:
-        """A name for a component that is stable within this render: `plot-1`, `dots-2`."""
-
-        return self._units.setdefault(key, f"{kind}-{len(self._units) + 1}")
 
     def timeline(self, scene: str, duration_seconds: float) -> Timeline:
         beats = [

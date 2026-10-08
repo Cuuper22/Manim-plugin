@@ -34,7 +34,7 @@ class Beat:
     transition: Transition
     focus: Any
     keep: tuple[Any, ...]
-    hold: float
+    hold: float | None  # None: chosen from the viewer's budgets at the beat's end
     run_time: float | None
     intent: Intent | None = None
     question: str | None = None
@@ -48,6 +48,7 @@ class Beat:
     carried: set[int] = field(default_factory=set, repr=False)
     transitioned: bool = field(default=False, repr=False)
     focused: bool = field(default=False, repr=False)
+    started: float = field(default=0.0, repr=False)  # video seconds when it was entered
     record: int | None = field(default=None, repr=False)
 
     def notes(self) -> dict[str, Any]:

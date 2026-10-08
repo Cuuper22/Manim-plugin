@@ -10,6 +10,7 @@ import inspect
 import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import numpy as np
 from manim import (
     DOWN,
     LEFT,
+    RIGHT,
     Animation,
     AnimationGroup,
     AnnotationDot,
@@ -38,7 +40,6 @@ from manim import (
     Mobject,
     MovingCameraScene,
     Rectangle,
-    RoundedRectangle,
     Scene,
     SingleStringMathTex,
     SurroundingRectangle,
@@ -54,13 +55,15 @@ from manim import (
     config,
 )
 from manim.constants import RendererType
+from manim.utils.exceptions import EndSceneEarlyException
 
-from . import motion, timeline
+from . import motion, pacing, timeline
 from .beats import Beat, Intent, Transition
 from .derivation import Derivation, overlay, stack
 from .devices import Devices
 from .errors import CompositionError, parse_choice
 from .kit import context
+from .kit.labels import backdrop
 from .kit.overlay import is_overlay
 from .layout import LANES, Rect, Region, fit_scale, frame_regions
 from .project import load_style
@@ -96,6 +99,10 @@ class Directed(Devices, Viewing):
     """TeX symbol -> color token, #RRGGBB or Manim color, merged over director.yaml
     `direction.symbols`."""
 
+    final_hold: float | None = None
+    """Seconds the last frame stays still: None takes the viewer's budget (`final_hold` in
+    budgets.json at `brief.viewer.level`); 0 adds nothing, for a film that loops."""
+
     # Lifecycle ------------------------------------------------------------------------------
 
     def render(self, preview: bool = False) -> Any:
@@ -108,6 +115,7 @@ class Directed(Devices, Viewing):
     def tear_down(self) -> None:
         self._require_entered()
         self._flush(instant=True)
+        self._hold_last_frame()
         super().tear_down()  # type: ignore[misc]
 
     def play(self, *args: Any, **kwargs: Any) -> None:
@@ -147,6 +155,11 @@ class Directed(Devices, Viewing):
         symbols = {**style.symbols, **type(self).symbols}
         self._symbol_colors = {tex: self.theme.color(value) for tex, value in symbols.items()}
         self._regions = frame_regions(config.frame_width, config.frame_height, style.safe_area)
+        viewer = style.viewer
+        self._budgets = pacing.settings(viewer.level if viewer else "general", style.pacing)
+        self._story = {beat.id: beat for beat in style.storyboard_of(type(self).__name__)}
+        self._start_viewing()
+        self._notes: list[tuple[str | None, Mobject]] = []  # annotate's notes, by beat
         self._stage = Stage()
         self._beat: Beat | None = None
         self._beats_entered = 0
@@ -195,13 +208,7 @@ class Directed(Devices, Viewing):
     def caption(self, text: str | None, **kwargs: Any) -> Mobject | None:
         """Set the caption lane (at most two lines), or clear it with None."""
 
-        self._retire(self._occupant(Region.CAPTION))
-        if text is None:
-            return None
-        mobject = self._caption_lines(" ".join(text.split()), **kwargs)
-        self._lane(mobject, "caption", text)
-        self.place(mobject, region=Region.CAPTION)
-        return mobject
+        return self._set_caption(text, None, **kwargs)
 
     def region(self, region: Region | str) -> Rect:
         return self._regions[parse_choice(Region, region)]
@@ -239,6 +246,11 @@ class Directed(Devices, Viewing):
             min_scale=min_scale,
         )
         self._require_free(layout.bounds, area_name, ignore=[*mobjects, replaces])
+        # Parts of one component placed together read as one group: a selection lined up.
+        sources = {
+            id(_component(self._placed_root(m))) if self._visible(m) else 0 for m in mobjects
+        }
+        lined_up = len(mobjects) > 1 and len(sources) == 1 and 0 not in sources
         visible = self._visible_ids()
         for mobject, center in zip(mobjects, layout.centers, strict=True):
             staged, new = split_by_stage(mobject, visible)
@@ -262,6 +274,11 @@ class Directed(Devices, Viewing):
             for follower, before in followers:  # tags glide along instead of jumping
                 follower.update(0)
                 self._stage.glides.setdefault(id(follower), (follower, before))
+        group = mobjects[0] if len(mobjects) == 1 else VGroup(*mobjects)
+        if lined_up:
+            for mobject in mobjects:
+                self._stage.placed.pop(id(mobject), None)
+            self._stage.place(group, area_name)
         if replaces is not None:
             self._stage.placed.pop(id(replaces), None)
             if replaces in self._stage.entering:
@@ -270,7 +287,7 @@ class Directed(Devices, Viewing):
             else:
                 self._stage.morphs.append((replaces, mobjects[0]))
                 self._carry(replaces)
-        return mobjects[0] if len(mobjects) == 1 else VGroup(*mobjects)
+        return group
 
     # Beats and focus ------------------------------------------------------------------------
 
@@ -281,7 +298,7 @@ class Directed(Devices, Viewing):
         focus: Mobject | None = None,
         transition: Transition | str = Transition.CONTINUE,
         keep: Iterable[Mobject] = (),
-        hold: float = motion.HOLD_SECONDS,
+        hold: float | None = None,
         run_time: float | None = None,
         intent: Intent | str | None = None,
         question: str | None = None,
@@ -293,12 +310,14 @@ class Directed(Devices, Viewing):
         On entry nothing moves. At the first animation inside (or at the end) everything on
         stage that was not kept or placed again leaves, carried objects glide or morph, and
         newly placed objects enter, all styled by `transition`. On exit, `focus` is
-        emphasized and the beat holds for `hold` seconds. `intent`, `question` and
-        `takeaway` are narrative notes kept on the Beat; `aha=True` marks the beat where the
-        viewer should get the idea (pacing QA expects one, given time to land).
+        emphasized and the stage holds still: long enough for the viewer to take in the last
+        change and read the beat's caption, and longer after a result (`aha=True`, or intent
+        reveal, prove or recap), at the pace of `brief.viewer.level`; `hold=` sets the
+        seconds instead. `intent`, `question` and `takeaway` are narrative notes kept on the
+        Beat; `aha=True` marks the beat where the viewer should get the idea.
         """
 
-        if hold < 0 or (run_time is not None and run_time < 0):
+        if (hold is not None and hold < 0) or (run_time is not None and run_time < 0):
             raise CompositionError("A beat's hold and run_time cannot be negative.")
         caller = sys._getframe(1)
         self._unentered = Beat(
@@ -424,7 +443,7 @@ class Directed(Devices, Viewing):
         block.scale(layout.scale).move_to(layout.centers[0])
         self._pin(block)
         seconds = motion.STEP_SECONDS if run_time is None else run_time
-        rest = motion.STEP_PAUSE if pause is None else pause
+        self._settle([], seconds)
         if replaces is None:
             first = Write(lines[0])
         else:
@@ -434,8 +453,12 @@ class Directed(Devices, Viewing):
             first = motion.morph(replaces, lines[0])
         self._flush(along=[first, *_fade_in(labels[0])], run_time=seconds, source="derive")
         for i in range(1, len(lines)):
-            if rest > 0:
-                self.wait(rest)
+            # By default each line rests long enough to be read before the next one comes.
+            if pause is None:
+                read = pacing.settle_seconds(self._events[-1], self._budgets)
+                self._still_for(max(motion.STEP_PAUSE, read))
+            elif pause > 0:
+                self.wait(pause)
             source = lines[i - 1] if in_place else lines[i - 1].copy()
             animations = [TransformMatchingTex(source, lines[i]), *_fade_in(labels[i])]
             if in_place and labels[i - 1] is not None:
@@ -497,7 +520,7 @@ class Directed(Devices, Viewing):
         animations: list[Animation] = recolor
         if box:
             unique = {tuple(map(id, group)): group for group in groups}.values()
-            glyphs.boxes = VGroup(*(_backdrop(group, hue) for group in unique))
+            glyphs.boxes = VGroup(*(backdrop(group, hue) for group in unique))
             glyphs.boxes.set_z_index(mobject.z_index - 1)
             self._stage.attached[id(glyphs.boxes)] = self._placed_root(mobject)
             if self._pinned(mobject):
@@ -507,8 +530,8 @@ class Directed(Devices, Viewing):
         seconds = motion.FOCUS_SECONDS if run_time is None else run_time
         self._perform(animations, seconds, "highlight", shown=())
         if glyphs.boxes is not None:  # after FadeIn, which suspends updaters
-            for backdrop, group in zip(glyphs.boxes, unique, strict=True):
-                backdrop.add_updater(_following(group))
+            for box, group in zip(glyphs.boxes, unique, strict=True):
+                box.add_updater(_following(group))
         return glyphs
 
     def tag(self, mobject: Mobject, label: str | None = None) -> MathTex:
@@ -576,6 +599,7 @@ class Directed(Devices, Viewing):
             and (chapter or self._stage.region_of(m) not in LANES)
         ]
         beat.carried = {id(leaf) for m in beat.keep for leaf in m.get_family()}
+        beat.started = self._clock()
         # Manim names section files after the section: no path separators in them.
         self.next_section(re.sub(r'[\\/:*?"<>|]', "-", beat.id))
         recorder = timeline.active()
@@ -586,6 +610,7 @@ class Directed(Devices, Viewing):
         self._beat = beat
 
     def _exit_beat(self, beat: Beat, *, completed: bool) -> None:
+        hold = 0.0
         try:
             if completed:
                 self._flush()
@@ -595,13 +620,45 @@ class Directed(Devices, Viewing):
                         "the stage; place it, play it in, or keep it.",
                         beat=beat.id,
                     )
-                if beat.hold > 0:
-                    self.wait(beat.hold)
+                if beat.hold is None:
+                    hold = self._auto_hold(beat)
+                    self._still_for(hold)
+                elif beat.hold > 0:
+                    hold = beat.hold
+                    self.wait(hold)
         finally:
             self._beat = None
             recorder = timeline.active()
             if recorder is not None and beat.record is not None:
-                recorder.exit(beat.record, self.renderer.time)
+                recorder.exit(beat.record, self.renderer.time, hold, auto=beat.hold is None)
+
+    def _auto_hold(self, beat: Beat) -> float:
+        """The still a beat needs at its end, less the stillness it already ends with: time to
+        take in its last change and to finish reading its caption (R7)."""
+
+        plan = self._story.get(beat.id)
+        intent = beat.intent.value if beat.intent else plan.intent if plan else None
+        result = beat.aha or bool(plan and plan.aha) or intent in pacing.RESULT_INTENTS
+        events = [e for e in self._events if e.beat == beat.id]
+        ended, need = pacing.end_still(events, self._budgets, result=result)
+        now = self._clock()
+        hold = need - (now - (beat.started if ended is None else ended))
+        for at, lane in self._lanes_since.values():
+            if lane.kind == "caption" and at >= beat.started:
+                words = len(lane.text.split())
+                hold = max(hold, pacing.caption_seconds(words, self._budgets) - (now - at))
+        return max(hold, 0.0)
+
+    def _hold_last_frame(self) -> None:
+        """Keep the final frame on screen for `final_hold` seconds of stillness."""
+
+        hold = type(self).final_hold
+        hold = self._budgets.final_hold if hold is None else hold
+        ended = max(
+            (e.at + e.seconds for e in self._events if e.source not in pacing.SIGNALS), default=0.0
+        )
+        with suppress(EndSceneEarlyException):  # a render of only some animations (-n)
+            self._still_for(hold - (self._clock() - ended))
 
     def _flush(
         self,
@@ -854,6 +911,19 @@ class Directed(Devices, Viewing):
         ]
         return candidates[-1] if candidates else None
 
+    def _set_caption(self, text: str | None, mark: Mobject | None, **kwargs: Any) -> Mobject | None:
+        """The caption lane holds `text`, after `mark` (the "?" of a question) if given."""
+
+        self._retire(self._occupant(Region.CAPTION))
+        if text is None:
+            return None
+        mobject = self._caption_lines(" ".join(text.split()), **kwargs)
+        if mark is not None:
+            mobject = VGroup(mark, mobject).arrange(RIGHT, buff=0.25)
+        self._lane(mobject, "caption", text)
+        self.place(mobject, region=Region.CAPTION)
+        return mobject
+
     def _caption_lines(self, text: str, **kwargs: Any) -> Mobject:
         line = self.text(text, Role.CAPTION, **kwargs)
         if line.width <= self._regions[Region.CAPTION].width or " " not in text:
@@ -946,6 +1016,12 @@ class DirectedThreeDScene(Directed, ThreeDScene):
                 pending += [(member, overlay) for member in animation.animations]
 
 
+def _component(root: Mobject) -> Mobject | None:
+    """`root`, if it is a kit component."""
+
+    return root if hasattr(root, "director_kind") else None
+
+
 def _hold_on_screen(mobject: Mobject, frame: Mobject) -> None:
     """Keep `mobject` where it sits in the unmoved frame, however the camera pans or zooms."""
 
@@ -978,19 +1054,6 @@ def _require_held(mobject: Mobject) -> None:
             "so place() cannot move it: place the objects it is drawn from, or position it "
             "inside its redraw function."
         )
-
-
-def _backdrop(glyphs: VGroup, hue: str) -> RoundedRectangle:
-    # Tight sideways so neighbouring operators keep their space; taller like a marker.
-    pad_x, pad_y = 0.05, 0.05 + 0.12 * glyphs.height
-    return RoundedRectangle(
-        width=glyphs.width + 2 * pad_x,
-        height=glyphs.height + 2 * pad_y,
-        corner_radius=0.08,
-        stroke_width=0,
-        fill_color=hue,
-        fill_opacity=0.16,
-    ).move_to(glyphs)
 
 
 def _following(glyphs: VGroup) -> Callable[[Mobject], None]:

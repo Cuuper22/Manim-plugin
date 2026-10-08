@@ -384,6 +384,8 @@ def test_run_time_zero_lands_on_the_end_state_instantly(render: Render) -> None:
 
 def test_beats_record_the_timeline_under_the_bridge(render: Render, tmp_path: Path) -> None:
     class Timed(DirectedScene):
+        final_hold = 0
+
         def construct(self):
             with self.beat("hook", hold=0.5):
                 self.place(Square())
