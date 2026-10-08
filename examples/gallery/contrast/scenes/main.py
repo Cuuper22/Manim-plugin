@@ -41,7 +41,9 @@ class ShearKeepsArea(DirectedScene):
         with self.beat("why", keep=[grid, square, area]):
             self.caption("Same base, same height: the same area.")
             self.annotate(grid.i_hat, "base 1", style="brace")
-            height = DashedLine(grid.to_point((0, 0)), grid.to_point((0, 1)), color=self.theme.accent)
+            height = DashedLine(
+                grid.to_point((0, 0)), grid.to_point((0, 1)), color=self.theme.accent
+            )
             self.pause()
             self.play(Create(height))
             self.annotate(height, "height 1", style="label", side="left")

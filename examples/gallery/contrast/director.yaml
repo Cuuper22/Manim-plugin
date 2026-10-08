@@ -21,7 +21,7 @@ brief:
 storyboard:
   - id: hook
     intent: introduce
-    audience_question: What does a matrix do to the plane?
+    audience_question: Which shape will we watch?
     changes: a grid with î, ĵ and the unit square appears
     takeaway: The unit square on î and ĵ has area 1.
   - id: predict
