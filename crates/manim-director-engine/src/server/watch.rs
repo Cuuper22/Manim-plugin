@@ -3,11 +3,13 @@
 //! catalog changes, and the doctor report a fresh server needs.
 
 use super::state::{AppState, Shared};
-use crate::{file_revision, workspace::Section, JobFilter};
+use crate::{
+    file_revision,
+    workspace::{newest_check, Section},
+};
 use chrono::{Duration as Age, Utc};
 use manim_director_core::{
-    python_sources, relative_posix, DoctorParams, JobOrigin, JobStatus, Operation,
-    OperationRequest, SPEC_FILE,
+    python_sources, relative_posix, DoctorParams, JobOrigin, JobStatus, OperationRequest, SPEC_FILE,
 };
 use std::{
     collections::HashMap,
@@ -174,8 +176,8 @@ pub async fn catalog(state: AppState, shutdown: CancellationToken) {
     }
 }
 
-/// Submits a `doctor` job unless one succeeded within a day and after the
-/// runtime last changed.
+/// Submits a `doctor` job unless the newest check succeeded, within a day and
+/// after the runtime last changed.
 pub async fn doctor(state: AppState) {
     let python = state.scheduler.python().to_path_buf();
     let fresh = state
@@ -185,14 +187,9 @@ pub async fn doctor(state: AppState) {
             let Some(runtime) = store.runtime(&python)? else {
                 return Ok(false);
             };
-            let newest = store.newest_job(
-                JobFilter {
-                    operations: &[Operation::Doctor],
-                    ..JobFilter::default()
-                },
-                &[JobStatus::Succeeded],
-            )?;
-            let finished = newest.and_then(|job| job.finished_at);
+            let finished = newest_check(store)?
+                .filter(|job| job.status == JobStatus::Succeeded)
+                .and_then(|job| job.finished_at);
             Ok(finished.is_some_and(|finished| {
                 finished.as_datetime() > Utc::now() - DOCTOR_FRESH_FOR
                     && finished > runtime.changed_at

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import type { DoctorSnapshot, WorkspaceState } from "../../src/api/types.ts";
+import type { WorkspaceState } from "../../src/api/types.ts";
 
 const REPO = resolve(import.meta.dirname, "../../..");
 const WORKBENCH_DIST = join(REPO, "workbench/dist");
@@ -80,15 +80,25 @@ export class Engine {
     return this.api<WorkspaceState>("/api/state");
   }
 
-  /** The startup environment check, once it has finished. */
-  async doctor(timeoutMs: number): Promise<DoctorSnapshot | null> {
+  /** Why this machine cannot render video, in the engine's words; `null` once the startup check says it can. */
+  async cannotRender(timeoutMs: number): Promise<string | null> {
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const { doctor } = await this.state();
-      if (doctor) return doctor;
+    let state = await this.state();
+    while (!state.doctor && Date.now() < deadline) {
       await new Promise((done) => setTimeout(done, 500));
+      state = await this.state();
     }
-    return null;
+    const { doctor, scene_index: index } = state;
+    if (doctor?.report) {
+      const { capabilities, findings } = doctor.report;
+      if (capabilities.render && capabilities.video_tools) return null;
+      const problems = findings.filter((finding) => finding.severity !== "info").map(said);
+      return [`capabilities ${JSON.stringify(capabilities)}`, ...problems].join("\n");
+    }
+    const reasons = [doctor ? `the environment check failed: ${said(doctor.error)}` : `no environment check finished within ${timeoutMs} ms`];
+    if (index.error) reasons.push(`the scene index failed: ${said(index.error)}`);
+    if (!doctor && this.stderrTail) reasons.push(this.stderrTail);
+    return reasons.join("\n");
   }
 
   async stop(): Promise<void> {
@@ -101,6 +111,11 @@ export class Engine {
     }
     rmSync(this.root, { recursive: true, force: true });
   }
+}
+
+/** `code: message`, for an error or a finding. */
+function said({ code, message }: { code: string; message: string }): string {
+  return `${code}: ${message}`;
 }
 
 /** The URL from the `--json` listening line, or the reason the engine did not start. */

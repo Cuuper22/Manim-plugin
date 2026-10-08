@@ -227,14 +227,17 @@ async fn job_answers_say_the_verdict_and_give_absolute_paths() {
         json!({"operation": "diagnose", "text": "hello", "wait_seconds": 10}),
     )
     .await;
-    assert!(text(&diagnosed).ends_with("\ninfo hello"), "{diagnosed}");
+    assert!(
+        text(&diagnosed).ends_with("\ninfo unclassified — hello"),
+        "{diagnosed}"
+    );
     let failed = call(
         &scheduler,
         "submit",
         json!({"operation": "diagnose", "text": "error", "wait_seconds": 10}),
     )
     .await;
-    let cause = "\nerror scenes/main.py:3: name 'x' is not defined";
+    let cause = "\nerror name_error scenes/main.py:3 — name 'x' is not defined";
     assert!(text(&failed).ends_with(cause), "{failed}");
 
     fs::create_dir_all(scheduler.root().join("captions")).unwrap();

@@ -58,19 +58,34 @@ pub fn error_findings(error: &ErrorBody) -> Vec<Finding> {
         .unwrap_or_default()
 }
 
-/// `warning scenes/main.py:46: message`, then its hint, if any.
+/// `warning safe_area 0:02.67 · beat derive · scenes/main.py:243 — message`
+/// with only the parts that apply, then its hint, if any.
 pub fn finding_lines(finding: &Finding) -> Vec<String> {
+    let when = finding.at_seconds.map(clock);
+    let beat = finding.beat.as_ref().map(|beat| format!("beat {beat}"));
     let location = finding
         .location
         .as_ref()
-        .map(|location| format!("{}:{}: ", location.file, location.line))
-        .unwrap_or_default();
-    let mut lines = vec![format!(
-        "{} {location}{}",
-        finding.severity, finding.message
-    )];
+        .map(|location| format!("{}:{}", location.file, location.line));
+    let context: Vec<String> = [when, beat, location].into_iter().flatten().collect();
+    let mut head = format!("{} {}", finding.severity, finding.code);
+    if !context.is_empty() {
+        head = format!("{head} {}", context.join(" · "));
+    }
+    let mut lines = vec![format!("{head} — {}", finding.message)];
     lines.extend(finding.hint.as_ref().map(|hint| format!("  hint: {hint}")));
     lines
+}
+
+/// `m:ss.cc`, as the workbench shows render times.
+fn clock(seconds: f64) -> String {
+    let centis = if seconds.is_finite() && seconds > 0.0 {
+        (seconds * 100.0).round() as u64
+    } else {
+        0
+    };
+    let (minutes, rest) = (centis / 6000, centis % 6000);
+    format!("{minutes}:{:02}.{:02}", rest / 100, rest % 100)
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -173,9 +188,12 @@ mod tests {
     }
 
     #[test]
-    fn findings_read_as_severity_location_message_and_hint() {
+    fn findings_read_as_one_line_with_when_and_where_then_a_hint() {
         let mut finding = Finding::warning("low_contrast", "Contrast is 2.0:1.");
-        assert_eq!(finding_lines(&finding), ["warning Contrast is 2.0:1."]);
+        assert_eq!(
+            finding_lines(&finding),
+            ["warning low_contrast — Contrast is 2.0:1."]
+        );
         finding.location = Some(SourceLocation {
             file: "scenes/main.py".into(),
             line: 46,
@@ -185,9 +203,24 @@ mod tests {
         assert_eq!(
             finding_lines(&finding),
             [
-                "warning scenes/main.py:46: Contrast is 2.0:1.",
+                "warning low_contrast scenes/main.py:46 — Contrast is 2.0:1.",
                 "  hint: Use a lighter color."
             ]
         );
+        finding.at_seconds = Some(2.666_667);
+        finding.beat = Some("derive".into());
+        assert_eq!(
+            finding_lines(&finding)[0],
+            "warning low_contrast 0:02.67 · beat derive · scenes/main.py:46 — Contrast is 2.0:1."
+        );
+    }
+
+    #[test]
+    fn times_read_as_minutes_seconds_and_hundredths() {
+        assert_eq!(clock(0.0), "0:00.00");
+        assert_eq!(clock(63.456), "1:03.46");
+        assert_eq!(clock(59.999), "1:00.00");
+        assert_eq!(clock(-1.0), "0:00.00");
+        assert_eq!(clock(f64::NAN), "0:00.00");
     }
 }

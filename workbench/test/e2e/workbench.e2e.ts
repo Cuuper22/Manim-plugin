@@ -30,9 +30,9 @@ test("preview, inspect, check, edit, cancel and export a scene", { skip, timeout
   const engine = await Engine.start(binary!);
   t.after(() => engine.stop());
 
-  const doctor = await engine.doctor(STEP_MS);
-  if (!doctor?.report.capabilities.render || !doctor.report.capabilities.video_tools) {
-    const why = `this machine cannot render: ${JSON.stringify(doctor?.report.capabilities ?? "no doctor report")}`;
+  const blocker = await engine.cannotRender(STEP_MS);
+  if (blocker !== null) {
+    const why = `this machine cannot render: ${blocker}`;
     assert.ok(!required, why);
     t.skip(why);
     return;

@@ -3,10 +3,14 @@
 
 use super::*;
 use crate::{
+    db::testing,
     server::{feed, watch, ServeConfig, Server},
     RuntimeIdentity,
 };
-use manim_director_core::{Catalog, CatalogTheme, DiagnoseParams, JobOrigin, OperationRequest};
+use manim_director_core::{
+    Catalog, CatalogTheme, DiagnoseParams, DoctorParams, DoctorTask, ErrorBody, JobOrigin,
+    JobStatus, OperationRequest, Task,
+};
 use serde_json::json;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,6 +47,16 @@ impl Harness {
             }
         }
         stop
+    }
+
+    async fn index_reaches(&self, wanted: &str) {
+        for _ in 0..200 {
+            if self.get("/api/state").await.json()["scene_index"]["state"] == wanted {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the scene index never became {wanted}");
     }
 }
 
@@ -164,6 +178,24 @@ async fn job_events_follow_the_lifecycle_then_patch_the_workspace() {
     assert_eq!(sections["doctor"]["report"]["ok"], true);
     assert!(sections.get("findings").is_some());
     assert!(sections.get("project").is_none());
+    stop.cancel();
+}
+
+#[tokio::test]
+async fn a_passing_check_retries_a_failed_scene_index() {
+    let harness = Harness::new("").await;
+    let stop = harness.spawn(&["feed", "index"]);
+    harness.index_reaches("ready").await;
+    let unavailable = ErrorBody::new("runtime_unavailable", "Python was not found.", None);
+    let broken = Err(unavailable);
+    harness.state.index().lock().finish_refresh(broken);
+    harness.index_reaches("failed").await;
+    let job = harness
+        .json(Method::POST, "/api/jobs", &json!({"operation": "doctor"}))
+        .await
+        .json();
+    harness.finished(job["id"].as_str().unwrap()).await;
+    harness.index_reaches("ready").await;
     stop.cancel();
 }
 
@@ -367,7 +399,7 @@ async fn a_bound_server_answers_real_sockets_on_its_tokenized_url() {
 }
 
 #[tokio::test]
-async fn a_fresh_doctor_report_is_not_repeated_at_start() {
+async fn only_a_fresh_passing_check_is_not_repeated_at_start() {
     let harness = Harness::new("").await;
     let doctors = || async {
         harness.get("/api/jobs").await.json()["items"]
@@ -401,4 +433,22 @@ async fn a_fresh_doctor_report_is_not_repeated_at_start() {
     assert_eq!(harness.finished(&first[0]).await["origin"], "engine");
     watch::doctor(harness.state.clone()).await;
     assert_eq!(doctors().await, first);
+
+    // A check that failed since is never fresh: the runtime may work again.
+    let failed = uuid::Uuid::new_v4();
+    let (request, task) = (
+        OperationRequest::Doctor(DoctorParams {}),
+        Task::Doctor(DoctorTask {}),
+    );
+    store
+        .insert_job(&testing::new_job(failed, &request, &task))
+        .unwrap();
+    let unavailable = ErrorBody::new("runtime_unavailable", "Python was not found.", None);
+    store
+        .finish_error(failed, JobStatus::Failed, &unavailable, None)
+        .unwrap();
+    watch::doctor(harness.state.clone()).await;
+    let after = doctors().await;
+    assert_eq!(after.len(), 3);
+    assert_eq!(after[1..], [failed.to_string(), first[0].clone()]);
 }
