@@ -9,6 +9,7 @@ from manim_director_runtime.texscan import (
     is_relation,
     occurrences,
     paint,
+    upright_words,
     without_alignment,
 )
 
@@ -134,3 +135,10 @@ def test_alignment_marks_are_dropped_only_at_the_top_level() -> None:
     matrix = r"\begin{pmatrix} a & b \end{pmatrix} &= M"
     assert without_alignment(matrix) == r"\begin{pmatrix} a & b \end{pmatrix} = M"
     assert without_alignment(r"{a & b}") == r"{a & b}"
+
+
+def test_bare_words_are_set_upright_but_commands_and_products_are_not() -> None:
+    assert upright_words("area =") == r"\text{area} ="
+    assert upright_words(r"x_{max} + \sin x") == r"x_{\text{max}} + \sin x"
+    assert upright_words(r"\text{slope} = ad - bc") == r"\text{slope} = ad - bc"
+    assert upright_words(r"\frac{\Delta y}{h}") == r"\frac{\Delta y}{h}"

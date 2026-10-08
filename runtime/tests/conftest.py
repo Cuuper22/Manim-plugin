@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,41 @@ def writer() -> RecordingWriter:
 @pytest.fixture
 def ctx(project: Path, writer: RecordingWriter) -> Context:
     return Context(project, "test-request", writer)  # type: ignore[arg-type]
+
+
+@pytest.fixture(scope="session")
+def tex_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("tex")
+
+
+@pytest.fixture
+def render(tmp_path: Path, tex_dir: Path) -> Callable[[type], Any]:
+    """Render a scene class with real Manim at tiny frames: the last frame only, or with
+    `every_frame=True` each frame of each animation (updaters see mid-animation states)."""
+
+    def run(scene_class: type, *, every_frame: bool = False) -> Any:
+        from manim import tempconfig
+
+        settings = {
+            "media_dir": str(tmp_path / "media"),
+            "tex_dir": str(tex_dir),
+            "pixel_width": 320,
+            "pixel_height": 180,
+            "frame_rate": 10,
+            "save_last_frame": True,
+            "write_to_movie": False,
+            "disable_caching": True,
+            "progress_bar": "none",
+            "verbosity": "ERROR",
+        }
+        if every_frame:
+            settings = {**settings, "save_last_frame": False, "dry_run": True}
+        with tempconfig(settings):
+            scene = scene_class()
+            scene.render()
+        return scene
+
+    return run
 
 
 def as_json(value: Any) -> Any:

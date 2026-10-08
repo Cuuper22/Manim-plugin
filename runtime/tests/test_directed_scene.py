@@ -61,34 +61,6 @@ MIDNIGHT, PAPER = theme("midnight"), theme("paper")
 Render = Callable[[type], Any]
 
 
-@pytest.fixture(scope="session")
-def tex_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("tex")
-
-
-@pytest.fixture
-def render(tmp_path: Path, tex_dir: Path) -> Render:
-    def run(scene_class: type) -> Any:
-        settings = {
-            "media_dir": str(tmp_path / "media"),
-            "tex_dir": str(tex_dir),
-            "pixel_width": 320,
-            "pixel_height": 180,
-            "frame_rate": 10,
-            "save_last_frame": True,
-            "write_to_movie": False,
-            "disable_caching": True,
-            "progress_bar": "none",
-            "verbosity": "ERROR",
-        }
-        with tempconfig(settings):
-            scene = scene_class()
-            scene.render()
-        return scene
-
-    return run
-
-
 def on_stage(scene: Any) -> list[Any]:
     """The scene's visible mobjects (Manim's wait() leaves empty Mobjects behind)."""
 
