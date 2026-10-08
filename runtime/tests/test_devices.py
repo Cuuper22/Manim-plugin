@@ -273,3 +273,25 @@ def test_braces_follow_the_long_side_of_their_term(render: Render) -> None:
     column, row = seen["dots"]
     assert abs(seen["column"].get_center()[0] - column[0]) > 0.1  # beside the column
     assert abs(seen["row"].get_center()[1] - row[1]) > 0.1  # above or below the row
+
+
+def test_an_overlay_made_before_placement_enters_where_its_parent_is(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Early(DirectedScene):
+        def construct(self):
+            grid = VectorGrid(1)
+            square = grid.unit_square()
+            self.place(grid, region="right")
+            path: list[float] = []
+
+            def track(_: Mobject) -> None:
+                if square in self.mobjects:  # from its first frame on stage
+                    path.append(square.get_center()[0])
+
+            self.add(Mobject().add_updater(track))
+            self.show(square)
+            seen["path"], seen["corner"] = path, grid.to_point((0.5, 0.5))[0]
+
+    render(Early, every_frame=True)
+    assert seen["path"] and np.allclose(seen["path"], seen["corner"])

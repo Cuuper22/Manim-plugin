@@ -92,6 +92,7 @@ class Devices:
                         "stage: place() it first."
                     )
                 self.add(mobject)  # adopted now; its entrance starts from nothing
+                mobject.update(0)  # drawn where its parent is now, not where it was made
                 entrances.append(motion.entrance(mobject, lag))
                 continue
             if not self._holds(mobject):
