@@ -1,0 +1,63 @@
+version: 1
+project:
+  name: A shear keeps area
+  description: Pattern 4, before and after contrast. A shear tilts the unit square without changing its area; a stretch does not.
+  seed: 4
+engine:
+  source: scenes/main.py
+  main_scene: ShearKeepsArea
+theme: midnight
+brief:
+  viewer:
+    who: a first-year linear algebra student
+    level: general
+    knows: [vectors, 2×2 matrices times vectors, area of a parallelogram = base × height]
+    new: [a matrix moves the whole grid, the area scale of a map]
+    question: A shear tilts every square. Does it change their area?
+    wrong_guess: yes, the square is stretched into a longer, slanted shape
+    aha: the sheared square keeps its base and its height, so its area stays 1; a stretch does not
+    payoff: tells at a glance whether a 2×2 map keeps areas, and why a shear does
+    colors: {primary: î and the first column, secondary: ĵ and the second column, accent: the area being measured}
+storyboard:
+  - id: hook
+    intent: introduce
+    audience_question: What does a matrix do to the plane?
+    changes: a grid with î, ĵ and the unit square appears
+    takeaway: The unit square on î and ĵ has area 1.
+  - id: predict
+    intent: introduce
+    audience_question: What will this shear do to the square's area?
+    changes: the shear matrix and the area readout appear beside the grid
+    takeaway: The viewer commits to bigger, smaller or the same.
+    keep: [grid, square]
+  - id: shear
+    intent: reveal
+    audience_question: What happens to the square?
+    changes: the grid shears; the square tilts while the readout stays 1.00
+    takeaway: The square tilts, but its area stays 1.
+    keep: [grid, square, panel]
+    aha: true
+  - id: why
+    intent: explain
+    audience_question: Why does the area not change?
+    changes: the base and the height are marked on the tilted square
+    takeaway: Same base, same height, so the same area.
+    keep: [grid, square, area]
+  - id: contrast
+    intent: compare
+    audience_question: What would a map that does change area look like?
+    changes: a second grid with its own unit square appears beside the first
+    takeaway: A second square, at the same scale, ready for a stretch.
+    keep: [grid, square, area]
+  - id: stretch
+    intent: compare
+    audience_question: Does every map keep area?
+    changes: the second grid stretches, its readout going to 2.00
+    takeaway: A stretch doubles the area; the shear did not change it.
+    keep: [grid, square, area, stretched, wide, doubled]
+  - id: recap
+    intent: recap
+    audience_question: So does a shear change area?
+    changes: the shear plays again, beside the stretch
+    takeaway: A shear keeps every area; a stretch changes it.
+    keep: [grid, square, area, stretched, wide, doubled]

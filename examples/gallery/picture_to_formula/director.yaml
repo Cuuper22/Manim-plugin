@@ -1,0 +1,63 @@
+version: 1
+project:
+  name: Odd numbers make squares
+  description: Pattern 3, picture to formula. Each odd number is an L of dots that wraps a square.
+  seed: 1
+engine:
+  source: scenes/main.py
+  main_scene: OddSquares
+theme: midnight
+brief:
+  viewer:
+    who: a curious 16-year-old who knows algebra, watching on a phone
+    level: general
+    knows: [odd numbers, square numbers, $n^2$]
+    new: [the L shape, $1 + 3 + \cdots + (2n-1)$]
+    question: Why do 1, 1+3, 1+3+5 keep landing on squares?
+    wrong_guess: a coincidence that breaks down for bigger numbers
+    aha: each odd number is an L that wraps a k×k square into a (k+1)×(k+1) square
+    payoff: can say 1+3+…+19 = 100 at a glance, and why
+    colors: {primary: the square so far, accent: the newest L}
+storyboard:
+  - id: hook
+    intent: introduce
+    audience_question: Why do these sums of odd numbers land on squares?
+    changes: the sums 1, 1+3, 1+3+5 appear with their totals
+    takeaway: Adding odd numbers in order gives 1, 4, 9, all squares.
+  - id: predict
+    intent: introduce
+    audience_question: Will the next sum be a square too?
+    changes: 1+3+5+7 = ? joins the column
+    takeaway: The viewer commits to a guess before the picture.
+    keep: [sums]
+  - id: picture
+    intent: explain
+    audience_question: What does adding 3 look like?
+    changes: an L of 3 dots wraps the single dot
+    takeaway: 1 dot plus an L of 3 is a 2×2 square.
+    keep: [sums]
+  - id: again
+    intent: explain
+    audience_question: Does the next odd number fit the same way?
+    changes: an L of 5 wraps the 2×2 square
+    takeaway: An L of 5 turns 2×2 into 3×3.
+    keep: [sums, dots]
+  - id: why
+    intent: reveal
+    audience_question: Why does the L of 7 fit exactly?
+    changes: the L of 7 wraps 3×3 into 4×4
+    takeaway: Yes, 4²; two sides of 3 plus a corner make exactly the L of 7.
+    keep: [sums, dots]
+    aha: true
+  - id: formula
+    intent: prove
+    audience_question: Does it work for any number of Ls?
+    changes: the last sum becomes 1 + 3 + ⋯ + (2n−1) = n²
+    takeaway: The n-th L has 2n − 1 dots, and n Ls make an n×n square.
+    keep: [dots]
+  - id: recap
+    intent: recap
+    audience_question: So why do odd numbers add up to squares?
+    changes: the L of 7 wraps the square again, fast
+    takeaway: Odd numbers are the Ls of a growing square.
+    keep: [dots, formula]
