@@ -551,7 +551,7 @@ def test_derive_puts_notes_under_their_lines_when_the_region_is_tall(tmp_path, t
             (_, line, after), note = steps.lines, steps.notes[1]
             seen["under"] = line.get_bottom()[1] > note.get_top()[1] > after.get_top()[1]
             seen["left"] = note.get_left()[0] - line.get_left()[0]
-            seen["tex note"] = type(note).__name__
+            seen["math note"] = MIDNIGHT.primary in colors(note)
             seen["scale"] = line.font_size / 44
             with pytest.raises(CompositionError, match="notes='left'"):
                 self.derive("a = b", notes="left")
@@ -561,7 +561,34 @@ def test_derive_puts_notes_under_their_lines_when_the_region_is_tall(tmp_path, t
     with tempconfig({**settings, "save_last_frame": True, "write_to_movie": False}):
         Portrait().render()  # notes beside the lines would need 0.46x, below the 0.5x minimum
     assert seen["under"] and seen["left"] == pytest.approx(0)
-    assert seen["tex note"] == "Tex" and seen["scale"] > 0.6
+    assert seen["math note"] and seen["scale"] > 0.6
+
+
+@requires_latex
+def test_math_in_a_note_matches_plain_notes_in_size_and_baseline(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Notes(DirectedScene):
+        def construct(self):
+            steps = self.derive(
+                r"\lambda^{n+2} = p\lambda^{n+1} + q\lambda^n",
+                (r"\lambda^2 = p\lambda + q", r"divide by $\lambda^n$"),
+                (r"\lambda_\pm = \frac{p \pm \sqrt{p^2 + 4q}}{2}", "quadratic formula"),
+                pause=0,
+            )
+            mixed, plain = steps.notes[1:]
+            seen["heights"] = mixed.height, plain.height
+            # "divide by" is eight glyphs, the first i on the baseline; then lambda and n.
+            seen["baseline"] = mixed[8].get_bottom()[1] - mixed[1].get_bottom()[1]
+            seen["colors"] = set(colors(mixed))
+            with pytest.raises(CompositionError, match="unpaired or empty"):
+                self.derive("a = b", ("b = a", "costs $5"))
+
+    render(Notes)
+    mixed, plain = seen["heights"]
+    assert mixed == pytest.approx(plain, rel=0.08)  # a TeX note was 0.7 of the height
+    assert seen["baseline"] == pytest.approx(0, abs=0.02 * plain)  # lambda overshoots a little
+    assert seen["colors"] == {MIDNIGHT.muted}  # the math is in the note's color too
 
 
 @requires_latex

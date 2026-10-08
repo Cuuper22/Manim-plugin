@@ -78,6 +78,7 @@ from .themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme, the
 
 MIN_SCALE = 0.5
 SPACING = 0.4
+_MATH_DELIMITER = re.compile(r"(?<!\\)\$")
 
 
 class Directed:
@@ -345,11 +346,11 @@ class Directed:
         """Play a derivation, one step at a time, with matching terms carried between steps.
 
         Steps are TeX strings (or MathTex), optionally paired with a note: `(r"= x^2", "expand")`;
-        a note with `$...$` is typeset as TeX, and a Mobject is used as it is. Lines stack with
-        their relations aligned and notes `"right"` of them or each `"below"` its line; `"auto"`
-        picks the one that needs less shrinking (below, in a tall region). `in_place=True`
-        transforms one line instead. `replaces` morphs an on-stage expression into the first
-        step instead of writing it.
+        `$...$` in a note is math at the note's size (`r"divide by $a$"`), and a Mobject is used
+        as it is. Lines stack with their relations aligned and notes `"right"` of them or each
+        `"below"` its line; `"auto"` picks the one that needs less shrinking (below, in a tall
+        region). `in_place=True` transforms one line instead. `replaces` morphs an on-stage
+        expression into the first step instead of writing it.
         """
 
         if not steps:
@@ -427,7 +428,43 @@ class Directed:
             return note
         if not isinstance(note, str):
             raise CompositionError(f"The note of step {step} is {describe(note)}; use a str.")
-        return self.tex(note, role=Role.LABEL) if "$" in note else self.text(note, Role.LABEL)
+        return self._inline_math(note, Role.LABEL) if "$" in note else self.text(note, Role.LABEL)
+
+    def _inline_math(self, source: str, role: Role) -> VGroup:
+        """One line of `role` text whose `$...$` parts are math on its baseline, scaled so that
+        math capitals and lowercase together match the text's: the note reads like plain text,
+        where Tex would set all of it smaller and in serif.
+
+        Every piece starts with reference glyphs (`Hx`), dropped afterwards, that give the
+        baseline, cap height and x-height; text pieces also end with an H, so the H's mark
+        where the neighbors of a piece go."""
+
+        parts = _MATH_DELIMITER.split(source)
+        if len(parts) % 2 == 0 or not all(tex.strip() for tex in parts[1::2]):
+            raise CompositionError(f"{source!r} has an unpaired or empty $...$.", text=source)
+        color = self.theme.color(TEXT_STYLES[role].color)
+        cap, ex = (glyph.height for glyph in self.text("Hx", role))
+        line, end = VGroup(), None
+        for index, part in enumerate(parts):
+            # `first` goes where the previous piece ends; the next piece starts at `last`.
+            if index % 2:
+                # After \mathopen{} the math starts as a formula does: a leading - is unary.
+                typeset = self.math(r"\textstyle\mathrm{Hx}\mathopen{}", part, color=color)
+                h, x = typeset[0]
+                typeset.scale(np.sqrt(cap * ex / (h.height * x.height)))
+                body = typeset[1]
+                first, last = body.get_left()[0], body.get_right()[0]
+            elif part.strip() or 0 < index < len(parts) - 1:  # or the space between two maths
+                typeset = self.text(f"H{part}H".replace(r"\$", "$"), role)
+                body = VGroup(*typeset[1:-1])
+                first, last = typeset[0].get_right()[0], typeset[-1].get_left()[0]
+            else:
+                continue
+            shift = 0.0 if end is None else end - first
+            typeset.shift((shift, -typeset[0].get_bottom()[1], 0))
+            line.add(*body)
+            end = last + shift
+        return line
 
     def term(self, mobject: Mobject, tex: str, *, occurrence: int | None = None) -> VGroup:
         """The glyphs of `tex` inside a MathTex or Tex, e.g. `self.term(eq, r"\\frac{b}{2a}")`."""
