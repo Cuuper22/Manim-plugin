@@ -45,7 +45,9 @@ class SquaredSum(DirectedScene):
   group whose part was kept; `continue`, `contrast`, `reveal` and `chapter` style the change.
   Title and caption persist until a chapter, and stay on screen while a
   `DirectedMovingCameraScene` camera moves. `run_time=0` lands on the end state without
-  frames. Under the bridge, beats form the render's timeline.
+  frames. Under the bridge, beats form the render's timeline, which also marks the
+  transitions (the director's own animations and camera moves) so `qa` judges the states
+  between them.
 - Math: `derive` (relations aligned, notes beside, matching terms carried between steps;
   `in_place=True` transforms one line), `term(eq, tex)` returns a sub-term's glyphs,
   `highlight`, `tag` numbers equations, `focus`/`unfocus` dim everything else.

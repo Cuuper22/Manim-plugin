@@ -7,7 +7,7 @@ with `active()`. Under plain `manim` nothing is active and nothing is recorded.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -29,11 +29,20 @@ class TimelineBeat:
 
 
 @dataclass(slots=True)
+class Span:
+    start_seconds: float
+    end_seconds: float
+
+
+@dataclass(slots=True)
 class Timeline:
     version: int
     scene: str
     duration_seconds: float
     beats: list[TimelineBeat]
+    transitions: list[Span] = field(default_factory=list)
+    """When the stage is between two states (beat transitions, derivation steps, focus,
+    camera moves), in order and disjoint: frames there are not content to judge."""
 
     def beat_at(self, seconds: float) -> TimelineBeat | None:
         """The innermost beat covering `seconds` (nested beats start later)."""
@@ -59,6 +68,7 @@ class BeatRecorder:
     # counts skipped sections and runs off the frame grid on cached plays.
     now: float | None = None
     _beats: list[_OpenBeat] = field(default_factory=list)
+    _transitions: list[Span] = field(default_factory=list)
 
     def attach(self) -> None:
         """Called by a scene that records beats, so its render gets a timeline."""
@@ -67,12 +77,29 @@ class BeatRecorder:
 
     def enter(self, beat_id: str | None, file: str, line: int, at_seconds: float) -> int:
         resolved = beat_id or f"beat-{len(self._beats) + 1}"
-        start = at_seconds if self.now is None else self.now
+        start = self._time(at_seconds)
         self._beats.append(_OpenBeat(resolved, start, public_path(file, self.project_root), line))
         return len(self._beats) - 1
 
     def exit(self, handle: int, at_seconds: float) -> None:
-        self._beats[handle].end_seconds = at_seconds if self.now is None else self.now
+        self._beats[handle].end_seconds = self._time(at_seconds)
+
+    @contextmanager
+    def transition(self, clock: Callable[[], float]) -> Iterator[None]:
+        """Record what plays inside as a transition; `clock` reads Manim's time."""
+
+        start = self._time(clock())
+        yield
+        end = self._time(clock())
+        if end <= start:
+            return
+        if self._transitions and start <= self._transitions[-1].end_seconds:
+            self._transitions[-1].end_seconds = end  # back to back: one transition
+        else:
+            self._transitions.append(Span(start, end))
+
+    def _time(self, at_seconds: float) -> float:
+        return at_seconds if self.now is None else self.now
 
     def timeline(self, scene: str, duration_seconds: float) -> Timeline:
         beats = [
@@ -90,7 +117,8 @@ class BeatRecorder:
             # What plays after the last beat (a closing highlight, a final wait) continues its
             # stage, so frames there still map to a beat and a line.
             beats[-1].end_seconds = max(beats[-1].end_seconds, duration_seconds)
-        return Timeline(TIMELINE_VERSION, scene, duration_seconds, beats)
+        transitions = [Span(span.start_seconds, span.end_seconds) for span in self._transitions]
+        return Timeline(TIMELINE_VERSION, scene, duration_seconds, beats, transitions)
 
 
 _ACTIVE: ContextVar[BeatRecorder | None] = ContextVar("manim_director_beat_recorder", default=None)
@@ -114,6 +142,7 @@ def load(path: Path) -> Timeline:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         beats = [TimelineBeat(**beat) for beat in raw["beats"]]
-        return Timeline(raw["version"], raw["scene"], raw["duration_seconds"], beats)
+        transitions = [Span(**span) for span in raw.get("transitions", [])]
+        return Timeline(raw["version"], raw["scene"], raw["duration_seconds"], beats, transitions)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise invalid_source(path, f"it is not a beat timeline ({exc})") from exc

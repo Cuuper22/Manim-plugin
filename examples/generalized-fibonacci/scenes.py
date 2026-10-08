@@ -137,6 +137,24 @@ def recap_card(scene, symbols, meaning, token):
     return VGroup(frame, body.move_to(frame))
 
 
+def cropped(plane, x_max, y_max, zoom):
+    """A copy of `plane` (axes, then the labels of their x and y axes) drawn only up to
+    (x_max, y_max), for a camera frame scaled by `zoom`: each axis stops there, its ticks beyond
+    shrink into its end, and its label rides along at the same size on screen."""
+
+    view = plane.copy()
+    axes, *labels = view
+    for axis, limit, label in zip((axes.x_axis, axes.y_axis), (x_max, y_max), labels, strict=True):
+        end = axis.n2p(limit)
+        for tick, number in zip(axis.ticks, axis.get_tick_range(), strict=True):
+            if number > limit:
+                tick.scale(0).move_to(end)
+        label.scale(zoom).move_to(end + zoom * (label.get_center() - axis.get_end()))
+        low, high = axis.x_range[:2]
+        axis.pointwise_become_partial(axis.copy(), 0, (limit - low) / (high - low))
+    return view
+
+
 class GeneralizedFibonacci(DirectedScene):
     """The full cut: one rule, a family of sequences, their data, the matrix and its roots."""
 
@@ -298,14 +316,21 @@ class CompanionMatrix(DirectedMovingCameraScene):
             self.place(plane)
             self.caption("Each arrow is one multiplication by C.")
             dots, arrows = self.walk(axes)
+            whole, zoom = plane.copy(), 0.32
             camera.save_state()
-            # Close in on the first states, keeping the axes clear of title and caption.
+            # Close in on the first states. The axes stop inside the close-up, clear of the
+            # frame's edges, the title and the caption.
             close_up = axes.c2p(0, 0) + 1.8 * RIGHT + 0.55 * UP
-            self.play(camera.animate.scale(0.32).move_to(close_up), FadeIn(dots[0]), run_time=1.5)
+            self.play(
+                camera.animate.scale(zoom).move_to(close_up),
+                Transform(plane, cropped(plane, 6, 4, zoom)),
+                FadeIn(dots[0]),
+                run_time=1.5,
+            )
             for n, (arrow, dot) in enumerate(zip(arrows, dots[1:], strict=True)):
                 self.play(GrowArrow(arrow), FadeIn(dot), run_time=0.7)
                 if n == 3:
-                    self.play(Restore(camera), run_time=2)
+                    self.play(Restore(camera), Transform(plane, whole), run_time=2)
 
         golden = (1 + 5**0.5) / 2
         trend = DashedLine(axes.c2p(0, 0), axes.c2p(22, 22 / golden), color=self.theme.muted)
