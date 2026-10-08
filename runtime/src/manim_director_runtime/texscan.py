@@ -222,6 +222,30 @@ def atoms(tex: str) -> list[str]:
     return pieces or [tex]
 
 
+def upright_words(tex: str) -> str:
+    """`tex` with each bare run of three or more letters (`area`, `slope`) wrapped in
+    `\\text{}`, so it reads as a word rather than a product of variables; commands
+    (`\\sin`) and the arguments of text macros are left alone."""
+
+    tokens = tokenize(tex)
+    searchable = _searchable(tokens, math_only=False)
+
+    def letter(j: int) -> bool:
+        return searchable[j] and len(tokens[j].text) == 1 and tokens[j].text.isalpha()
+
+    out, cursor, i = [], 0, 0
+    while i < len(tokens):
+        j = i
+        while j < len(tokens) and letter(j) and (j == i or tokens[j].start == tokens[j - 1].end):
+            j += 1
+        if j - i >= 3:
+            start, end = tokens[i].start, tokens[j - 1].end
+            out += [tex[cursor:start], rf"\text{{{tex[start:end]}}}"]
+            cursor = end
+        i = max(j, i + 1)
+    return "".join([*out, tex[cursor:]])
+
+
 def without_alignment(tex: str) -> str:
     """`tex` without its top-level `&` (an align* column mark), which would keep the step one
     unsplittable atom; inside environments (`pmatrix`) and groups `&` stays."""
