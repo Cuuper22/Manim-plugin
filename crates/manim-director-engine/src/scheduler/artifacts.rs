@@ -225,7 +225,9 @@ fn allowed_kinds(task: &Task) -> &'static [ArtifactKind] {
     match task {
         Task::Init(_) | Task::Ingest(_) => &[File],
         Task::Render(_) => &[Video, Section, Captions, Timeline],
-        Task::Still(_) | Task::Frame(_) | Task::Qa(_) => &[Image],
+        Task::Still(_) | Task::Frame(_) => &[Image],
+        // Sampled frames, plus a DirectedScene render's beats.png critique sheet.
+        Task::Qa(_) => &[Image, ContactSheet],
         Task::ContactSheet(_) => &[ContactSheet],
         Task::Captions(_) => &[Captions],
         Task::Export(ExportTask::Zip(_)) => &[Archive],
@@ -618,8 +620,8 @@ fn alpha_pixel_format(value: &str) -> bool {
 mod tests {
     use super::*;
     use manim_director_core::{
-        CaptionsResult, CaptionsTask, MediaFormat, RenderResult, RenderSettings, RenderTask,
-        SceneRef, ARTIFACTS_DIR,
+        CaptionsResult, CaptionsTask, MediaFormat, QaTask, RenderResult, RenderSettings,
+        RenderTask, SafeArea, SceneRef, SourceKind, ARTIFACTS_DIR,
     };
 
     fn probe(json: Value) -> ProbeOutput {
@@ -854,6 +856,22 @@ mod tests {
         assert_eq!(
             (data["check"].as_str(), &data["path"]),
             (Some("contract"), &Value::Null)
+        );
+    }
+
+    #[test]
+    fn qa_reports_frames_and_a_beat_sheet() {
+        let task = Task::Qa(QaTask {
+            source: "a.mp4".into(),
+            source_kind: SourceKind::Video,
+            frames: 8,
+            safe_area: SafeArea::default(),
+            timeline: None,
+            out_dir: ".manim-director/artifacts/job".into(),
+        });
+        assert_eq!(
+            allowed_kinds(&task),
+            [ArtifactKind::Image, ArtifactKind::ContactSheet]
         );
     }
 
