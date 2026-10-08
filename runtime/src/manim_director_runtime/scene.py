@@ -58,12 +58,16 @@ from manim.constants import RendererType
 from . import motion, timeline
 from .beats import Beat, Intent, Transition
 from .derivation import Derivation, overlay, stack
+from .devices import Devices
 from .errors import CompositionError, parse_choice
+from .kit import context
+from .kit.overlay import is_overlay
 from .layout import LANES, Rect, Region, fit_scale, frame_regions
 from .project import load_style
 from .staging import (
     Stage,
     bounds,
+    bounds_without,
     describe,
     on_stage,
     parts_inside,
@@ -73,14 +77,14 @@ from .staging import (
     within,
 )
 from .terms import term_groups
-from .texscan import atoms, colorize, without_alignment
-from .themes import MATH_FONT_SIZE, TEXT_STYLES, Role, Theme, default_theme, theme
+from .texscan import without_alignment
+from .themes import MATH_FONT_SIZE, Role, Theme, default_theme, theme
 
 MIN_SCALE = 0.5
 SPACING = 0.4
 
 
-class Directed:
+class Directed(Devices):
     """Mixin behind DirectedScene; combine it with other Scene bases (`Directed, ZoomedScene`)."""
 
     theme: Any = None
@@ -111,6 +115,29 @@ class Directed:
         super().play(*args, **kwargs)  # type: ignore[misc]
         self._unwrap(args)
 
+    def add(self, *mobjects: Mobject) -> Any:
+        """Manim's add; kit overlays are adopted however they enter (R3)."""
+
+        result = super().add(*mobjects)  # type: ignore[misc]
+        if getattr(self, "_stage", None) is not None:
+            for mobject in mobjects:
+                self._adopt(mobject)
+        return result
+
+    def add_mobjects_from_animations(self, animations: list[Animation]) -> None:
+        """Manim adds whatever a non-introducing animation moves when it is not in the scene,
+        including the Group an AnimationGroup wraps around on-stage parts, which splits the
+        groups they belong to. Add only the pieces that are really new (R2)."""
+
+        visible = self._visible_ids()
+        for animation in animations:
+            if animation.is_introducer() or animation.mobject is None:
+                continue
+            _, new = split_by_stage(animation.mobject, visible)
+            for mobject in new:
+                self.add(mobject)
+                visible |= {id(member) for member in mobject.get_family()}
+
     def _direct(self) -> None:
         _require_matching_shape()
         style = load_style(_scene_directory(type(self)))
@@ -127,7 +154,14 @@ class Directed:
             self.renderer.background_color = self.theme.background
         else:
             self.camera.background_color = self.theme.background
-        self._restore_defaults = _apply_theme_defaults(self.theme)
+        restore_theme = _apply_theme_defaults(self.theme)
+        token = context.enter(self)
+
+        def restore() -> None:
+            restore_theme()
+            context.leave(token)
+
+        self._restore_defaults = restore
         recorder = timeline.active()
         if recorder is not None:
             recorder.attach()
@@ -135,38 +169,17 @@ class Directed:
     # Content --------------------------------------------------------------------------------
 
     def text(self, text: str, role: Role | str = Role.BODY, **kwargs: Any) -> Text:
-        style = TEXT_STYLES[parse_choice(Role, role)]
-        options = {
-            "font": self.theme.font,
-            "font_size": style.font_size,
-            "weight": style.weight,
-            "color": self.theme.color(style.color),
-            "warn_missing_font": False,
-        }
-        return Text(text, **{**options, **kwargs})
+        return context.typeset_text(self.theme, text, role, **kwargs)
 
     def tex(self, *strings: str, role: Role | str = Role.BODY, **kwargs: Any) -> Tex:
         """Text-mode LaTeX; symbols inside `$...$` get their colors."""
 
-        style = TEXT_STYLES[parse_choice(Role, role)]
-        pieces = [colorize(s, self._symbol_colors, math_only=True) for s in strings]
-        options = {"font_size": style.font_size, "color": self.theme.color(style.color)}
-        mobject = Tex(*pieces, **{**options, **kwargs})
-        mobject.authored_tex = mobject.arg_separator.join(strings)  # copies keep it
-        return mobject
+        return context.typeset_tex(self.theme, self._symbol_colors, *strings, role=role, **kwargs)
 
     def math(self, *strings: str, **kwargs: Any) -> MathTex:
         """MathTex with symbol colors, split into atoms so TransformMatchingTex can match them."""
 
-        pieces = [colorize(s, self._symbol_colors) for s in strings]
-        if len(pieces) == 1:
-            pieces = atoms(pieces[0])
-            kwargs.setdefault("arg_separator", "")
-        options = {"font_size": MATH_FONT_SIZE, "color": self.theme.foreground}
-        mobject = MathTex(*pieces, **{**options, **kwargs})
-        source = strings[0] if len(strings) == 1 else mobject.arg_separator.join(strings)
-        mobject.authored_tex = source
-        return mobject
+        return context.typeset_math(self.theme, self._symbol_colors, *strings, **kwargs)
 
     def title(self, text: str, **kwargs: Any) -> Text:
         """Set the title lane; a previous title cross-fades into this one."""
@@ -226,11 +239,15 @@ class Directed:
         for mobject, center in zip(mobjects, layout.centers, strict=True):
             staged, new = split_by_stage(mobject, visible)
             for part in staged:
+                self._detach(part)
                 self._stage.glides.setdefault(id(part), (part, part.copy()))
                 self._carry(part)
             followers = [(m, m.copy()) for m in self._followers(staged)]
             if replaces is None:
                 self._stage.entering += [m for m in new if m not in self._stage.entering]
+            for companion in getattr(mobject, "director_companions", ()):
+                if not self._visible(companion) and companion not in self._stage.entering:
+                    self._stage.entering.append(companion)
             mobject.scale(layout.scale).move_to(center)
             _require_held(mobject)
             for member in mobject.get_family()[1:]:  # the group now owns their placement
@@ -405,6 +422,7 @@ class Directed:
         else:
             self._carry(replaces)
             self._stage.placed.pop(id(replaces), None)
+            self._stage.leaving += self._orphans([replaces])
             first = motion.morph(replaces, lines[0])
         self._flush(along=[first, *_fade_in(labels[0])], run_time=seconds)
         for i in range(1, len(lines)):
@@ -600,6 +618,9 @@ class Directed:
                 if id(m) in visible and not self._carried(m, beat):
                     stage.leaving += parts_outside(m, beat.carried)
             restores = self._release_dimmed(set(map(id, stage.leaving)))
+        gone = [*stage.leaving, *(old for old, _ in stage.morphs)]
+        if gone:  # overlays leave with what they are drawn on
+            stage.leaving += self._orphans(gone)
         covered = {id(leaf) for m in introduced for leaf in m.get_family()}
         entering = [m for m in stage.entering if id(m) not in visible | covered]
         leaving, morphs, glides = stage.leaving, stage.morphs, list(stage.glides.values())
@@ -685,7 +706,53 @@ class Directed:
         """On-stage tags and highlight boxes attached to any of `parts`."""
 
         ids = {id(member) for part in parts for member in part.get_family()}
-        return [m for m in self.mobjects if id(self._stage.attached.get(id(m))) in ids]
+        return [
+            m
+            for m in self.mobjects
+            if id(self._stage.attached.get(id(m))) in ids and id(m) not in self._stage.overlays
+        ]
+
+    def _adopt(self, mobject: Mobject) -> None:
+        """Register a kit overlay with the placed object it is drawn on (R3); overlays follow
+        it by themselves, so they never take part in its glides."""
+
+        if not is_overlay(mobject) or id(mobject) in self._stage.overlays:
+            return
+        self._stage.overlays[id(mobject)] = mobject
+        self._stage.attached[id(mobject)] = self._placed_root(mobject.director_parent)
+
+    def _orphans(self, gone: Sequence[Mobject]) -> list[Mobject]:
+        """On-stage overlays drawn on anything in `gone`, which must leave with it."""
+
+        ids = {id(member) for m in gone for member in m.get_family()}
+        visible = self._visible_ids()
+        return [
+            overlay
+            for key, overlay in self._stage.overlays.items()
+            if id(self._stage.attached[key]) in ids
+            and on_stage(overlay, visible)
+            and not within(overlay, gone)
+        ]
+
+    def _detach(self, part: Mobject) -> None:
+        """A part of a placed group that is placed on its own leaves the group (R6), so the
+        group's bounds no longer count it; it keeps its identity and glides."""
+
+        root = self._placed_root(part)
+        if root is part:
+            return
+        members = {id(member) for member in part.get_family()}
+        for holder in root.get_family():
+            loose = [sub for sub in holder.submobjects if id(sub) in members]
+            if loose:
+                holder.remove(*loose)
+        self.add(part)
+
+    def _holds(self, mobject: Mobject) -> bool:
+        """Whether `mobject` is placed (perhaps still entering) or on stage."""
+
+        placed = [m for m, _ in self._stage.placed.values()]
+        return within(mobject, placed) or self._visible(mobject)
 
     def _placed_root(self, mobject: Mobject) -> Mobject:
         """The placed object that `mobject` is part of (a derivation line's block), if any."""
@@ -704,9 +771,12 @@ class Directed:
     def _carried(self, mobject: Mobject, beat: Beat) -> bool:
         """Carried as a whole; a group carried only in part leaves its other parts behind."""
 
+        parent = self._stage.attached.get(id(mobject))
+        if id(mobject) in self._stage.overlays:
+            kept = id(mobject) in beat.carried or mobject.director_persist
+            return kept and self._carried(parent, beat)
         if id(mobject) in beat.carried:
             return True
-        parent = self._stage.attached.get(id(mobject))
         return parent is not None and self._carried(parent, beat)
 
     def _staying(self, mobject: Mobject) -> list[Mobject]:
@@ -738,7 +808,8 @@ class Directed:
             if id(mobject) not in visible and mobject not in self._stage.entering:
                 continue
             for part in self._staying(mobject):
-                if id(part) not in skipped and area.overlaps(bounds(part)):
+                rest = None if id(part) in skipped else bounds_without(part, skipped)
+                if rest is not None and area.overlaps(rest):
                     owner = self._stage.attached.get(id(part))
                     what = describe(part) if owner is None else f"the tag of {describe(owner)}"
                     raise CompositionError(

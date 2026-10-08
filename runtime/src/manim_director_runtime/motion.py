@@ -9,9 +9,14 @@ from manim import (
     UP,
     Animation,
     AnimationGroup,
+    Arrow,
     Create,
+    Dot,
     FadeIn,
     FadeOut,
+    GrowArrow,
+    GrowFromCenter,
+    LaggedStart,
     MarkupText,
     Mobject,
     ReplacementTransform,
@@ -37,6 +42,8 @@ HOLD_SECONDS = 1.0
 STEP_SECONDS = 1.1
 STEP_PAUSE = 0.7
 DIM_OPACITY = 0.28
+SHOW_SECONDS = 1.0
+WRITE_GLYPHS = 12  # longer text and math fade in: writing them out takes too long
 _RISE = 0.15
 _SLIDE = 0.6
 # How far into the departures the arrivals start, so outgoing and incoming objects never
@@ -57,6 +64,31 @@ def arrive(mobject: Mobject, transition: Transition) -> Animation:
     if transition is Transition.CONTRAST:
         return FadeIn(mobject, shift=LEFT * _SLIDE)
     return FadeIn(mobject, shift=UP * _RISE)
+
+
+def entrance(mobject: Mobject, lag: float = 0.15) -> Animation:
+    """How `show()` brings in a part or overlay: dots grow, arrows grow from their tail,
+    strokes are drawn, short text and math are written, fills fade in. A component may name
+    its own entrance with a `director_entrance(mobject)` attribute."""
+
+    custom = getattr(mobject, "director_entrance", None)
+    if custom is not None:
+        return custom(mobject)
+    leaves = mobject.family_members_with_points()
+    if isinstance(mobject, Arrow):
+        return GrowArrow(mobject)
+    if _written(mobject):
+        return Write(mobject) if len(leaves) <= WRITE_GLYPHS else FadeIn(mobject)
+    if leaves and all(isinstance(leaf, Dot) for leaf in leaves):
+        if len(leaves) == 1:
+            return GrowFromCenter(leaves[0])
+        return LaggedStart(*(GrowFromCenter(leaf) for leaf in leaves), lag_ratio=lag)
+    filled = [_has_fill(leaf) for leaf in leaves]
+    if not any(filled):
+        return Create(mobject)
+    if all(filled) or not mobject.submobjects:
+        return FadeIn(mobject)
+    return AnimationGroup(*(entrance(part, lag) for part in mobject.submobjects))
 
 
 def depart(mobject: Mobject, transition: Transition) -> Animation:
@@ -179,6 +211,14 @@ def _has_fill(mobject: Mobject) -> bool:
 
 def _tex_parts(mobject: Mobject) -> bool:
     return isinstance(mobject, SingleStringMathTex) and len(mobject.submobjects) > 1
+
+
+def _written(mobject: Mobject) -> bool:
+    """Text or math as a whole (a kit label is a row of both)."""
+
+    return isinstance(mobject, Text | MarkupText | SingleStringMathTex) or hasattr(
+        mobject, "authored_text"
+    )
 
 
 def _is_text(mobject: Mobject) -> bool:
