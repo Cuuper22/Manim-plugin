@@ -6,6 +6,7 @@ import io
 import json
 import math
 import types
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -101,14 +102,35 @@ def contact_sheet(task: ContactSheetTask, ctx: Context) -> ContactSheetResult:
     )
 
 
-def sample_times(duration: float, count: int) -> list[float]:
-    """`count` evenly spaced times, keeping a small margin from both ends."""
+def sample_times(duration: float, count: int, skip: Sequence[timeline.Span] = ()) -> list[float]:
+    """`count` evenly spaced times, keeping a small margin from both ends. The spans in `skip`
+    (in order, disjoint) are cut out first, so no time falls inside one unless all do."""
 
+    kept: list[tuple[float, float]] = []
+    start = 0.0
+    for span in skip:
+        kept.append((start, min(span.start_seconds, duration)))
+        start = max(start, span.end_seconds)
+    kept.append((start, duration))
+    kept = [(a, b) for a, b in kept if b > a] or [(0.0, duration)]
+    length = sum(b - a for a, b in kept)
     if count == 1:
-        return [duration / 2]
-    margin = min(0.08 * duration, 0.5)
-    step = (duration - 2 * margin) / (count - 1)
-    return [margin + step * index for index in range(count)]
+        offsets = [length / 2]
+    else:
+        margin = min(0.08 * length, 0.5)
+        step = (length - 2 * margin) / (count - 1)
+        offsets = [margin + step * index for index in range(count)]
+    return [_position(kept, offset) for offset in offsets]
+
+
+def _position(parts: list[tuple[float, float]], offset: float) -> float:
+    """The time `offset` seconds into `parts` laid end to end."""
+
+    for start, end in parts:
+        if offset <= end - start:
+            return start + offset
+        offset -= end - start
+    return parts[-1][1]
 
 
 def probe_video(path: Path) -> VideoInfo:

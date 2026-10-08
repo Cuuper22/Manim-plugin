@@ -10,6 +10,7 @@ import inspect
 import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +110,9 @@ class Directed:
     def play(self, *args: Any, **kwargs: Any) -> None:
         self._require_entered()
         self._flush(introduced=motion.introduced(args))
-        super().play(*args, **kwargs)  # type: ignore[misc]
+        frame = getattr(self.camera, "frame", None)
+        with self._transition(frame is not None and motion.animates(args, frame)):
+            super().play(*args, **kwargs)  # type: ignore[misc]
         self._unwrap(args)
 
     def _direct(self) -> None:
@@ -671,7 +674,8 @@ class Directed:
         if not animations:
             return
         if run_time > 0:
-            super().play(*animations, run_time=run_time)  # type: ignore[misc]
+            with self._transition():
+                super().play(*animations, run_time=run_time)  # type: ignore[misc]
             self._unwrap(animations)
             return
         for animation in animations:  # run_time 0: land on the end state without frames
@@ -679,6 +683,15 @@ class Directed:
             animation.begin()
             animation.finish()
             animation.clean_up_from_scene(self)
+
+    def _transition(self, applies: bool = True) -> AbstractContextManager[None]:
+        """When `applies`, mark what plays inside (the director's own animations, camera moves)
+        in the render's timeline as a move between two states, so `qa` judges the states."""
+
+        recorder = timeline.active()
+        if recorder is None or not applies:
+            return nullcontext()
+        return recorder.transition(lambda: self.renderer.time)
 
     def _unwrap(self, animations: Sequence[object]) -> None:
         """Beats track what was played, not the Groups Manim leaves in its place."""

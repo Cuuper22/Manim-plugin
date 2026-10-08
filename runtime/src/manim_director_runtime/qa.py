@@ -64,7 +64,11 @@ def qa(task: QaTask, ctx: Context) -> QaResult:
     else:
         frames_dir = ensure_dir(ctx.require_inside(task.out_dir, "out_dir") / "frames")
         info = probe_video(task.source)
-        times = [info.frame_time(t) for t in sample_times(info.duration_seconds, task.frames)]
+        # Judge the states the stage settles in, not the moves between them.
+        settled = sample_times(
+            info.duration_seconds, task.frames, beats.transitions if beats else ()
+        )
+        times = [info.frame_time(t) for t in settled]
         for number, at in enumerate(times, start=1):
             path = frames_dir / f"frame-{number:02d}.png"
             with atomic_target(path) as temp:

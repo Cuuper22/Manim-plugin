@@ -33,6 +33,7 @@ from manim import (  # noqa: E402
     Line,
     MathTex,
     Rectangle,
+    Restore,
     Square,
     SurroundingRectangle,
     Text,
@@ -412,6 +413,27 @@ def test_beats_record_the_timeline_under_the_bridge(render: Render, tmp_path: Pa
     assert (second.start_seconds, second.end_seconds) == pytest.approx((1.3, 3.5))
     # A closing wait after the last beat still maps to it.
     assert recorder.timeline("Timed", 4.0).beats[-1].end_seconds == 4.0
+
+
+def test_the_timeline_marks_stage_and_camera_moves_as_transitions(
+    render: Render, tmp_path: Path
+) -> None:
+    class Moves(DirectedMovingCameraScene):
+        def construct(self):
+            with self.beat("hook", hold=0.5):
+                self.place(Square())
+            self.play(Circle().animate.shift(RIGHT), run_time=0.4)  # content, not a move
+            self.camera.frame.save_state()
+            self.play(self.camera.frame.animate.scale(0.5), run_time=0.6)
+            self.play(Restore(self.camera.frame), run_time=0.3)
+
+    with timeline.recording(tmp_path) as recorder:
+        render(Moves)
+    spans = recorder.timeline("Moves", 3.0).transitions
+    # The beat's entrance, then the zoom and its way back as one.
+    assert [t for span in spans for t in (span.start_seconds, span.end_seconds)] == pytest.approx(
+        [0.0, 0.8, 1.7, 2.6]
+    )
 
 
 @requires_latex

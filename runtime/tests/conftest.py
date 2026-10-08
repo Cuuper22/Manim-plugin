@@ -96,8 +96,15 @@ def request(method: str, project: Path, params: dict[str, Any], request_id: str 
     }
 
 
-def make_video(path: Path, *, seconds: float = 2.0, size: str = "320x180", fps: int = 10) -> Path:
-    """A small test-pattern video made with ffmpeg."""
+def make_video(
+    path: Path,
+    *,
+    seconds: float = 2.0,
+    size: str = "320x180",
+    fps: int = 10,
+    source: str | None = None,
+) -> Path:
+    """A small video made with ffmpeg: a test pattern, or the lavfi graph `source`."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -109,7 +116,7 @@ def make_video(path: Path, *, seconds: float = 2.0, size: str = "320x180", fps: 
             "-f",
             "lavfi",
             "-i",
-            f"testsrc=duration={seconds}:size={size}:rate={fps}",
+            source or f"testsrc=duration={seconds}:size={size}:rate={fps}",
             "-pix_fmt",
             "yuv420p",
             str(path),

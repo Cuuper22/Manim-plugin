@@ -127,6 +127,17 @@ def restore(mobject: Mobject, base: Opacities) -> Animation:
     return Transform(mobject, target)
 
 
+def animates(animations: Iterable[object], mobject: Mobject) -> bool:
+    """Whether one of `animations` (or `.animate` builders) changes `mobject` itself."""
+
+    return any(
+        animates(animation.animations, mobject)
+        if isinstance(animation, AnimationGroup)
+        else getattr(animation, "mobject", None) is mobject
+        for animation in animations
+    )
+
+
 def introduced(animations: Iterable[object]) -> list[Mobject]:
     """Mobjects that `play(*animations)` brings onto the stage itself (Write, Create, FadeIn)."""
 

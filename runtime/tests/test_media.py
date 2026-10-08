@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 
 from conftest import as_json, make_video, requires_ffmpeg
-from manim_director_runtime.media import contact_sheet, frame
+from manim_director_runtime.media import contact_sheet, frame, sample_times
 from manim_director_runtime.qa import qa
 from manim_director_runtime.tasks import SAFE_AREA_DEFAULT, ContactSheetTask, FrameTask, QaTask
+from manim_director_runtime.timeline import Span
 
 pytestmark = requires_ffmpeg
 
@@ -116,6 +117,35 @@ def test_qa_keeps_frames_and_maps_findings_to_beats(
         ("detail", {"file": "scenes/main.py", "line": 33, "column": None}),
     ]
     assert safe[0]["frame"] == result["frames"][0]["path"]
+
+
+def test_sample_times_leave_transitions_out() -> None:
+    assert sample_times(4.0, 4) == pytest.approx([0.32, 1.44, 2.56, 3.68])
+    # The 2.5 s between the transitions, sampled as if they were played back to back.
+    spans = [Span(0.0, 1.0), Span(2.0, 2.5)]
+    assert sample_times(4.0, 4, spans) == pytest.approx([1.2, 1.9, 3.1, 3.8])
+    assert sample_times(2.0, 1, [Span(0.0, 2.0)]) == [1.0]  # all in motion: sample it all
+
+
+def test_qa_judges_where_transitions_settle_not_their_middle(project: Path, ctx) -> None:
+    # A box fades in over the first 1.2 s and then holds.
+    video = make_video(
+        project / "Fade.mp4",
+        source="color=c=0x0B1020:s=320x180:r=10:d=2,"
+        "drawbox=x=120:y=60:w=80:h=60:color=0xF7F8FC:t=fill,"
+        "fade=t=in:d=1.2:color=0x0B1020",
+    )
+    path = project / "Fade.timeline.json"
+
+    def check(transitions: list[dict]) -> tuple[list[float], list[str]]:
+        recorded = {"version": 1, "scene": "Fade", "duration_seconds": 2.0, "beats": []}
+        path.write_text(json.dumps({**recorded, "transitions": transitions}))
+        task = QaTask(video, "video", 3, SAFE_AREA_DEFAULT, path, project / "qa")
+        result = as_json(qa(task, ctx))
+        return [f["at_seconds"] for f in result["frames"]], [f["code"] for f in result["findings"]]
+
+    assert check([]) == ([0.1, 1.0, 1.8], ["low_contrast", "low_contrast"])
+    assert check([{"start_seconds": 0.0, "end_seconds": 1.2}]) == ([1.2, 1.6, 1.9], [])
 
 
 def test_qa_on_images(project: Path, ctx) -> None:
