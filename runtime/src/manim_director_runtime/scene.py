@@ -79,12 +79,13 @@ from .staging import (
 from .terms import term_groups
 from .texscan import without_alignment
 from .themes import MATH_FONT_SIZE, Role, Theme, default_theme, theme
+from .viewing import Viewing
 
 MIN_SCALE = 0.5
 SPACING = 0.4
 
 
-class Directed(Devices):
+class Directed(Devices, Viewing):
     """Mixin behind DirectedScene; combine it with other Scene bases (`Directed, ZoomedScene`)."""
 
     theme: Any = None
@@ -112,7 +113,8 @@ class Directed(Devices):
     def play(self, *args: Any, **kwargs: Any) -> None:
         self._require_entered()
         self._flush(introduced=motion.introduced(args))
-        super().play(*args, **kwargs)  # type: ignore[misc]
+        with self._watched(args):
+            super().play(*args, **kwargs)  # type: ignore[misc]
         self._unwrap(args)
 
     def add(self, *mobjects: Mobject) -> Any:
@@ -186,6 +188,7 @@ class Directed(Devices):
 
         self._retire(self._occupant(Region.HEADER))
         mobject = self.text(text, Role.TITLE, **kwargs)
+        self._lane(mobject, "title", text)
         self.place(mobject, region=Region.HEADER)
         return mobject
 
@@ -196,6 +199,7 @@ class Directed(Devices):
         if text is None:
             return None
         mobject = self._caption_lines(" ".join(text.split()), **kwargs)
+        self._lane(mobject, "caption", text)
         self.place(mobject, region=Region.CAPTION)
         return mobject
 
@@ -250,6 +254,7 @@ class Directed(Devices):
                     self._stage.entering.append(companion)
             mobject.scale(layout.scale).move_to(center)
             _require_held(mobject)
+            self._placed_by(mobject)
             for member in mobject.get_family()[1:]:  # the group now owns their placement
                 self._stage.placed.pop(id(member), None)
             self._stage.place(mobject, area_name)
@@ -281,6 +286,7 @@ class Directed(Devices):
         intent: Intent | str | None = None,
         question: str | None = None,
         takeaway: str | None = None,
+        aha: bool = False,
     ) -> Beat:
         """A named stage change: `with self.beat("hook", focus=row): ...`.
 
@@ -288,7 +294,8 @@ class Directed(Devices):
         stage that was not kept or placed again leaves, carried objects glide or morph, and
         newly placed objects enter, all styled by `transition`. On exit, `focus` is
         emphasized and the beat holds for `hold` seconds. `intent`, `question` and
-        `takeaway` are narrative notes kept on the Beat.
+        `takeaway` are narrative notes kept on the Beat; `aha=True` marks the beat where the
+        viewer should get the idea (pacing QA expects one, given time to land).
         """
 
         if hold < 0 or (run_time is not None and run_time < 0):
@@ -304,6 +311,7 @@ class Directed(Devices):
             intent=None if intent is None else parse_choice(Intent, intent),
             question=question,
             takeaway=takeaway,
+            aha=aha,
             scene=self,
             file=caller.f_code.co_filename,
             line=caller.f_lineno,
@@ -334,7 +342,7 @@ class Directed(Devices):
                 animation = motion.restore(top, base)
             if animation is not None:
                 animations.append(animation)
-        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time, "focus")
 
     def unfocus(self, run_time: float | None = None) -> None:
         self._flush()
@@ -344,7 +352,7 @@ class Directed(Devices):
             if self._visible(top)
         ]
         self._stage.dimmed.clear()
-        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time, "focus")
 
     # Math -----------------------------------------------------------------------------------
 
@@ -424,7 +432,7 @@ class Directed(Devices):
             self._stage.placed.pop(id(replaces), None)
             self._stage.leaving += self._orphans([replaces])
             first = motion.morph(replaces, lines[0])
-        self._flush(along=[first, *_fade_in(labels[0])], run_time=seconds)
+        self._flush(along=[first, *_fade_in(labels[0])], run_time=seconds, source="derive")
         for i in range(1, len(lines)):
             if rest > 0:
                 self.wait(rest)
@@ -432,7 +440,7 @@ class Directed(Devices):
             animations = [TransformMatchingTex(source, lines[i]), *_fade_in(labels[i])]
             if in_place and labels[i - 1] is not None:
                 animations.append(FadeOut(labels[i - 1]))
-            self._perform(animations, seconds)
+            self._perform(animations, seconds, "derive")
         self.remove(*block.submobjects)
         if in_place:
             block.remove(*(m for m in block.submobjects if m not in (lines[-1], labels[-1])))
@@ -496,7 +504,8 @@ class Directed(Devices):
                 self._pin(glyphs.boxes)
             animations.append(FadeIn(glyphs.boxes))
         self._flush()
-        self._perform(animations, motion.FOCUS_SECONDS if run_time is None else run_time)
+        seconds = motion.FOCUS_SECONDS if run_time is None else run_time
+        self._perform(animations, seconds, "highlight", shown=())
         if glyphs.boxes is not None:  # after FadeIn, which suspends updaters
             for backdrop, group in zip(glyphs.boxes, unique, strict=True):
                 backdrop.add_updater(_following(group))
@@ -571,7 +580,9 @@ class Directed(Devices):
         self.next_section(re.sub(r'[\\/:*?"<>|]', "-", beat.id))
         recorder = timeline.active()
         if recorder is not None:
-            beat.record = recorder.enter(beat.id, beat.file, beat.line, self.renderer.time)
+            beat.record = recorder.enter(
+                beat.id, beat.file, beat.line, self.renderer.time, **beat.notes()
+            )
         self._beat = beat
 
     def _exit_beat(self, beat: Beat, *, completed: bool) -> None:
@@ -599,9 +610,11 @@ class Directed(Devices):
         instant: bool = False,
         along: Sequence[Animation] = (),
         run_time: float | None = None,
+        source: str = "transition",
     ) -> None:
         """Play everything staged since the last animation as one transition, together with
-        `along` (animations that should not wait for it)."""
+        `along` (animations that should not wait for it); `source` names the call for the
+        timeline."""
 
         stage, beat = self._stage, self._beat
         starting = beat is not None and not beat.transitioned
@@ -645,24 +658,35 @@ class Directed(Devices):
             *along,
         ]
         departures = [*(motion.depart(m, transition) for m in leaving), *restores]
-        self._perform(motion.staggered(departures, changes, transition), seconds)
+        self._perform(motion.staggered(departures, changes, transition), seconds, source)
         focus = None if beat is None or beat.focused else beat.focus
         if focus is not None and self._visible(focus):
             beat.focused = True
             self.focus(focus, run_time=0.0 if seconds == 0 else None)
 
-    def _perform(self, animations: Sequence[Animation], run_time: float) -> None:
+    def _perform(
+        self,
+        animations: Sequence[Animation],
+        run_time: float,
+        source: str = "transition",
+        *,
+        shown: Sequence[Mobject] | None = None,
+    ) -> None:
+        """Play director animations; `source` and `shown` (what enters, when the animations
+        do not introduce it themselves) describe them to the timeline."""
+
         if not animations:
             return
-        if run_time > 0:
-            super().play(*animations, run_time=run_time)  # type: ignore[misc]
-            self._unwrap(animations)
-            return
-        for animation in animations:  # run_time 0: land on the end state without frames
-            animation._setup_scene(self)
-            animation.begin()
-            animation.finish()
-            animation.clean_up_from_scene(self)
+        with self._shown(source, animations, shown):
+            if run_time > 0:
+                super().play(*animations, run_time=run_time)  # type: ignore[misc]
+                self._unwrap(animations)
+                return
+            for animation in animations:  # run_time 0: land on the end state without frames
+                animation._setup_scene(self)
+                animation.begin()
+                animation.finish()
+                animation.clean_up_from_scene(self)
 
     def _unwrap(self, animations: Sequence[object]) -> None:
         """Beats track what was played, not the Groups Manim leaves in its place."""

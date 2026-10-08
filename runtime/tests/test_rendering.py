@@ -99,7 +99,7 @@ def test_render_moves_video_sections_and_beat_timeline_into_out_dir(project: Pat
         "avg_frame_rate": "10/1",
     }
     timeline = json.loads((project / out / "Shapes.timeline.json").read_text())
-    assert timeline["version"] == 1 and timeline["scene"] == "Shapes"
+    assert timeline["version"] == 2 and timeline["scene"] == "Shapes"
     assert [(b["id"], b["file"], b["line"]) for b in timeline["beats"]] == [
         ("circle", "scenes/main.py", 8),
         ("square", "scenes/main.py", 10),

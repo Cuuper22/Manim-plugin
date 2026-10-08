@@ -39,6 +39,7 @@ class Beat:
     intent: Intent | None = None
     question: str | None = None
     takeaway: str | None = None
+    aha: bool = False
     scene: Directed | None = field(default=None, repr=False)
     file: str = field(default="", repr=False)  # where `with self.beat(...)` is written
     line: int = field(default=0, repr=False)
@@ -48,6 +49,18 @@ class Beat:
     transitioned: bool = field(default=False, repr=False)
     focused: bool = field(default=False, repr=False)
     record: int | None = field(default=None, repr=False)
+
+    def notes(self) -> dict[str, Any]:
+        """The fields a v2 timeline records for this beat."""
+
+        return {
+            "transition": self.transition.value,
+            "intent": None if self.intent is None else self.intent.value,
+            "question": self.question,
+            "takeaway": self.takeaway,
+            "aha": self.aha,
+            "hold": self.hold,
+        }
 
     def __enter__(self) -> Beat:
         assert self.scene is not None

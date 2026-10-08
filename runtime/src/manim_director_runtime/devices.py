@@ -67,4 +67,5 @@ class Devices:
             dots = all(isinstance(leaf, Dot) for leaf in hidden)
             entrances.append(LaggedStart(*parts, lag_ratio=lag) if dots else AnimationGroup(*parts))
         animation = entrances[0] if len(entrances) == 1 else LaggedStart(*entrances, lag_ratio=lag)
-        self._perform([animation], motion.SHOW_SECONDS if run_time is None else run_time)
+        seconds = motion.SHOW_SECONDS if run_time is None else run_time
+        self._perform([animation], seconds, "show", shown=mobjects)

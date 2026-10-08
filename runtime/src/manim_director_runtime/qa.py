@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import statistics
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from . import pacing
 from .errors import invalid_source
 from .media import grab_frame, load_timeline, probe_video, require_pillow, sample_times
 from .model import ArtifactKind, Finding, RuntimeArtifact, Severity, SourceLocation
 from .paths import atomic_target, ensure_dir
+from .project import load_style
 from .tasks import QaTask, SafeArea
 
 if TYPE_CHECKING:
@@ -84,9 +86,29 @@ def qa(task: QaTask, ctx: Context) -> QaResult:
         frames.append(frame)
         findings += _findings(frame, beats)
         ctx.progress("analyze", number, len(samples))
+    if beats is not None and frames[0].at_seconds is not None:
+        findings += _pacing(beats, frames, ctx)
     severities = {finding.severity for finding in findings}
     status = "fail" if Severity.ERROR in severities else "warn" if severities else "pass"
     return QaResult(status=status, frames=frames, findings=findings, artifacts=artifacts)
+
+
+def _pacing(beats: Timeline, frames: list[QaFrame], ctx: Context) -> list[Finding]:
+    """Pacing findings for a DirectedScene render (a v1 timeline has none), each pointing at
+    the sampled frame nearest to it."""
+
+    style = load_style(ctx.project_root)
+    viewer = style.viewer
+    budgets = pacing.settings(viewer.level if viewer is not None else "general", style.pacing)
+    planned = style.storyboard_scene in (None, beats.scene)
+    found = pacing.check(beats, budgets, viewer, style.storyboard if planned else ())
+
+    def nearest(at: float | None) -> str | None:
+        if at is None:
+            return None
+        return min(frames, key=lambda frame: abs((frame.at_seconds or 0.0) - at)).path
+
+    return [replace(finding, frame=nearest(finding.at_seconds)) for finding in found]
 
 
 def measure(image: Image, safe_area: SafeArea) -> FrameMetrics:
