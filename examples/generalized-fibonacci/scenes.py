@@ -167,6 +167,7 @@ class GeneralizedFibonacci(DirectedScene):
                     r"\begin{pmatrix} x_{n+1} \\ x_n \end{pmatrix}",
                     "the same rule, for a state",
                 ),
+                pause=0.7,  # paced to narration.json, which these beats were timed for
             )
 
         with self.beat("roots", hold=2.5):
@@ -176,6 +177,7 @@ class GeneralizedFibonacci(DirectedScene):
                 (r"\det(C - \lambda I) = \lambda^2 - p\lambda - q = 0", "eigenvalues of C"),
                 (r"\lambda_\pm = \frac{p \pm \sqrt{p^2 + 4q}}{2}", "quadratic formula"),
                 (r"x_n = A\lambda_+^n + B\lambda_-^n", "when the roots differ"),
+                pause=0.7,
             )
 
         with self.beat("edge-case", transition="contrast", hold=2.5):
@@ -185,6 +187,7 @@ class GeneralizedFibonacci(DirectedScene):
                 (r"p^2 + 4q = 0", "one double root, p/2"),
                 (r"x_n = (A + Bn)\left(\frac{p}{2}\right)^n", "the general solution"),
                 (r"x_n = n", "p = 2, q = −1, seeds 0 and 1"),
+                pause=0.7,
             )
 
         with self.beat("recap", transition="chapter", hold=3):
@@ -232,6 +235,7 @@ class CharacteristicRoots(DirectedScene):
                 (r"\lambda^2 = p\lambda + q", r"divide by $\lambda^n$"),
                 (r"\lambda_\pm = \frac{p \pm \sqrt{p^2 + 4q}}{2}", "quadratic formula"),
                 replaces=guess,
+                pause=0.7,
             )
 
         distinct = VGroup(
