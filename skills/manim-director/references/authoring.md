@@ -1,7 +1,8 @@
 # Authoring with DirectedScene
 
 Read this before writing or substantially changing a scene. Everything here is plain Manim
-underneath: helpers return ordinary mobjects, and any Manim code mixes in.
+underneath: helpers return ordinary mobjects, and any Manim code mixes in. Plan the film first
+with [viewer.md](viewer.md); build it from the components and devices in [kit.md](kit.md).
 
 ## Scene classes and theme
 
@@ -67,11 +68,8 @@ min_scale=0.5)`:
 
 ## Beats
 
-```python
-with self.beat("roots", transition="continue", keep=[plane], focus=None, hold=1.0,
-               run_time=None, intent="prove", question="...", takeaway="..."):
-    ...
-```
+`with self.beat(id, *, focus=None, transition="continue", keep=(), hold=None, run_time=None,
+intent=None, question=None, takeaway=None, aha=False):`
 
 - Entering a beat moves nothing. At its first animation (or its end), one transition happens:
   objects on stage that were not kept or placed again leave, kept and replaced ones glide or morph,
@@ -82,10 +80,20 @@ with self.beat("roots", transition="continue", keep=[plane], focus=None, hold=1.
 - `keep=[...]` lists what survives. Anything you `self.play`ed or `self.add`ed in an earlier beat
   leaves unless kept; graphs with updaters (`always_redraw`) need their pieces kept too.
 - `focus=obj` dims everything else once `obj` is on stage (it must reach the stage in that beat).
-  `hold` is the pause at the end (default 1 s); `run_time` the transition's length.
+  `run_time` is the transition's length.
+- `hold` is the stillness at the end. Leave it unset: the beat then holds until its last change
+  and its caption have been read at the viewer's `level`, and at least 2 s (general) after a
+  result: `aha=True` or intent `reveal`, `prove` or `recap`. A number sets it exactly.
+- `aha=True` marks the one beat where the viewer gets the idea; mirror it in the storyboard. Give
+  its key motion a `run_time` of 1.5–3 s.
+- Devices and `derive` wait until the last change has been read before they play. A plain
+  `self.play`, or a `place` in mid-beat, does not: call `self.pause()` first when it follows a
+  reveal.
+- The last frame stays still for the viewer's `final_hold` (3 s at general). The class attribute
+  `final_hold = 0` turns that off, for a film that loops.
 - Beats do not nest. Each beat is a Manim section (`render` with `sections: true` writes one video
   per beat) and a timeline entry with its file and line; QA findings and contact sheets name it.
-- Keep the storyboard in `director.yaml` in sync: same ids, in order.
+- Keep the storyboard in `director.yaml` in sync: same ids, in order, one `aha: true`.
 
 ## Mathematics
 
@@ -99,6 +107,8 @@ replaces=None, min_scale=0.5) -> Derivation`
   `notes="right"` puts them in a column beside the lines, `"below"` under each line, and `"auto"`
   picks whichever needs less shrinking (below in a 9:16 frame).
 - `in_place=True` transforms one line through all steps (notes appear below and swap).
+- Leave `pause` unset: after each step the derivation waits for that step's reading time at the
+  viewer's `level`.
 - Returns a `VGroup` with `.lines` and `.notes`. Continue a derivation in the next beat with
   `derive(..., replaces=steps.lines[-1])`, or promote the result with
   `place(self.math(..., font_size=72), replaces=steps.lines[-1])`.
@@ -122,41 +132,43 @@ differ raises `CompositionError` rather than render squashed. For 9:16, start fr
 
 ## Direction
 
-A strong explanation changes the viewer's mind one step at a time:
-
-1. Pose the question or the surprising fact.
-2. Give the viewer one concrete object to track.
-3. Change one thing per beat, keeping that object on stage.
-4. State the rule after the viewer has seen evidence for it.
-5. Stress it with an edge case or counterexample.
-6. Resolve the opening question on a stable final frame.
-
-Match motion to meaning:
+How to plan for a viewer (the viewer model, budgets, beat template, patterns, anti-patterns and
+critique) is in [viewer.md](viewer.md). Match motion to meaning:
 
 | Relationship | How |
 |---|---|
-| Same object, new state | `replaces=` or `derive`; keep its color. |
+| Same object, new state | `replaces=`, `derive`, or a kit verb (`apply`, `refine`, `repair`); keep its color. |
 | Cause and consequence | A `reveal` beat, or `derive` notes naming the step. |
-| Contrast | A `contrast` beat, or `left`/`right` with a shared anchor kept. |
+| Contrast | A `contrast` beat, or `left`/`right` at the same scale with a shared anchor kept. |
 | Evidence for a claim | Place it beside the claim; keep the claim. |
+| A term and its picture | `link` them; label the picture in the term's color. |
 | New chapter | `chapter`, then a new title. |
 
-- One hero per beat; dim context with `focus` rather than deleting it.
-- Prefer a picture next to its algebra (`left`/`right`) to text explaining the picture.
-- Give dense formulas reading time (`hold`, `pause`); speed is not energy.
-- Colors carry meaning: one meaning per color across the film, set once in `symbols`.
 - Use exact Manim constructions for mathematical content (plots, geometry, data); split plotted
-  domains at poles and discontinuities; round only for display.
+  domains at poles and discontinuities (`FunctionPlot(breaks=...)`); round only for display.
 - Seed randomness (`project.seed`), and keep data in files under `data/` or `sources/` so the scene
   reads it instead of hard-coding numbers.
 
 ## Starting points
 
-`init(scene_template=...)` adds a finished scene to read and adapt: `explainer` (picture, then
-algebra, regions, `keep=`), `derivation` (multi-beat `derive`, `replaces`, `tag`, `highlight`),
-`geometry` (rearranging shapes beside an equation), `graph` (`ValueTracker` and `always_redraw`
-readouts kept across beats), `vertical_short` (9:16). Copy their patterns rather than inventing
-new layout code.
+Start from the closest finished film rather than a blank file. The five gallery films are
+projects in [`examples/gallery`](../../../examples/gallery) to copy (`director.yaml`, `manim.cfg`,
+`scenes/main.py`): each is built on the kit, plans for its viewer, and passes `qa` with no
+findings. The five templates come from `init(template=...)` (or `init(scene_template=...)` to add
+one to a project); they predate the kit, so write their `brief.viewer` when you adopt one.
+
+| Start from | Pattern | Topic | What it shows |
+|---|---|---|---|
+| `picture_to_formula` gallery | picture to formula | odd numbers make squares | `DotArray`, `show`, `link`, `derive`, `ask` |
+| `concrete_first` gallery | concrete first | a positive test result | `DotArray` selections, `link`, `focus`, `intro` level |
+| `contrast` gallery | before and after | shears keep area | `VectorGrid`, `Readout`, `reserve` |
+| `misconception` gallery | misconception, then repair | √(a + b) | `misconception`, `Figure`, `link` |
+| `zoom_detail` gallery | zoom in on a detail | sin x ≈ x | `FunctionPlot.inset`, `secant`, `Readout` |
+| `explainer` template | picture, then algebra | geometric series | regions, `keep=` |
+| `derivation` template | step-by-step algebra | quadratic formula | multi-beat `derive`, `replaces`, `tag`, `highlight` |
+| `geometry` template | rearranging shapes | Pythagoras | shapes beside an equation |
+| `graph` template | a value tracked on a graph | a derivative | `ValueTracker`, `always_redraw` across beats |
+| `vertical_short` template | 9:16 for phones | triangular numbers | portrait `manim.cfg`, profiles, safe area |
 
 ## Editing existing scenes
 
