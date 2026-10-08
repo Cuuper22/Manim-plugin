@@ -108,10 +108,10 @@ impl SceneIndex {
     }
 
     pub fn status(&self) -> SceneIndexStatus {
-        let state = match (&self.error, self.refreshing || self.indexed_at.is_none()) {
-            (_, true) => IndexState::Indexing,
-            (Some(_), false) => IndexState::Failed,
-            (None, false) => IndexState::Ready,
+        let state = match (self.refreshing, &self.error, self.indexed_at) {
+            (true, _, _) | (false, None, None) => IndexState::Indexing,
+            (false, Some(_), _) => IndexState::Failed,
+            (false, None, Some(_)) => IndexState::Ready,
         };
         SceneIndexStatus {
             state,
@@ -364,6 +364,18 @@ mod tests {
         assert_eq!(status.state, IndexState::Failed);
         assert_eq!(status.error.unwrap().code, "timeout");
         assert_eq!(scenes(&DirectorSpec::defaults(), &index).len(), 1);
+    }
+
+    #[test]
+    fn a_first_refresh_that_fails_reads_failed() {
+        let mut index = SceneIndex::default();
+        index.begin_refresh();
+        let unavailable = ErrorBody::new("runtime_unavailable", "Python was not found.", None);
+        index.finish_refresh(Err(unavailable.clone()));
+        let status = index.status();
+        assert_eq!(status.state, IndexState::Failed);
+        assert_eq!(status.error, Some(unavailable));
+        assert_eq!(status.indexed_at, None);
     }
 
     #[test]
