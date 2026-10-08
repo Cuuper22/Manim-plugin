@@ -1,11 +1,13 @@
-.PHONY: build build-engine build-runtime build-workbench dev install check clean
+.PHONY: build build-engine build-runtime build-workbench dev install \
+	check check-scripts check-engine check-runtime check-workbench check-e2e clean
 
+# The checks need an interpreter with the runtime's `full` and `test` extras.
 PYTHON ?= python3
 
 build: build-workbench build-engine build-runtime
 
 build-engine:
-	cargo build --release --workspace --locked
+	cargo build --release --locked -p manim-director-cli --bin manim-director
 
 build-runtime:
 	$(PYTHON) -m pip wheel --no-deps ./runtime --wheel-dir dist
@@ -15,19 +17,37 @@ build-workbench:
 	npm --prefix workbench run build
 
 dev:
-	$(PYTHON) scripts/dev.py
+	$(PYTHON) scripts/dev.py $(PROJECT)
 
 install:
-	$(PYTHON) scripts/install.py
+	$(PYTHON) scripts/install.py --with-manim
 
-check:
-	cargo fmt --all -- --check
-	cargo test --workspace --locked
-	$(PYTHON) -m pytest runtime/tests -q
+check: check-scripts check-engine check-runtime check-workbench
+
+check-scripts:
+	$(PYTHON) -m ruff check scripts
+	$(PYTHON) -m ruff format --check scripts
 	$(PYTHON) scripts/release_integrity.py versions
 	$(PYTHON) -m unittest discover -s scripts -p 'test_*.py'
+
+check-engine:
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo test --workspace --locked
+
+check-runtime:
+	$(PYTHON) -m ruff check runtime/src runtime/tests
+	$(PYTHON) -m ruff format --check runtime/src runtime/tests
+	$(PYTHON) -m pytest runtime/tests -rs
+
+check-workbench:
 	npm --prefix workbench test
 	npm --prefix workbench run build
+
+# Drives the built workbench in Chromium against a real engine and runtime.
+check-e2e:
+	cargo build --locked -p manim-director-cli
+	MANIM_DIRECTOR_E2E=required npm --prefix workbench run test:e2e
 
 clean:
 	cargo clean

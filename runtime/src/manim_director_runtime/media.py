@@ -1,238 +1,355 @@
+"""The `frame` and `contact_sheet` operations, plus frame grabbing and sheets shared with
+`qa`."""
+
 from __future__ import annotations
 
+import io
 import json
 import math
-import shutil
-import tempfile
+import types
+from collections.abc import Sequence
+from dataclasses import dataclass
+from fractions import Fraction
+from functools import cache
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING
 
-from .errors import DirectorError
-from .util import Emit, confined_path, noop_emit, project_root, run_command
+from . import process, timeline
+from .errors import DirectorError, dependency_missing
+from .model import ArtifactKind, RuntimeArtifact
+from .paths import atomic_target, ensure_dir
+from .tasks import ContactSheetTask, FrameTask
+
+if TYPE_CHECKING:
+    from PIL.Image import Image
+    from PIL.ImageFont import FreeTypeFont
+
+    from .protocol import Context
+
+THUMBNAIL_WIDTH = 480
+_INK, _MUTED = "#F5F7FF", "#9AA3B5"
+_GUTTER, _LINE_HEIGHT = 12, 24
+
+Line = Sequence[tuple[str, str]]  # runs of text, each with its color
 
 
-def _exe(name: str) -> str:
-    path = shutil.which(name)
-    if not path:
-        raise DirectorError("executable_not_found", f"{name} is required for this media operation")
-    return path
+@dataclass(frozen=True, slots=True)
+class VideoInfo:
+    duration_seconds: float
+    fps: float | None
+    frame_count: int | None
+
+    def frame_time(self, seconds: float) -> float:
+        """The start time of the frame on screen at `seconds`, clamped to the last frame."""
+
+        if not self.fps:
+            return min(max(seconds, 0.0), self.duration_seconds)
+        frames = self.frame_count or max(1, round(self.duration_seconds * self.fps))
+        index = min(math.floor(seconds * self.fps + 1e-6), frames - 1)
+        return max(index, 0) / self.fps
 
 
-def probe_media(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise DirectorError("media_not_found", f"Media file does not exist: {path}")
-    command = [
-        _exe("ffprobe"), "-v", "error", "-show_streams", "-show_format",
-        "-of", "json", str(path),
+@dataclass(frozen=True, slots=True)
+class FrameResult:
+    at_seconds: float
+    artifacts: list[RuntimeArtifact]
+
+
+@dataclass(frozen=True, slots=True)
+class SheetFrame:
+    at_seconds: float
+    beat: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BeatTile:
+    """A tile of a beat sheet: the frame at `at_seconds` under `name · detail` and the
+    question it should answer."""
+
+    at_seconds: float
+    name: str
+    detail: str
+    question: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ContactSheetResult:
+    frames: list[SheetFrame]
+    columns: int
+    rows: int
+    artifacts: list[RuntimeArtifact]
+
+
+def frame(task: FrameTask, ctx: Context) -> FrameResult:
+    out_dir = ensure_dir(ctx.require_inside(task.out_dir, "out_dir"))
+    info = probe_video(task.video)
+    at = info.frame_time(task.at_seconds)
+    ctx.progress("extract", 0, 1)
+    png = grab_frame(task.video, at, info)
+    path = out_dir / f"frame-{round(task.at_seconds * 1000):08d}.png"
+    with atomic_target(path) as temp:
+        temp.write_bytes(png)
+    ctx.progress("extract", 1, 1)
+    return FrameResult(at_seconds=round(at, 6), artifacts=[ctx.artifact(ArtifactKind.IMAGE, path)])
+
+
+def contact_sheet(task: ContactSheetTask, ctx: Context) -> ContactSheetResult:
+    pil = require_pillow()
+    out_dir = ensure_dir(ctx.require_inside(task.out_dir, "out_dir"))
+    beats = load_timeline(task.timeline, ctx)
+    info = probe_video(task.video)
+    times = [info.frame_time(t) for t in sample_times(info.duration_seconds, task.count)]
+    images: list[Image] = []
+    frames: list[SheetFrame] = []
+    for done, at in enumerate(times, start=1):
+        images.append(pil.open(io.BytesIO(grab_frame(task.video, at, info))).convert("RGB"))
+        beat = beats.beat_at(at) if beats else None
+        frames.append(SheetFrame(at_seconds=round(at, 6), beat=beat.id if beat else None))
+        ctx.progress("extract", done, len(times))
+    columns = min(task.columns, len(images))
+    rows = math.ceil(len(images) / columns)
+    labels = [
+        [[(_clock(item.at_seconds) + "  ", _MUTED), *([(item.beat, _INK)] if item.beat else [])]]
+        for item in frames
     ]
-    result = run_command(command, timeout=30)
-    if result.returncode != 0:
-        raise DirectorError("probe_failed", f"ffprobe could not inspect {path}", {"tail": result.output[-4000:]})
-    try:
-        payload = json.loads(result.output)
-    except json.JSONDecodeError as exc:
-        raise DirectorError("probe_invalid_json", "ffprobe returned malformed JSON") from exc
-    format_info = payload.get("format") or {}
-    streams = payload.get("streams") or []
-    video = next((s for s in streams if s.get("codec_type") == "video"), None)
-    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-    duration_raw = format_info.get("duration") or (video or {}).get("duration") or (audio or {}).get("duration")
-    try:
-        duration = float(duration_raw) if duration_raw is not None else None
-    except (TypeError, ValueError):
-        duration = None
-    return {
-        "path": str(path), "available": True, "bytes": path.stat().st_size,
-        "format": format_info.get("format_name"), "duration_seconds": duration,
-        "video": None if not video else {
-            "codec": video.get("codec_name"), "width": video.get("width"), "height": video.get("height"),
-            "pixel_format": video.get("pix_fmt"), "frame_rate": video.get("avg_frame_rate"),
-            "frames": video.get("nb_frames"),
-            "alpha_mode": (video.get("tags") or {}).get("alpha_mode"),
-        },
-        "audio": None if not audio else {
-            "codec": audio.get("codec_name"), "sample_rate": audio.get("sample_rate"),
-            "channels": audio.get("channels"), "layout": audio.get("channel_layout"),
-        },
-    }
+    path = out_dir / "contact-sheet.png"
+    _save(_compose(images, labels, columns, rows), path)
+    return ContactSheetResult(
+        frames=frames,
+        columns=columns,
+        rows=rows,
+        artifacts=[ctx.artifact(ArtifactKind.CONTACT_SHEET, path)],
+    )
 
 
-def _compact_frame_rate(value: Any) -> float | None:
-    try:
-        if isinstance(value, str) and "/" in value:
-            numerator, denominator = value.split("/", 1)
-            rate = float(numerator) / float(denominator)
+def beat_sheet(
+    video: Path, info: VideoInfo, tiles: Sequence[BeatTile], path: Path, ctx: Context
+) -> None:
+    """One frame per tile, three to a row, each under its name and question: the sheet for
+    judging a film from its frames alone."""
+
+    pil = require_pillow()
+    images: list[Image] = []
+    for done, tile in enumerate(tiles, start=1):
+        images.append(pil.open(io.BytesIO(grab_frame(video, tile.at_seconds, info))).convert("RGB"))
+        ctx.progress("extract", done, len(tiles))
+    width = THUMBNAIL_WIDTH - 4
+    labels: list[list[Line]] = []
+    for tile in tiles:
+        lines = [[(tile.name, _INK), (f" · {tile.detail}", _MUTED)]]
+        if tile.question:
+            lines += [[(line, _INK)] for line in _wrapped(tile.question, width, lines=2)]
         else:
-            rate = float(value)
-    except (TypeError, ValueError, ZeroDivisionError):
-        return None
-    return round(rate, 3) if math.isfinite(rate) and rate >= 0 else None
+            lines.append([("(no audience question)", _MUTED)])
+        labels.append(lines)
+    columns = min(3, len(images))
+    _save(_compose(images, labels, columns, math.ceil(len(images) / columns)), path)
 
 
-def compact_media_summary(info: Mapping[str, Any]) -> dict[str, Any]:
-    """Reduce ffprobe-derived data to a stable, bounded render-result summary."""
+def sample_times(duration: float, count: int, skip: Sequence[timeline.Span] = ()) -> list[float]:
+    """`count` evenly spaced times, keeping a small margin from both ends. The spans in `skip`
+    (in order, disjoint) are cut out first, so no time falls inside one unless all do."""
 
-    duration = info.get("duration_seconds")
-    try:
-        duration_value = round(float(duration), 3) if duration is not None and math.isfinite(float(duration)) else None
-    except (TypeError, ValueError):
-        duration_value = None
-    raw_format = str(info.get("format") or "")
-    summary: dict[str, Any] = {
-        "path": str(info.get("path", "")),
-        "bytes": max(0, int(info.get("bytes", 0))),
-        "container": raw_format.split(",", 1)[0][:32] or None,
-        "format_name": raw_format[:64] or None,
-        "duration_seconds": duration_value,
-    }
-    video = info.get("video")
-    if isinstance(video, Mapping):
-        pixel_format = str(video.get("pixel_format") or "")[:32]
-        alpha_mode = str(video.get("alpha_mode") or "")[:16]
-        has_alpha = (
-            pixel_format.startswith(("rgba", "argb", "bgra", "abgr", "yuva", "gbrap", "ya"))
-            or pixel_format == "gray8a"
-            or (bool(alpha_mode) and alpha_mode != "0")
-        )
-        summary["video"] = {
-            "codec": str(video.get("codec") or "")[:32] or None,
-            "width": int(video["width"]) if video.get("width") is not None else None,
-            "height": int(video["height"]) if video.get("height") is not None else None,
-            "fps": _compact_frame_rate(video.get("frame_rate")),
-            "pixel_format": pixel_format or None,
-            "pix_fmt": pixel_format or None,
-            "has_alpha": has_alpha,
-        }
-    audio = info.get("audio")
-    if isinstance(audio, Mapping):
-        summary["audio"] = {
-            "codec": str(audio.get("codec") or "")[:32] or None,
-            "channels": int(audio["channels"]) if audio.get("channels") is not None else None,
-        }
-    return summary
-
-
-def extract_frame(source: Path, timestamp: float, destination: Path, *, emit: Emit = noop_emit) -> Path:
-    if timestamp < 0:
-        raise DirectorError("invalid_timestamp", "Frame timestamp cannot be negative")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        _exe("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
-        "-ss", f"{timestamp:.6f}", "-i", str(source), "-frames:v", "1", str(destination),
-    ]
-    result = run_command(command, timeout=60, emit=emit)
-    if result.returncode != 0 or not destination.exists():
-        raise DirectorError("frame_extraction_failed", f"Could not extract a frame at {timestamp:g}s", {"tail": result.output[-4000:]})
-    return destination
-
-
-def representative_frames(
-    source: Path, destination_dir: Path, *, count: int = 6, emit: Emit = noop_emit
-) -> list[dict[str, Any]]:
-    if not (1 <= count <= 40):
-        raise DirectorError("invalid_frame_count", "Representative frame count must be between 1 and 40")
-    info = probe_media(source)
-    duration = info.get("duration_seconds")
-    if not duration or duration <= 0:
-        raise DirectorError("duration_unknown", "Cannot choose representative frames because media duration is unavailable")
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    kept: list[tuple[float, float]] = []
+    start = 0.0
+    for span in skip:
+        kept.append((start, min(span.start_seconds, duration)))
+        start = max(start, span.end_seconds)
+    kept.append((start, duration))
+    kept = [(a, b) for a, b in kept if b > a] or [(0.0, duration)]
+    length = sum(b - a for a, b in kept)
     if count == 1:
-        times = [duration / 2]
+        offsets = [length / 2]
     else:
-        margin = min(0.08 * duration, 0.5)
-        usable = max(0.0, duration - 2 * margin)
-        times = [margin + usable * i / (count - 1) for i in range(count)]
-    frames = []
-    for index, timestamp in enumerate(times):
-        path = extract_frame(source, timestamp, destination_dir / f"frame-{index + 1:03d}.png", emit=emit)
-        frames.append({"path": str(path), "timestamp": round(timestamp, 6)})
-    return frames
+        margin = min(0.08 * length, 0.5)
+        step = (length - 2 * margin) / (count - 1)
+        offsets = [margin + step * index for index in range(count)]
+    return [_position(kept, offset) for offset in offsets]
 
 
-def create_contact_sheet(images: Sequence[Path], destination: Path, *, columns: int = 3, thumb_width: int = 480) -> dict[str, Any]:
+def _position(parts: list[tuple[float, float]], offset: float) -> float:
+    """The time `offset` seconds into `parts` laid end to end."""
+
+    for start, end in parts:
+        if offset <= end - start:
+            return start + offset
+        offset -= end - start
+    return parts[-1][1]
+
+
+def probe_video(path: Path) -> VideoInfo:
+    output = process.run(
+        "ffprobe",
+        [
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate,r_frame_rate,nb_frames,duration:format=duration",
+            "-of",
+            "json",
+            str(path),
+        ],
+    )
+    payload = json.loads(output)
+    streams = payload.get("streams") or []
+    if not streams:
+        raise DirectorError(
+            "media_error",
+            f"{path.name} has no video stream.",
+            {"tool": "ffprobe", "exit_code": 0, "stderr_tail": ""},
+        )
+    stream = streams[0]
+    duration = _number(stream.get("duration")) or _number(payload.get("format", {}).get("duration"))
+    fps = _rate(stream.get("avg_frame_rate")) or _rate(stream.get("r_frame_rate"))
+    frames = stream.get("nb_frames")
+    return VideoInfo(
+        duration_seconds=duration or 0.0,
+        fps=fps,
+        frame_count=int(frames) if frames and str(frames).isdigit() else None,
+    )
+
+
+def grab_frame(video: Path, at_seconds: float, info: VideoInfo) -> bytes:
+    """PNG bytes of the frame starting at `at_seconds` (a value from `VideoInfo.frame_time`)."""
+
+    # Accurate input seeking returns the first frame at or after the target, so aim half a
+    # frame early to land exactly on the frame that starts at `at_seconds`.
+    seek = max(0.0, at_seconds - 0.5 / info.fps) if info.fps else at_seconds
+    png = process.run(
+        "ffmpeg",
+        [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-ss",
+            f"{seek:.6f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-c:v",
+            "png",
+            "-",
+        ],
+    )
+    if not png:
+        raise DirectorError(
+            "media_error",
+            f"ffmpeg returned no frame at {at_seconds:.3f}s of {video.name}.",
+            {"tool": "ffmpeg", "exit_code": 0, "stderr_tail": ""},
+        )
+    return png
+
+
+def load_timeline(path: Path | None, ctx: Context) -> timeline.Timeline | None:
+    if path is None:
+        return None
     try:
-        from PIL import Image, ImageDraw
-    except ImportError as exc:
-        raise DirectorError("visual_dependency_missing", "Contact sheets require Pillow (`pip install Pillow`).") from exc
-    if not images:
-        raise DirectorError("images_required", "At least one image is required for a contact sheet")
-    if not (1 <= columns <= 10 and 64 <= thumb_width <= 2048):
-        raise DirectorError("invalid_contact_sheet", "columns or thumbnail width is outside supported bounds")
-    loaded = []
-    for path in images:
-        try:
-            loaded.append((path, Image.open(path).convert("RGB")))
-        except Exception as exc:
-            raise DirectorError("image_decode_failed", f"Could not decode image: {path}") from exc
-    ratio = max(image.height / image.width for _, image in loaded)
-    thumb_height = max(1, round(thumb_width * ratio))
-    label_height, gutter = 34, 12
-    rows = math.ceil(len(loaded) / columns)
-    sheet = Image.new("RGB", (columns * thumb_width + (columns + 1) * gutter, rows * (thumb_height + label_height) + (rows + 1) * gutter), "#111318")
+        return timeline.load(path)
+    except DirectorError as error:
+        ctx.log("warning", f"{error.message} Frames are not mapped to beats.")
+        return None
+
+
+def require_pillow() -> types.ModuleType:
+    try:
+        from PIL import Image
+    except ImportError:
+        raise dependency_missing("PIL", "Install Pillow in the runtime environment.") from None
+    return Image
+
+
+def _compose(
+    images: list[Image], labels: Sequence[Sequence[Line]], columns: int, rows: int
+) -> Image:
+    from PIL import Image, ImageDraw
+
+    font = _font()
+    label_height = 10 + _LINE_HEIGHT * max(len(label) for label in labels)
+    ratio = max(image.height / image.width for image in images)
+    thumb = (THUMBNAIL_WIDTH, max(1, round(THUMBNAIL_WIDTH * ratio)))
+    size = (
+        columns * thumb[0] + (columns + 1) * _GUTTER,
+        rows * (thumb[1] + label_height) + (rows + 1) * _GUTTER,
+    )
+    sheet = Image.new("RGB", size, "#111318")
     draw = ImageDraw.Draw(sheet)
-    for index, (path, image) in enumerate(loaded):
-        row, col = divmod(index, columns)
-        image.thumbnail((thumb_width, thumb_height))
-        x = gutter + col * (thumb_width + gutter) + (thumb_width - image.width) // 2
-        y = gutter + row * (thumb_height + label_height) + (thumb_height - image.height) // 2
-        sheet.paste(image, (x, y))
-        draw.text((gutter + col * (thumb_width + gutter) + 6, y + thumb_height + 5), path.name, fill="#F5F7FF")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(destination, format="PNG", optimize=True)
-    for _, image in loaded:
-        image.close()
-    return {"path": str(destination), "width": sheet.width, "height": sheet.height, "images": len(images), "columns": columns, "rows": rows}
+    for index, (image, label) in enumerate(zip(images, labels, strict=True)):
+        row, column = divmod(index, columns)
+        x = _GUTTER + column * (thumb[0] + _GUTTER)
+        y = _GUTTER + row * (thumb[1] + label_height + _GUTTER)
+        image.thumbnail(thumb)
+        sheet.paste(image, (x + (thumb[0] - image.width) // 2, y + (thumb[1] - image.height) // 2))
+        for number, line in enumerate(label):
+            left, top = x + 2, y + thumb[1] + 8 + number * _LINE_HEIGHT
+            for text, color in line:
+                draw.text((left, top), text, fill=color, font=font)
+                left += font.getlength(text)
+    return sheet
 
 
-def contact_sheet(params: Mapping[str, Any], emit: Emit = noop_emit) -> dict[str, Any]:
-    root = project_root(params)
-    output = confined_path(root, str(params.get("output", "output/contact-sheet.png")))
-    raw_images = params.get("images")
-    temp_parent = confined_path(root, ".manim-director/tmp")
-    temp_parent.mkdir(parents=True, exist_ok=True)
-    if raw_images:
-        images = [confined_path(root, str(value), must_exist=True) for value in raw_images]
-        frames = [{"path": str(path), "timestamp": None} for path in images]
-        result = create_contact_sheet(images, output, columns=int(params.get("columns", 3)), thumb_width=int(params.get("thumb_width", 480)))
-    else:
-        source = confined_path(root, str(params.get("source", params.get("video", "output/final.mp4"))), must_exist=True)
-        with tempfile.TemporaryDirectory(prefix="contact-", dir=temp_parent) as raw_temp:
-            frames = representative_frames(source, Path(raw_temp), count=int(params.get("count", 6)), emit=emit)
-            result = create_contact_sheet([Path(item["path"]) for item in frames], output, columns=int(params.get("columns", 3)), thumb_width=int(params.get("thumb_width", 480)))
-    result["frames"] = frames
-    return result
+def _save(sheet: Image, path: Path) -> None:
+    with atomic_target(path) as temp:
+        sheet.save(temp, format="PNG", optimize=True)
 
 
-def normalize_audio(source: Path, destination: Path, *, target_lufs: float = -16.0, emit: Emit = noop_emit) -> dict[str, Any]:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        _exe("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-        "-af", f"loudnorm=I={target_lufs:g}:TP=-1.5:LRA=11", str(destination),
-    ]
-    result = run_command(command, timeout=600, emit=emit)
-    if result.returncode != 0 or not destination.exists():
-        raise DirectorError("audio_normalization_failed", "FFmpeg could not normalize the audio", {"tail": result.output[-4000:]})
-    return probe_media(destination)
+@cache
+def _font() -> FreeTypeFont:
+    from PIL import ImageFont
+
+    try:  # questions and the aha quote ×, ⋯ and Greek, which Pillow's own font lacks
+        return ImageFont.truetype("DejaVuSans.ttf", 18)
+    except OSError:
+        return ImageFont.load_default(size=18)
 
 
-def mix_audio(tracks: Sequence[Mapping[str, Any]], destination: Path, *, emit: Emit = noop_emit) -> dict[str, Any]:
-    if not tracks:
-        raise DirectorError("tracks_required", "At least one audio track is required")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    command = [_exe("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y"]
-    filters = []
-    labels = []
-    for index, track in enumerate(tracks):
-        path = Path(str(track["path"]))
-        command += ["-i", str(path)]
-        delay = max(0, round(float(track.get("start", 0)) * 1000))
-        gain = float(track.get("gain", 1.0))
-        label = f"a{index}"
-        filters.append(f"[{index}:a]adelay={delay}|{delay},volume={gain:g}[{label}]")
-        labels.append(f"[{label}]")
-    filters.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:normalize=0[out]")
-    command += ["-filter_complex", ";".join(filters), "-map", "[out]", str(destination)]
-    result = run_command(command, timeout=900, emit=emit)
-    if result.returncode != 0 or not destination.exists():
-        raise DirectorError("audio_mix_failed", "FFmpeg could not mix the audio tracks", {"tail": result.output[-4000:]})
-    return probe_media(destination)
+def _wrapped(text: str, width: float, *, lines: int) -> list[str]:
+    """`text` broken into at most `lines` lines no wider than `width`; a cut ends in "…"."""
+
+    font, words, out = _font(), text.split(), []
+    while words and len(out) < lines:
+        line = words.pop(0)
+        while words and font.getlength(f"{line} {words[0]}") <= width:
+            line += " " + words.pop(0)
+        out.append(line)
+    out = [_clipped(line, width) for line in out]
+    if words and not out[-1].endswith("…"):
+        out[-1] = _clipped(out[-1] + " …", width)
+    return out
+
+
+def _clipped(line: str, width: float) -> str:
+    font = _font()
+    if font.getlength(line) <= width:
+        return line
+    while line and font.getlength(line + "…") > width:
+        line = line[:-1]
+    return line.rstrip() + "…"
+
+
+def _clock(seconds: float) -> str:
+    minutes, tenths = divmod(round(seconds * 10), 600)  # round first: 59.95 s is 01:00.0
+    return f"{minutes:02d}:{tenths / 10:04.1f}"
+
+
+def _number(value: object) -> float | None:
+    if not isinstance(value, (str, int, float)):
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _rate(value: object) -> float | None:
+    try:
+        rate = float(Fraction(str(value)))
+    except (ValueError, ZeroDivisionError):
+        return None
+    return rate if rate > 0 else None

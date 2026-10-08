@@ -1,0 +1,11 @@
+line-length = 100
+target-version = "py311"
+
+# Both run on whatever python3 the host has, which may be as old as 3.8;
+# install.py must at least reach its own Python version check.
+[per-file-target-version]
+"install.py" = "py38"
+"mcp_launcher.py" = "py38"
+
+[lint]
+select = ["F", "E", "W", "I", "UP", "B", "SIM", "C4"]

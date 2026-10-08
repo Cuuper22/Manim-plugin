@@ -1,528 +1,382 @@
-"""A complete Manim CE example for x[n+2] = p*x[n+1] + q*x[n].
+"""Generalized Fibonacci: every sequence with x_{n+2} = p x_{n+1} + q x_n, from data to roots.
 
-The scenes are intentionally standalone: `manim` can render this file without the
-director runtime.  The director metadata beside it adds narration, profiles,
-themes, expected outputs, and semantic beat IDs.
+Each scene renders with plain Manim (`manim -ql scenes.py GeneralizedFibonacci`). The theme and
+the symbol colors come from director.yaml; the plotted values come from data/sequences.csv.
 """
 
-from __future__ import annotations
-
 import csv
-import json
-import os
-from dataclasses import dataclass
+from itertools import pairwise, takewhile
 from pathlib import Path
-from typing import Sequence
 
-from manim import (
-    DEGREES,
-    DOWN,
-    FadeIn,
-    FadeOut,
-    GrowArrow,
-    LaggedStart,
-    LEFT,
-    Line,
-    MathTex,
-    MovingCameraScene,
-    RIGHT,
-    Restore,
-    Scene,
-    SVGMobject,
-    Text,
-    ThreeDAxes,
-    ThreeDScene,
-    TransformMatchingTex,
-    UP,
-    VGroup,
-    VMobject,
-    Write,
-    Arrow,
-    Axes,
-    Create,
-    Dot,
-    Dot3D,
-    RoundedRectangle,
-    config,
+from manim import *
+
+from manim_director_runtime import (
+    DirectedMovingCameraScene,
+    DirectedScene,
+    DirectedThreeDScene,
+    Region,
+    Role,
+)
+
+DATA = Path(__file__).resolve().parent / "data" / "sequences.csv"
+RECURRENCE = r"x_{n+2} = p\,x_{n+1} + q\,x_n"
+# Each sequence: its name, p, q, the seeds x_0 and x_1, and its color token in charts.
+FAMILY = (
+    ("Fibonacci", 1, 1, 0, 1, "primary"),
+    ("Lucas", 1, 1, 2, 1, "secondary"),
+    ("Pell", 2, 1, 0, 1, "accent"),
+    ("Oscillator", 1, -1, 0, 1, "success"),
 )
 
 
-ROOT = Path(__file__).resolve().parent
-
-
-@dataclass(frozen=True)
-class Palette:
-    background: str
-    foreground: str
-    muted: str
-    primary: str
-    secondary: str
-    accent: str
-    negative: str
-
-
-def load_palette() -> Palette:
-    theme_name = os.getenv("MANIM_DIRECTOR_THEME", "midnight")
-    themes = json.loads((ROOT / "themes.json").read_text(encoding="utf-8"))
-    selected = themes.get(theme_name, themes["midnight"])
-    return Palette(**selected["colors"])
-
-
-PALETTE = load_palette()
-
-
-def generalized_terms(
-    p: float, q: float, x0: float, x1: float, count: int
-) -> list[float]:
-    """Return exactly ``count`` terms of the generalized recurrence."""
-    if count < 0:
-        raise ValueError("count must be non-negative")
-    if count == 0:
-        return []
-    if count == 1:
-        return [x0]
+def terms(p, q, x0, x1, count):
     values = [x0, x1]
-    for _ in range(2, count):
+    while len(values) < count:
         values.append(p * values[-1] + q * values[-2])
-    return values
+    return values[:count]
 
 
-def compact_number(value: float) -> str:
-    rounded = round(value)
-    return str(rounded) if abs(value - rounded) < 1e-9 else f"{value:.2f}"
+def recorded_sequences():
+    """Sequence name -> its values in order of n, as data/sequences.csv records them."""
 
-
-def fit(mobject, *, width: float | None = None, height: float | None = None):
-    if width is not None and mobject.width > width:
-        mobject.scale_to_fit_width(width)
-    if height is not None and mobject.height > height:
-        mobject.scale_to_fit_height(height)
-    return mobject
-
-
-def sequence_row(
-    name: str,
-    parameters: str,
-    values: Sequence[float],
-    color: str,
-    width: float,
-) -> VGroup:
-    name_text = Text(name, font_size=28, color=color, weight="BOLD")
-    parameter_text = Text(parameters, font_size=19, color=PALETTE.muted)
-    terms_text = Text(
-        "  ·  ".join(compact_number(value) for value in values),
-        font_size=24,
-        color=PALETTE.foreground,
-    )
-    labels = VGroup(name_text, parameter_text).arrange(DOWN, aligned_edge=LEFT, buff=0.05)
-    row = VGroup(labels, terms_text).arrange(RIGHT, buff=0.45)
-    return fit(row, width=width)
-
-
-def load_sequence_data() -> dict[str, list[float]]:
-    rows: dict[str, list[tuple[int, float]]] = {}
-    with (ROOT / "data" / "sequences.csv").open(newline="", encoding="utf-8") as handle:
+    found = {}
+    with DATA.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
-            rows.setdefault(row["sequence"], []).append((int(row["n"]), float(row["value"])))
-    return {
-        name: [value for _, value in sorted(points)]
-        for name, points in rows.items()
-    }
+            found.setdefault(row["sequence"], {})[int(row["n"])] = float(row["value"])
+    return {name: [values[n] for n in sorted(values)] for name, values in found.items()}
 
 
-class DirectorScene:
-    """Small presentation helpers shared by the independently renderable scenes."""
+def family_table(scene):
+    """Name, coefficients and first terms of every sequence, in left-aligned columns."""
 
-    def apply_theme(self) -> None:
-        self.camera.background_color = PALETTE.background
-
-    @property
-    def portrait(self) -> bool:
-        return config.frame_height > config.frame_width
-
-    @property
-    def safe_width(self) -> float:
-        return config.frame_width * 0.88
-
-    def heading(self, text: str, subtitle: str | None = None) -> VGroup:
-        title = Text(text, color=PALETTE.foreground, font_size=42, weight="BOLD")
-        group = VGroup(title)
-        if subtitle:
-            sub = Text(subtitle, color=PALETTE.muted, font_size=23)
-            group.add(sub).arrange(DOWN, buff=0.12)
-        return fit(group, width=self.safe_width)
-
-    def wipe(self, run_time: float = 0.45) -> None:
-        visible = list(self.mobjects)
-        if visible:
-            self.play(*(FadeOut(mob) for mob in visible), run_time=run_time)
-
-class GeneralizedFibonacci(DirectorScene, MovingCameraScene):
-    """The narrative cut: intuition, data, state space, roots, and edge cases."""
-
-    def construct(self) -> None:
-        self.apply_theme()
-
-        self.next_section("hook")
-        knot = SVGMobject(str(ROOT / "assets" / "recurrence-knot.svg"))
-        knot.set_color(PALETTE.accent).set_height(1.15)
-        title = self.heading(
-            "Fibonacci is one point in a universe",
-            "Two coefficients turn one famous sequence into an entire family.",
-        )
-        recurrence = MathTex(
-            r"x_{n+2}", "=", "p", r"x_{n+1}", "+", "q", "x_n",
-            color=PALETTE.foreground,
-        )
-        recurrence.set_color_by_tex("p", PALETTE.primary)
-        recurrence.set_color_by_tex("q", PALETTE.secondary)
-        intro = VGroup(knot, title, recurrence).arrange(DOWN, buff=0.38)
-        fit(intro, width=self.safe_width, height=config.frame_height * 0.8)
-        self.play(FadeIn(knot, scale=0.7), Write(title[0]), run_time=1.2)
-        self.play(FadeIn(title[1], shift=UP * 0.15), Write(recurrence), run_time=1.3)
-        self.wait(1.6)
-
-        self.next_section("family")
-        self.wipe()
-        family_title = self.heading("Same machine. Very different behavior.")
-        family_title.to_edge(UP, buff=0.5)
-        examples = [
-            ("Fibonacci", "p=1, q=1; seeds 0, 1", (1, 1, 0, 1), PALETTE.primary),
-            ("Lucas", "p=1, q=1; seeds 2, 1", (1, 1, 2, 1), PALETTE.secondary),
-            ("Pell", "p=2, q=1; seeds 0, 1", (2, 1, 0, 1), PALETTE.accent),
-            ("Oscillator", "p=1, q=−1; seeds 0, 1", (1, -1, 0, 1), PALETTE.negative),
+    cells = []
+    for name, p, q, x0, x1, _ in FAMILY:
+        values = ",\\ ".join(str(v) for v in terms(p, q, x0, x1, 8))
+        cells += [
+            scene.text(name),
+            scene.math(rf"p = {p},\ q = {q}"),
+            scene.math(values + r",\ \dots"),
         ]
-        rows = VGroup(
-            *[
-                sequence_row(
-                    name,
-                    params,
-                    generalized_terms(*coeffs, count=8),
-                    color,
-                    self.safe_width,
-                )
-                for name, params, coeffs, color in examples
+    return VGroup(*cells).arrange_in_grid(cols=3, col_alignments="lll", buff=(0.7, 0.36))
+
+
+def chart_axes(scene, y_range, y_axis_config):
+    return Axes(
+        x_range=[0, 7, 1],
+        y_range=y_range,
+        x_length=9.4,
+        y_length=4.4,
+        tips=False,
+        axis_config={"color": scene.theme.muted, "font_size": 28},
+        x_axis_config={"numbers_to_include": range(8)},
+        y_axis_config=y_axis_config,
+    )
+
+
+def labeled_line(scene, axes, name, token, points):
+    """One sequence as dots joined by a line, named where the line ends."""
+
+    color = scene.theme.color(token)
+    line = axes.plot_line_graph(
+        [n for n, _ in points],
+        [value for _, value in points],
+        line_color=color,
+        stroke_width=3,
+        vertex_dot_radius=0.05,
+        vertex_dot_style={"fill_color": color, "stroke_width": 0},
+    )
+    label = scene.text(name, Role.LABEL, color=color)
+    return VGroup(line, label.next_to(axes.c2p(*points[-1]), RIGHT, buff=0.15))
+
+
+def sequence_chart(scene, ceiling=30):
+    """Every recorded sequence against n, up to the first value above `ceiling`."""
+
+    axes = chart_axes(scene, [-5, ceiling, 5], {"numbers_to_include": range(0, ceiling + 1, 10)})
+    recorded = recorded_sequences()
+    lines = [
+        labeled_line(
+            scene,
+            axes,
+            name,
+            token,
+            list(enumerate(takewhile(lambda v: v <= ceiling, recorded[name.lower()]))),
+        )
+        for name, *_, token in FAMILY
+    ]
+    return VGroup(axes, *lines)
+
+
+def growth_chart(scene):
+    """The growing sequences on a log scale, where exponential growth is a straight line."""
+
+    axes = chart_axes(
+        scene, [0, 2.5, 1], {"scaling": LogBase(custom_labels=True), "include_numbers": True}
+    )
+    recorded = recorded_sequences()
+    lines = [
+        labeled_line(
+            scene,
+            axes,
+            name,
+            token,
+            [(n, v) for n, v in enumerate(recorded[name.lower()]) if v > 0],
+        )
+        for name, *_, token in FAMILY
+        if name != "Oscillator"  # zero and negative terms have no logarithm
+    ]
+    return VGroup(axes, *lines)
+
+
+def recap_card(scene, symbols, meaning, token):
+    label = scene.text(meaning, color=scene.theme.muted)
+    body = VGroup(scene.math(symbols, font_size=72), label).arrange(DOWN, buff=0.35)
+    frame = RoundedRectangle(
+        width=3.8, height=2.6, corner_radius=0.22, stroke_color=scene.theme.color(token)
+    )
+    return VGroup(frame, body.move_to(frame))
+
+
+def cropped(plane, x_max, y_max, zoom):
+    """A copy of `plane` (axes, then the labels of their x and y axes) drawn only up to
+    (x_max, y_max), for a camera frame scaled by `zoom`: each axis stops there, its ticks beyond
+    shrink into its end, and its label rides along at the same size on screen."""
+
+    view = plane.copy()
+    axes, *labels = view
+    for axis, limit, label in zip((axes.x_axis, axes.y_axis), (x_max, y_max), labels, strict=True):
+        end = axis.n2p(limit)
+        for tick, number in zip(axis.ticks, axis.get_tick_range(), strict=True):
+            if number > limit:
+                tick.scale(0).move_to(end)
+        label.scale(zoom).move_to(end + zoom * (label.get_center() - axis.get_end()))
+        low, high = axis.x_range[:2]
+        axis.pointwise_become_partial(axis.copy(), 0, (limit - low) / (high - low))
+    return view
+
+
+class GeneralizedFibonacci(DirectedScene):
+    """The full cut: one rule, a family of sequences, their data, the matrix and its roots."""
+
+    def construct(self):
+        recurrence = self.math(RECURRENCE, font_size=56)
+        fibonacci = self.math(r"0,\ 1,\ 1,\ 2,\ 3,\ 5,\ 8,\ 13,\ \dots")
+        with self.beat("hook", transition="reveal", hold=3):
+            self.title("Fibonacci is one point in a family")
+            self.place(recurrence, fibonacci, buff=0.7)
+            self.caption("Pick p and q, then two seeds: every choice is a new sequence.")
+
+        with self.beat("family", hold=3.5):
+            self.place(recurrence, family_table(self), buff=0.6)
+            self.caption("The same rule with other coefficients and seeds.")
+
+        with self.beat("data", hold=3.5):
+            self.place(sequence_chart(self))
+            self.caption("Plotted from data/sequences.csv: three grow, one cycles.")
+
+        with self.beat("state-space", hold=2.5):
+            self.title("One step is one matrix")
+            self.caption("Stack two neighbors into a state: C moves the whole state forward.")
+            self.derive(
+                RECURRENCE,
+                (
+                    r"\begin{pmatrix} x_{n+2} \\ x_{n+1} \end{pmatrix}"
+                    r" = \underbrace{\begin{pmatrix} p & q \\ 1 & 0 \end{pmatrix}}_{C}"
+                    r"\begin{pmatrix} x_{n+1} \\ x_n \end{pmatrix}",
+                    "the same rule, for a state",
+                ),
+                pause=0.7,  # paced to narration.json, which these beats were timed for
+            )
+
+        with self.beat("roots", hold=2.5):
+            self.title("Its roots decide the long run")
+            self.caption("Usually the root of largest size sets the growth.")
+            self.derive(
+                (r"\det(C - \lambda I) = \lambda^2 - p\lambda - q = 0", "eigenvalues of C"),
+                (r"\lambda_\pm = \frac{p \pm \sqrt{p^2 + 4q}}{2}", "quadratic formula"),
+                (r"x_n = A\lambda_+^n + B\lambda_-^n", "when the roots differ"),
+                pause=0.7,
+            )
+
+        with self.beat("edge-case", transition="contrast", hold=2.5):
+            self.title("When the roots collide")
+            self.caption("A repeated root brings in a factor linear in n.")
+            self.derive(
+                (r"p^2 + 4q = 0", "one double root, p/2"),
+                (r"x_n = (A + Bn)\left(\frac{p}{2}\right)^n", "the general solution"),
+                (r"x_n = n", "p = 2, q = −1, seeds 0 and 1"),
+                pause=0.7,
+            )
+
+        with self.beat("recap", transition="chapter", hold=3):
+            self.title("Three choices make a sequence")
+            cards = [
+                recap_card(self, r"p,\ q", "the rule", "primary"),
+                recap_card(self, r"x_0,\ x_1", "the start", "secondary"),
+                recap_card(self, r"\lambda_\pm", "the long run", "accent"),
             ]
-        ).arrange(DOWN, aligned_edge=LEFT, buff=0.34)
-        rows.next_to(family_title, DOWN, buff=0.5)
-        fit(rows, height=config.frame_height * 0.64)
-        self.play(Write(family_title), run_time=0.7)
-        self.play(
-            LaggedStart(*(FadeIn(row, shift=RIGHT * 0.25) for row in rows), lag_ratio=0.18),
-            run_time=2.3,
-        )
-        self.wait(2.05)
+            self.place(*cards, direction=RIGHT, buff=0.5)
+            self.caption("Coefficients pick the rule, seeds the start, roots the long run.")
+        self.wait()
 
-        self.next_section("data")
-        self.wipe()
-        data = load_sequence_data()
-        chart_title = self.heading(
-            "Data exposes the behavior",
-            "Equal recurrence order does not mean equal growth.",
-        ).to_edge(UP, buff=0.35)
-        axes = Axes(
-            x_range=[0, 7, 1],
-            y_range=[-2, 31, 5],
-            x_length=min(9.5, self.safe_width),
-            y_length=min(4.6, config.frame_height * 0.53),
-            axis_config={"color": PALETTE.muted, "include_numbers": True, "font_size": 22},
-            tips=False,
-        )
-        axes.shift(DOWN * 0.35)
-        plotted = VGroup()
-        legend = VGroup()
-        direct_labels = VGroup()
-        colors = {
-            "fibonacci": PALETTE.primary,
-            "lucas": PALETTE.secondary,
-            "oscillator": PALETTE.negative,
-        }
-        for name in ("fibonacci", "lucas", "oscillator"):
-            values = data[name]
-            graph = axes.plot_line_graph(
-                x_values=list(range(len(values))),
-                y_values=values,
-                line_color=colors[name],
-                vertex_dot_style={"fill_color": colors[name], "stroke_width": 0},
-                vertex_dot_radius=0.055,
+
+class SequenceData(DirectedScene):
+    """The data on its own, then on a log scale, where growth rates become slopes."""
+
+    def construct(self):
+        linear = sequence_chart(self)
+        with self.beat("linear", transition="reveal", hold=2.5):
+            self.title("One CSV, four behaviors")
+            self.place(linear)
+            self.caption("Fibonacci, Lucas and Pell grow; the oscillator repeats every six steps.")
+
+        with self.beat("log", hold=3):
+            self.place(growth_chart(self))
+            self.caption("On a log scale growth is a slope: Fibonacci and Lucas share φ.")
+        self.wait()
+
+
+class CharacteristicRoots(DirectedScene):
+    """Where the characteristic equation comes from, and what a double root changes."""
+
+    def construct(self):
+        guess = self.math(r"x_n = \lambda^n", font_size=56)
+        with self.beat("guess", transition="reveal", hold=2):
+            self.title("Guess pure growth")
+            self.place(guess)
+            self.caption("Which sequences multiply by the same number at every step?")
+
+        with self.beat("derive", hold=2):
+            self.caption("Put the guess into the rule, divide by λⁿ, and solve.")
+            roots = self.derive(
+                r"\lambda^{n+2} = p\lambda^{n+1} + q\lambda^n",
+                (r"\lambda^2 = p\lambda + q", r"divide by $\lambda^n$"),
+                (r"\lambda_\pm = \frac{p \pm \sqrt{p^2 + 4q}}{2}", "quadratic formula"),
+                replaces=guess,
+                pause=0.7,
             )
-            plotted.add(graph)
-            endpoint_label = Text(name.title(), font_size=16, color=PALETTE.foreground)
-            endpoint_label.next_to(axes.c2p(len(values) - 1, values[-1]), RIGHT, buff=0.08)
-            direct_labels.add(endpoint_label)
-            key = VGroup(
-                Line(LEFT * 0.2, RIGHT * 0.2, color=colors[name], stroke_width=5),
-                Text(name.title(), font_size=19, color=PALETTE.foreground),
-            ).arrange(RIGHT, buff=0.1)
-            legend.add(key)
-        legend.arrange(RIGHT if not self.portrait else DOWN, buff=0.35)
-        legend.next_to(axes, DOWN, buff=0.18)
-        fit(
-            VGroup(axes, plotted, legend, direct_labels),
-            width=self.safe_width,
-            height=config.frame_height * 0.68,
-        )
-        self.play(Write(chart_title), Create(axes), run_time=1.1)
-        self.play(LaggedStart(*(Create(graph) for graph in plotted), lag_ratio=0.2), run_time=2.0)
-        self.play(FadeIn(legend), FadeIn(direct_labels), run_time=0.6)
-        self.camera.frame.save_state()
-        focus = axes.c2p(6, data["fibonacci"][6])
-        self.play(self.camera.frame.animate.scale(0.58).move_to(focus), run_time=0.9)
-        self.wait(0.45)
-        self.play(Restore(self.camera.frame), run_time=0.7)
 
-        self.next_section("state-space")
-        self.wipe()
-        state_title = self.heading("A recurrence is a matrix step").to_edge(UP, buff=0.55)
-        recurrence_state = MathTex(
-            r"\begin{pmatrix}x_{n+2}\\x_{n+1}\end{pmatrix}",
-            "=",
-            r"\underbrace{\begin{pmatrix}p&q\\1&0\end{pmatrix}}_{C}",
-            r"\begin{pmatrix}x_{n+1}\\x_n\end{pmatrix}",
-            color=PALETTE.foreground,
-        )
-        recurrence_state[2].set_color(PALETTE.accent)
-        recurrence_state = fit(recurrence_state, width=self.safe_width * 0.92)
-        state_caption = Text(
-            "The companion matrix C moves the entire two-number state forward.",
-            font_size=24,
-            color=PALETTE.muted,
-        )
-        state_caption = fit(state_caption, width=self.safe_width)
-        state_group = VGroup(recurrence_state, state_caption).arrange(DOWN, buff=0.5)
-        self.play(Write(state_title), run_time=0.7)
-        self.play(Write(recurrence_state), run_time=1.8)
-        self.play(FadeIn(state_caption, shift=UP * 0.15), run_time=0.7)
-        self.wait(1.05)
-
-        self.next_section("roots")
-        self.wipe()
-        root_title = self.heading("Growth lives in two characteristic roots").to_edge(UP, buff=0.5)
-        equation = MathTex(r"\lambda^2-p\lambda-q", "=", "0", color=PALETTE.foreground)
-        solution = MathTex(
-            r"\lambda_{\pm}", "=", r"\frac{p\pm\sqrt{p^2+4q}}{2}",
-            color=PALETTE.foreground,
-        )
-        closed = MathTex(
-            r"x_n", "=", r"A\lambda_+^n+B\lambda_-^n",
-            color=PALETTE.foreground,
-        )
-        closed[2].set_color(PALETTE.primary)
-        root_stack = VGroup(equation, solution, closed).arrange(DOWN, buff=0.48)
-        fit(root_stack, width=self.safe_width * 0.92, height=config.frame_height * 0.58)
-        self.play(Write(root_title), Write(equation), run_time=1.2)
-        self.play(TransformMatchingTex(equation.copy(), solution), run_time=1.4)
-        self.play(FadeIn(closed, shift=UP * 0.25), run_time=0.8)
-        dominance = Text(
-            "Usually, the root with the largest magnitude controls long-run growth.",
-            font_size=23,
-            color=PALETTE.muted,
-        )
-        fit(dominance, width=self.safe_width)
-        dominance.next_to(root_stack, DOWN, buff=0.4)
-        self.play(FadeIn(dominance), run_time=0.6)
-        self.wait(1.25)
-
-        self.next_section("edge-case")
-        self.wipe()
-        edge_title = self.heading("The repeated-root case changes the shape").to_edge(UP, buff=0.5)
-        discriminant = MathTex(r"p^2+4q=0", color=PALETTE.secondary)
-        repeated = MathTex(
-            r"x_n=(A+Bn)\left(\frac p2\right)^n",
-            color=PALETTE.foreground,
-        )
-        example = MathTex(
-            r"p=2,\ q=-1,\ (x_0,x_1)=(0,1)",
-            r"\quad\Longrightarrow\quad",
-            r"x_n=n",
-            color=PALETTE.foreground,
-        )
-        example[2].set_color(PALETTE.accent)
-        edge_group = VGroup(discriminant, repeated, example).arrange(DOWN, buff=0.5)
-        fit(edge_group, width=self.safe_width * 0.92)
-        self.play(Write(edge_title), Write(discriminant), run_time=1.0)
-        self.play(Write(repeated), run_time=0.9)
-        self.play(FadeIn(example, shift=UP * 0.2), run_time=0.8)
-        self.wait(1.35)
-
-        self.next_section("recap")
-        self.wipe()
-        recap_title = self.heading("The whole universe in four choices")
-        cards = VGroup(
-            self._recap_card("p, q", "the recurrence", PALETTE.primary),
-            self._recap_card("x₀, x₁", "the starting state", PALETTE.secondary),
-            self._recap_card("λ±", "growth or oscillation", PALETTE.accent),
-        )
-        cards.arrange(DOWN if self.portrait else RIGHT, buff=0.35)
-        fit(cards, width=self.safe_width, height=config.frame_height * 0.55)
-        group = VGroup(recap_title, cards).arrange(DOWN, buff=0.65)
-        self.play(Write(recap_title), run_time=0.8)
-        self.play(LaggedStart(*(FadeIn(card, shift=UP * 0.2) for card in cards), lag_ratio=0.2), run_time=1.5)
-        self.wait(1.45)
-
-    def _recap_card(self, symbol: str, label: str, color: str) -> VGroup:
-        box = RoundedRectangle(
-            corner_radius=0.18,
-            width=3.55,
-            height=1.55,
-            stroke_color=color,
-            stroke_width=3,
-            fill_color=PALETTE.background,
-            fill_opacity=0.7,
-        )
-        symbol_text = Text(symbol, font_size=34, color=color, weight="BOLD")
-        label_text = Text(label, font_size=19, color=PALETTE.foreground)
-        contents = VGroup(symbol_text, label_text).arrange(DOWN, buff=0.16)
-        contents.move_to(box)
-        return VGroup(box, contents)
+        distinct = VGroup(
+            self.text("two roots", Role.LABEL), self.math(r"x_n = A\lambda_+^n + B\lambda_-^n")
+        ).arrange(DOWN, buff=0.3)
+        repeated = VGroup(
+            self.text("one double root", Role.LABEL), self.math(r"x_n = (A + Bn)\lambda^n")
+        ).arrange(DOWN, buff=0.3)
+        with self.beat("cases", hold=3):
+            self.place(roots.lines[-1], region=Region.TOP)
+            self.place(distinct, repeated, region=Region.BOTTOM, direction=RIGHT, buff=1.5)
+            self.caption("Two roots give two modes; a double root needs an extra factor n.")
+        self.wait()
 
 
-class SequenceData(DirectorScene, Scene):
-    """A data-only chapter demonstrating deterministic CSV-backed plotting."""
+class CompanionMatrix(DirectedMovingCameraScene):
+    """The Fibonacci states under C: the camera starts close, then pulls back to the trend."""
 
-    def construct(self) -> None:
-        self.apply_theme()
-        self.next_section("csv-to-chart")
-        data = load_sequence_data()
-        title = self.heading("One CSV, four recurrence behaviors").to_edge(UP)
-        axes = Axes(
-            x_range=[0, 7, 1],
-            y_range=[-2, 32, 5],
-            x_length=min(self.safe_width, 10),
-            y_length=5,
-            tips=False,
-            axis_config={"color": PALETTE.muted, "include_numbers": True, "font_size": 22},
-        ).shift(DOWN * 0.35)
-        palette = [PALETTE.primary, PALETTE.secondary, PALETTE.accent, PALETTE.negative]
-        graphs = VGroup()
-        direct_labels = VGroup()
-        for (name, values), color in zip(data.items(), palette):
-            display_values = values if max(values) <= 31 else values[:6]
-            graph = axes.plot_line_graph(
-                x_values=list(range(len(display_values))),
-                y_values=display_values,
-                line_color=color,
-                vertex_dot_style={"fill_color": color, "stroke_width": 0},
-                vertex_dot_radius=0.06,
-            )
-            graphs.add(graph)
-            label = Text(name.title(), font_size=16, color=PALETTE.foreground)
-            label.next_to(
-                axes.c2p(len(display_values) - 1, display_values[-1]),
-                RIGHT,
+    def walk(self, axes):
+        """Dots at the states (x_{n+1}, x_n) and an arrow for every step between them."""
+
+        states = [axes.c2p(later, earlier) for earlier, later in pairwise(terms(1, 1, 0, 1, 9))]
+        dots = [Dot(state, radius=0.06, color=self.theme.primary) for state in states]
+        arrows = [
+            Arrow(
+                start,
+                end,
                 buff=0.08,
+                stroke_width=3,
+                max_tip_length_to_length_ratio=0.12,
+                color=self.theme.accent,
             )
-            direct_labels.add(label)
-        fit(VGroup(axes, graphs, direct_labels), width=self.safe_width, height=config.frame_height * 0.75)
-        self.play(Write(title), Create(axes), run_time=1.0)
-        self.play(LaggedStart(*(Create(graph) for graph in graphs), lag_ratio=0.22), run_time=2.4)
-        self.play(FadeIn(direct_labels), run_time=0.5)
-        self.wait(0.8)
+            for start, end in pairwise(states)
+        ]
+        return dots, arrows
 
+    def construct(self):
+        step = self.math(
+            r"\begin{pmatrix} x_{n+2} \\ x_{n+1} \end{pmatrix}"
+            r" = \begin{pmatrix} 1 & 1 \\ 1 & 0 \end{pmatrix}"
+            r"\begin{pmatrix} x_{n+1} \\ x_n \end{pmatrix}",
+            font_size=56,
+        )
+        with self.beat("step", transition="reveal", hold=2):
+            self.title("Fibonacci, one matrix step at a time")
+            self.place(step)
+            self.caption("With p = q = 1 the companion matrix is all ones but one.")
 
-class CompanionMatrix(DirectorScene, MovingCameraScene):
-    """A geometric state-space walk for the companion matrix."""
-
-    def construct(self) -> None:
-        self.apply_theme()
-        self.next_section("state-walk")
-        title = self.heading("Each term is a point moving through state space").to_edge(UP)
         axes = Axes(
-            x_range=[-1, 14, 2],
-            y_range=[-1, 22, 4],
-            x_length=min(8.2, self.safe_width * 0.68),
-            y_length=5.2,
+            x_range=[0, 22, 2],
+            y_range=[0, 14, 2],
+            x_length=9,
+            y_length=4.4,
             tips=False,
-            axis_config={"color": PALETTE.muted, "include_numbers": True, "font_size": 19},
-        ).shift(DOWN * 0.35)
-        values = generalized_terms(1, 1, 0, 1, 8)
-        states = [(values[n], values[n + 1]) for n in range(len(values) - 1)]
-        dots = VGroup(*(Dot(axes.c2p(x, y), radius=0.07, color=PALETTE.primary) for x, y in states))
-        arrows = VGroup(
-            *(
-                Arrow(dots[n].get_center(), dots[n + 1].get_center(), buff=0.09, color=PALETTE.accent)
-                for n in range(len(dots) - 1)
+            axis_config={"color": self.theme.muted},
+        )
+        plane = VGroup(
+            axes,
+            self.math("x_{n+1}").next_to(axes.x_axis, RIGHT),
+            self.math("x_n").next_to(axes.y_axis, UP),
+        )
+        camera = self.camera.frame
+        with self.beat("walk", hold=1):
+            self.place(plane)
+            self.caption("Each arrow is one multiplication by C.")
+            dots, arrows = self.walk(axes)
+            whole, zoom = plane.copy(), 0.32
+            camera.save_state()
+            # Close in on the first states. The axes stop inside the close-up, clear of the
+            # frame's edges, the title and the caption.
+            close_up = axes.c2p(0, 0) + 1.8 * RIGHT + 0.55 * UP
+            self.play(
+                camera.animate.scale(zoom).move_to(close_up),
+                Transform(plane, cropped(plane, 6, 4, zoom)),
+                FadeIn(dots[0]),
+                run_time=1.5,
             )
-        )
-        labels = VGroup(
-            *(
-                MathTex(rf"({int(x)},{int(y)})", font_size=24, color=PALETTE.foreground)
-                .next_to(dot, UP, buff=0.08)
-                for dot, (x, y) in zip(dots, states)
-            )
-        )
-        fit(VGroup(axes, dots, arrows, labels), width=self.safe_width, height=config.frame_height * 0.74)
-        self.play(Write(title), Create(axes), run_time=1.0)
-        self.play(FadeIn(dots[0]), FadeIn(labels[0]), run_time=0.4)
-        for index, arrow in enumerate(arrows):
-            self.play(GrowArrow(arrow), FadeIn(dots[index + 1]), FadeIn(labels[index + 1]), run_time=0.38)
-        self.camera.frame.save_state()
-        self.play(self.camera.frame.animate.scale(0.52).move_to(dots[-1]), run_time=0.9)
-        self.wait(0.4)
-        self.play(Restore(self.camera.frame), run_time=0.8)
+            for n, (arrow, dot) in enumerate(zip(arrows, dots[1:], strict=True)):
+                self.play(GrowArrow(arrow), FadeIn(dot), run_time=0.7)
+                if n == 3:
+                    self.play(Restore(camera), Transform(plane, whole), run_time=2)
+
+        golden = (1 + 5**0.5) / 2
+        trend = DashedLine(axes.c2p(0, 0), axes.c2p(22, 22 / golden), color=self.theme.muted)
+        with self.beat("trend", keep=[plane, *dots, *arrows], hold=3):
+            self.caption("The states line up along a line of slope 1/φ, where φ² = φ + 1.")
+            self.play(Create(trend), run_time=1.5)
+        self.wait()
 
 
-class CharacteristicRoots(DirectorScene, MovingCameraScene):
-    """The distinct-root derivation with an explicit repeated-root branch."""
+class StateOrbit3D(DirectedThreeDScene):
+    """The oscillator's states, followed through time, wind around the time axis."""
 
-    def construct(self) -> None:
-        self.apply_theme()
-        self.next_section("derive")
-        title = self.heading("Solve the recurrence by asking for pure growth").to_edge(UP)
-        ansatz = MathTex(r"x_n=\lambda^n", color=PALETTE.primary)
-        substitution = MathTex(
-            r"\lambda^{n+2}=p\lambda^{n+1}+q\lambda^n",
-            color=PALETTE.foreground,
-        )
-        polynomial = MathTex(r"\lambda^2-p\lambda-q=0", color=PALETTE.secondary)
-        roots = MathTex(
-            r"\lambda_{\pm}=\frac{p\pm\sqrt{p^2+4q}}2",
-            color=PALETTE.accent,
-        )
-        stack = VGroup(ansatz, substitution, polynomial, roots).arrange(DOWN, buff=0.36)
-        fit(stack, width=self.safe_width, height=config.frame_height * 0.67)
-        self.play(Write(title), FadeIn(ansatz), run_time=1.0)
-        self.play(TransformMatchingTex(ansatz.copy(), substitution), run_time=1.0)
-        self.play(TransformMatchingTex(substitution.copy(), polynomial), run_time=1.0)
-        self.play(TransformMatchingTex(polynomial.copy(), roots), run_time=1.0)
-        self.next_section("branch")
-        branch = VGroup(
-            Text("distinct roots", font_size=22, color=PALETTE.primary),
-            MathTex(r"A\lambda_+^n+B\lambda_-^n", color=PALETTE.foreground),
-            Text("repeated root", font_size=22, color=PALETTE.secondary),
-            MathTex(r"(A+Bn)\lambda^n", color=PALETTE.foreground),
-        ).arrange(DOWN, buff=0.18)
-        fit(branch, width=self.safe_width * 0.7)
-        branch.to_edge(DOWN, buff=0.25)
-        self.play(FadeIn(branch, shift=UP * 0.2), run_time=1.0)
-        self.wait(0.8)
-
-
-class StateOrbit3D(DirectorScene, ThreeDScene):
-    """A light 3D camera scene: an oscillatory recurrence becomes a state helix."""
-
-    def construct(self) -> None:
-        self.apply_theme()
-        self.next_section("orbit")
-        title = self.heading("Oscillation is a closed state orbit through time")
-        title.to_edge(UP)
-        self.add_fixed_in_frame_mobjects(title)
+    def construct(self):
         axes = ThreeDAxes(
-            x_range=[0, 8, 1],
+            x_range=[0, 12, 1],
             y_range=[-1.5, 1.5, 1],
             z_range=[-1.5, 1.5, 1],
-            x_length=7.2,
-            y_length=3.5,
-            z_length=3.5,
-            axis_config={"color": PALETTE.muted},
+            x_length=9,
+            y_length=3.4,
+            z_length=3.4,
+            tips=False,
+            axis_config={"color": self.theme.muted},
         )
-        values = generalized_terms(1, -1, 0, 1, 10)
-        points = [axes.c2p(n, values[n], values[n + 1]) for n in range(9)]
-        path = VMobject(color=PALETTE.accent, stroke_width=5).set_points_as_corners(points)
-        dots = VGroup(*(Dot3D(point=point, radius=0.065, color=PALETTE.primary) for point in points))
-        self.set_camera_orientation(phi=68 * DEGREES, theta=-48 * DEGREES, zoom=0.9)
-        self.play(Write(title), Create(axes), run_time=1.0)
-        self.play(Create(path), LaggedStart(*(FadeIn(dot) for dot in dots), lag_ratio=0.08), run_time=2.2)
+        values = terms(1, -1, 0, 1, 14)
+        dots = VGroup(
+            *(
+                Dot3D(axes.c2p(n, values[n], values[n + 1]), radius=0.07, color=self.theme.primary)
+                for n in range(13)
+            )
+        )
+        amplitude = 2 / np.sqrt(3)  # x_n = amplitude * sin(n pi / 3) solves the recurrence
+        orbit = axes.plot_parametric_curve(
+            lambda t: [t, amplitude * np.sin(t * PI / 3), amplitude * np.sin((t + 1) * PI / 3)],
+            t_range=[0, 12],
+            color=self.theme.accent,
+        )
+        self.set_camera_orientation(phi=72 * DEGREES, theta=-72 * DEGREES, zoom=1.05)
+        with self.beat("orbit", transition="reveal"):
+            self.title("The oscillator turns in circles")
+            self.caption("Each pair of neighbors winds once around the time axis every six steps.")
+            self.play(Create(axes), run_time=1.2)
+            self.play(Create(orbit), LaggedStart(*(FadeIn(d) for d in dots)), run_time=3)
         self.begin_ambient_camera_rotation(rate=0.12)
-        self.wait(2.0)
+        self.wait(5)
         self.stop_ambient_camera_rotation()

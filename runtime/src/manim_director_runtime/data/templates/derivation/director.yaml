@@ -1,0 +1,25 @@
+version: 1
+project:
+  name: {{name}}
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: QuadraticFormula
+theme: {{theme}}
+storyboard:
+  - id: claim
+    intent: introduce
+    audience_question: Which x solve ax^2 + bx + c = 0?
+    takeaway: Any quadratic with a nonzero leading coefficient.
+  - id: complete
+    intent: prove
+    audience_question: How can the left side become a perfect square?
+    takeaway: Adding (b/2a)^2 to both sides completes the square.
+  - id: solve
+    intent: prove
+    audience_question: How does a square give x?
+    takeaway: Two square roots give two solutions.
+  - id: discriminant
+    intent: recap
+    audience_question: What decides how many real solutions there are?
+    takeaway: The sign of b^2 - 4ac.

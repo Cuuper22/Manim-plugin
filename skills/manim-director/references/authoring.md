@@ -1,138 +1,189 @@
-# Authoring and direction
+# Authoring with DirectedScene
 
-Read this reference to create, substantially edit, or explain scenes. Prefer ordinary Manim primitives and compact reusable components; add abstractions only when they remove real repetition or isolate renderer/version differences.
+Read this before writing or substantially changing a scene. Everything here is plain Manim
+underneath: helpers return ordinary mobjects, and any Manim code mixes in. Plan the film first
+with [viewer.md](viewer.md); build it from the components and devices in [kit.md](kit.md).
 
-## Direct a change in the viewer, not a sequence of slides
+## Scene classes and theme
 
-A strong explanatory sequence usually has these beats:
+```python
+from manim import *
+from manim_director_runtime import DirectedScene
 
-1. Establish the question or surprising behavior.
-2. Give the viewer a concrete object to track.
-3. Change one idea at a time and preserve visual continuity.
-4. State the general rule after the viewer has evidence for it.
-5. Stress the rule with an edge case or counterexample.
-6. Resolve the opening question and leave a stable final frame.
 
-This is a palette, not a mandatory six-part template. Skip beats that do not help the requested experience.
+class Roots(DirectedScene):
+    theme = "paper"                       # optional; else director.yaml `theme`, else midnight
+    symbols = {r"\lambda": "accent", "p": "primary", "q": "#D1495B"}
+```
 
-For each beat, record this compact contract before writing Manim code:
+- `DirectedScene`, `DirectedMovingCameraScene` (title and caption stay put on screen while the
+  camera pans or zooms; placed content moves with the scene) and `DirectedThreeDScene` (placed
+  objects are fixed in frame as overlays). The `Directed` mixin combines with other scene bases:
+  `class Zoom(Directed, ZoomedScene)`.
+- Themes: `midnight` (default, dark), `paper` (light, serif), `chalkboard` (dark green), `contrast`
+  (black, maximum contrast). Tokens: `background`, `foreground`, `primary`, `secondary`, `accent`,
+  `muted`, `success`. During `construct`, `self.theme.primary` etc. are `#RRGGBB` strings. A variant:
+  `theme = themes.theme("paper").with_colors(accent="#D1495B")` after
+  `from manim_director_runtime import themes`.
+- `symbols` maps a TeX token to a color token, `#RRGGBB` or a Manim color (`YELLOW`), merged
+  over `direction.symbols` in `director.yaml`. Every occurrence of the token is colored, including
+  inside `\frac{..}{..}`; control words are single tokens (`"r"` does not touch `\rho`).
+- Plain `VMobject`s (dots and rectangles too) default to the theme's foreground, highlight shapes
+  and animations (`SurroundingRectangle`, `Indicate`, `Flash`) to its accent, and `Text` to its
+  font for the render.
 
-- `intent`: what this beat does in the argument—introduce, explain, compare, reveal, prove, or recap;
-- `audience_question`: the question now alive in the viewer's mind;
-- `takeaway`: the one new inference the viewer should be able to make when the beat ends;
-- `focus`: the single hero object, plus any retained context that keeps it meaningful;
-- `visual_metaphor`: the stable visual model being extended, if one is in use;
-- `transition`: why the next state follows—continuation, contrast, reveal, or chapter; and
-- `max_active`: the maximum number of independently attention-seeking objects on screen.
+## Text and math helpers
 
-Also record entering/exiting objects, narration/caption cue, and approximate duration. A beat is overloaded when its takeaway needs "and" to join unrelated claims, when two objects both need to be the hero, or when prose explains a relationship the image could perform. Split it or redesign the visual operation. Titles, labels, and captions orient the viewer; they do not substitute for the explanation.
-
-## Establish a visual language once
-
-Choose a small, semantic system before the first scene and reuse it across chapters:
-
-- one visual spine the viewer can keep recognizing;
-- one meaning per accent color, spatial direction, and recurring shape;
-- one type family with role-based sizes rather than per-object font choices;
-- one spacing scale, safe frame, stroke hierarchy, and corner treatment; and
-- one motion grammar that makes transformations predictable without making them monotonous.
-
-Use at most three prominent text sizes in one frame. The hero may be large; supporting labels must be visibly subordinate. Do not make every statement a card, surround every object with a container, or decorate empty space. Repetition should build recognition. Variation should mark a genuine change in meaning.
-
-## Scene and component boundaries
-
-- Use a scene for a coherent chapter that can render independently.
-- Use named sections for previewable beats inside a scene.
-- Keep data preparation, symbolic computation, layout, and animation direction separable.
-- Put reusable visual behavior in components; keep one-off choreography close to its scene.
-- Give meaningful mobjects semantic names. Avoid index-heavy manipulation whose meaning breaks after a small edit.
-- Centralize theme tokens, safe areas, typography, and renderer compatibility helpers.
-- Use `ValueTracker` and updaters for genuinely continuous relationships. Remove or suspend updaters when their beat ends.
-- Seed randomness and make time-dependent simulations reproducible.
-
-## Mathematical and data integrity
-
-- Validate algebraic equivalence for important equation morphs when symbolic checking is available.
-- Use an explicit token map for transformations whose visual correspondence matters. Fall back to a fade/replace when token topology is ambiguous.
-- Sample plotted functions before animation. Split domains at poles, holes, branch cuts, or other discontinuities.
-- Keep exact values exact in calculations; round only at the display boundary and state the display rule.
-- Verify displayed summaries against source data. Keep units attached through conversion and label axes with units.
-- Distinguish proof, derivation, numerical evidence, intuition, and conjecture in both narration and imagery.
-- Add focused assertions for important values. Do not create tests whose only job is to confirm the scene contains a particular string.
-
-## Compose through an allocated stage
-
-- Reserve a safe margin from every output edge. Include platform overlays when targeting vertical social video.
-- Allocate header, content (or its non-overlapping left/right split), and caption lanes before placing objects. A lane has one owner unless the beat explicitly declares an overlay relationship.
-- Establish a clear primary object. De-emphasize retained context rather than deleting it without cause.
-- Register independent objects with the stage so layout can preserve gaps, reflow a row into a column, or retire a previous occupant. Do not solve collisions by incidental z-order or by repeatedly calling `shift`.
-- Keep captions in their reserved lane and fit the content region above it. A caption must never cover the visual evidence it describes.
-- Prefer replacing the prior beat's hero in place over accumulating completed explanations around the frame.
-- When content does not fit, simplify, wrap within its region, change the layout, or split the beat. Shrinking below the type role's readable minimum is not a layout strategy.
-- Give dense formulas and novel diagrams enough reading time; speed is not the same as energy.
-- Keep z-order intentional. Avoid depending on incidental creation order when overlaps are meaningful.
-- Use moving cameras sparingly and verify the final camera frame at section boundaries.
-
-Use motion to express the relationship between states:
-
-| Meaning | Direction |
+| Call | Notes |
 |---|---|
-| Same object, changed state | Morph or travel continuously; preserve identity and color role. |
-| Cause produces consequence | Use a `reveal`; draw the consequence from, along, or immediately after the cause. |
-| Contrast | Keep a shared anchor and swap or separate the differing parts. |
-| Added evidence | Introduce beside the claim while retaining the referenced object as context. |
-| Scope change within a chapter | Continue with a restrained camera move or scale change, then restabilize the frame. |
-| New chapter | Use a `chapter` reset or crossfade and deliberately establish a new visual spine. |
+| `self.title(text)` | Header lane; replaces the previous title with a cross-fade. |
+| `self.caption(text)` | Caption lane, wrapped to at most two lines; `caption(None)` clears it. |
+| `self.text(text, role=...)` | Roles `title`, `heading`, `body` (default), `caption`, `label` (small, muted). |
+| `self.tex(*strings)` | Text-mode LaTeX; `$...$` parts get symbol colors. |
+| `self.math(*strings, **kw)` | `MathTex` with symbol colors. One string is split into atoms so `TransformMatchingTex` matches terms between steps; strings containing `&`, `\\`, `\over` or `{{ }}` stay whole. `font_size=72` for a hero formula. |
 
-Decorative motion must not compete with the current inference. Avoid unexplained teleportation, a parade of unrelated entrance effects, and camera moves used merely to add energy. Creativity comes from a precise visual metaphor and revealing it well—not from maximizing animation variety.
+Prefer one `self.math(...)` per expression over hand-split `MathTex` pieces.
 
-### Use the direction runtime as the default
+## Layout: regions and place
 
-For substantial new Manim CE scenes, import the direction primitives from `manim_director_runtime` and subclass `DirectedScene`; use `DirectedMovingCameraScene` or `DirectedThreeDScene` only when the visual model needs that camera. Construct `DesignSystem` from the project's `direction` mapping. Keep the scene source ordinary Python and drop down to native Manim whenever a custom construction needs it.
+Regions (inside `safe_area`): `header` and `caption` lanes, `content` between them, `left`/`right`
+and `top`/`bottom` halves of `content`, and `safe` (everything, for one hero visual).
+`self.region("left")` returns its `Rect` (`left`, `right`, `top`, `bottom`, `width`, `height`,
+`center`).
 
-- Create copy and formula objects through `styled_text` and `styled_math` so `TypeScale` roles—not ad hoc numbers—control hierarchy.
-- Use `place` for a named `Region` and `layout` for related objects. These return explicit placements before motion begins.
-- Describe the mental-state change with `Beat`, then stage it with `self.beat(beat, *mobjects, keys=(...), region="content", flow="column")`. The method applies the transition, replaces or retains stage occupants, and records the current audience-state beat.
-- Use `focus`/`release_focus` to retain context without letting it compete. Use `caption` for the reserved caption lane.
-- Use `clear_stage` for a real chapter break, not between every sentence. Continuations and causal steps should preserve the identity of objects the viewer is tracking.
+`self.place(*mobjects, region="content", anchor=None, direction=DOWN, buff=0.4, replaces=None,
+min_scale=0.5)`:
 
-`CompositionLayout` prevents independent placements from occupying the same stage space and prefers fitting, reflow, or a clear layout error over silent overlap. The layout engine is a baseline; the author still chooses the meaningful visual metaphor, hierarchy, and reveal.
+- Arranges the mobjects along `direction`, shrinks them to fit if needed (never enlarges), and
+  stages them; they enter at the next animation with the beat's transition.
+- `anchor=(x, y)` in -1..1 moves the group toward the region's edges (`(0, -1)`: bottom edge).
+- On-stage objects passed in glide to their new place, so `place(VGroup(old, new))` gathers them.
+- `replaces=old` morphs an on-stage object into the new one (identity carried).
+- To choose the entrance yourself, play it right after placing: `self.place(eq)` then
+  `self.play(Write(eq))`.
+- Refusals are `CompositionError`s, raised before anything moves:
+  - "would overlap X": place both in one call, use another region, or start a new beat so X leaves.
+  - "needs 0.42x to fit ... below the readable minimum": shorten or split, or use a larger region.
+  - "replaces=X is not on stage": X already left; keep it in the beat, or place instead.
 
-## Text and formulas
+## Beats
 
-Use Pango text for ordinary copy, `MathTex`/`Tex` for LaTeX mathematics, and Typst only when the selected runtime supports it. Detect fonts before final layout and define a portable fallback. Wrap prose to an allocated region rather than shrinking it below the minimum readable size.
+`with self.beat(id, *, focus=None, transition="continue", keep=(), hold=None, run_time=None,
+intent=None, question=None, takeaway=None, aha=False):`
 
-For right-to-left or mixed-direction text, render a representative production-resolution frame early. Treat localization as layout work: translated strings may require new line breaks, positions, timing, and camera framing.
+- Entering a beat moves nothing. At its first animation (or its end), one transition happens:
+  objects on stage that were not kept or placed again leave, kept and replaced ones glide or morph,
+  staged ones enter. Title and caption persist across beats until a `chapter`.
+- Transitions: `continue` (default; kept objects glide, the rest fades), `contrast` (old slides out
+  as new slides in), `reveal` (new objects are drawn; good for a first beat), `chapter` (clear
+  everything, title and caption included).
+- `keep=[...]` lists what survives. Anything you `self.play`ed or `self.add`ed in an earlier beat
+  leaves unless kept; graphs with updaters (`always_redraw`) need their pieces kept too.
+- `focus=obj` dims everything else once `obj` is on stage (it must reach the stage in that beat).
+  `run_time` is the transition's length.
+- `hold` is the stillness at the end. Leave it unset: the beat then holds until its last change
+  and its caption have been read at the viewer's `level`, and at least 2 s (general) after a
+  result: `aha=True` or intent `reveal`, `prove` or `recap`. A number sets it exactly.
+- `aha=True` marks the one beat where the viewer gets the idea; mirror it in the storyboard. Give
+  its key motion a `run_time` of 1.5–3 s.
+- Devices and `derive` wait until the last change has been read before they play. A plain
+  `self.play`, or a `place` in mid-beat, does not: call `self.pause()` first when it follows a
+  reveal.
+- The last frame stays still for the viewer's `final_hold` (3 s at general). The class attribute
+  `final_hold = 0` turns that off, for a film that loops.
+- Beats do not nest. Each beat is a Manim section (`render` with `sections: true` writes one video
+  per beat) and a timeline entry with its file and line; QA findings and contact sheets name it.
+- Keep the storyboard in `director.yaml` in sync: same ids, in order, one `aha: true`.
 
-## Assets, narration, and captions
+## Mathematics
 
-- Keep original assets in `assets/`; normalize derivatives in the cache.
-- Preserve SVG aspect ratio and view box; recolor through theme tokens when appropriate.
-- Record source/attribution for third-party assets.
-- Prefer exact native diagrams for mathematical information. Generated imagery may illustrate, but must not encode exact values or geometry.
-- Make narration cues drive beat holds. Do not accelerate speech to rescue an overloaded scene.
-- Export SRT/VTT from the same cue timeline used by the animation.
-- Avoid overlapping cues and keep burned captions inside the profile safe area.
-- Ensure the silent version still communicates the core sequence through labels and visual continuity.
+`self.derive(*steps, region="content", in_place=False, notes="auto", run_time=None, pause=None,
+replaces=None, min_scale=0.5) -> Derivation`
 
-## Natural-language edits
+- Steps are TeX strings or `MathTex`, optionally `(tex, "note")`. The first is written (or morphed
+  from `replaces=`), each next line transforms from a copy of the previous one with
+  `TransformMatchingTex`, lines stack with their first relation (`=`, `<`, `\le`, ...) in one
+  column, so `&` is not needed (a top-level `&` is dropped; continue with `= ...`). Notes are `label`-role text; `$...$` in a note is TeX (`r"divide by $\lambda^n$"`).
+  `notes="right"` puts them in a column beside the lines, `"below"` under each line, and `"auto"`
+  picks whichever needs less shrinking (below in a 9:16 frame).
+- `in_place=True` transforms one line through all steps (notes appear below and swap).
+- Leave `pause` unset: after each step the derivation waits for that step's reading time at the
+  viewer's `level`.
+- Returns a `VGroup` with `.lines` and `.notes`. Continue a derivation in the next beat with
+  `derive(..., replaces=steps.lines[-1])`, or promote the result with
+  `place(self.math(..., font_size=72), replaces=steps.lines[-1])`.
+- Terms match when their atoms are textually identical; keep notation consistent between steps
+  (`\frac{b}{2a}` everywhere, not `b/(2a)` in one line) so terms travel instead of fading.
 
-Resolve an edit into one of: storyboard, source, theme, timing, narration, caption, profile, or asset. Patch all coupled representations, but no others. Examples:
+`self.term(eq, r"\frac{b}{2a}", occurrence=None)` returns the glyphs of a sub-term for your own
+animations (`self.play(Indicate(self.term(eq, "x^2")))`). `self.highlight(eq, *terms,
+color="accent", box=False)` recolors sub-terms (or all of `eq`) and with `box=True` backs each
+occurrence with a soft box that moves and leaves with `eq` (`.boxes` on the result); `color=None`
+keeps symbol colors and only boxes. `self.tag(eq, label=None)` numbers the equation at the right edge of its region
+(`(1)`, `(2)`, ...) and follows it; it raises if `eq` or a derivation note leaves no room. `self.focus(*mobjects)` and
+`self.unfocus()` dim and restore everything else.
 
-- “Hold the roots longer” changes the relevant cue/beat duration and downstream timestamps.
-- “Make it vertical” adds or updates a responsive output/layout variant; it does not crop 16:9.
-- “Keep my code, fix the camera” limits changes to camera and any unavoidable framing helpers.
-- “Replace circles with vectors” updates the semantic component and affected transforms, not unrelated scenes.
+## Frame shape and vertical video
 
-After applying a semantic patch, preview only the invalidated scenes or sections plus their transition boundaries.
+The frame's aspect ratio comes from `manim.cfg`. A `DirectedScene` whose frame and pixel shapes
+differ raises `CompositionError` rather than render squashed. For 9:16, start from
+`init(template="vertical_short")` or copy its `manim.cfg` (`pixel_width`, `pixel_height`,
+`frame_rate`), portrait `profiles` and the wider `safe_area` for phone overlays.
 
-## Explain mode
+## Direction
 
-Explain at the user's altitude and in execution order:
+How to plan for a viewer (the viewer model, budgets, beat template, patterns, anti-patterns and
+critique) is in [viewer.md](viewer.md). Match motion to meaning:
 
-1. What the viewer sees and why it matters.
-2. Which scene/section creates that behavior.
-3. The few Manim mechanisms responsible—mobjects, transforms, trackers, updaters, or camera.
-4. Any surprising lifecycle, renderer, or timing behavior.
+| Relationship | How |
+|---|---|
+| Same object, new state | `replaces=`, `derive`, or a kit verb (`apply`, `refine`, `repair`); keep its color. |
+| Cause and consequence | A `reveal` beat, or `derive` notes naming the step. |
+| Contrast | A `contrast` beat, or `left`/`right` at the same scale with a shared anchor kept. |
+| Evidence for a claim | Place it beside the claim; keep the claim. |
+| A term and its picture | `link` them; label the picture in the term's color. |
+| New chapter | `chapter`, then a new title. |
 
-Use project inventory and narrow source spans. Do not dump the full source or turn a simple explanation into an API catalog.
+- Use exact Manim constructions for mathematical content (plots, geometry, data); split plotted
+  domains at poles and discontinuities (`FunctionPlot(breaks=...)`); round only for display.
+- Seed randomness (`project.seed`), and keep data in files under `data/` or `sources/` so the scene
+  reads it instead of hard-coding numbers.
+
+## Starting points
+
+Start from the closest finished film rather than a blank file: `init(template=...)` creates a
+project from any row below, and `init(scene_template=...)` adds its scene to an existing project.
+The five gallery films are built on the kit, plan for their viewer, and pass `qa` with no
+findings. The other five templates predate the kit, so write their `brief.viewer` when you adopt
+one.
+
+| Start from | Pattern | Topic | What it shows |
+|---|---|---|---|
+| `picture_to_formula` gallery | picture to formula | odd numbers make squares | `DotArray`, `show`, `link`, `derive`, `ask` |
+| `concrete_first` gallery | concrete first | a positive test result | `DotArray` selections, `link`, `focus`, `intro` level |
+| `contrast` gallery | before and after | shears keep area | `VectorGrid`, `Readout`, `reserve` |
+| `misconception` gallery | misconception, then repair | √(a + b) | `misconception`, `Figure`, `link` |
+| `zoom_detail` gallery | zoom in on a detail | sin x ≈ x | `FunctionPlot.inset`, `secant`, `Readout` |
+| `explainer` template | picture, then algebra | geometric series | regions, `keep=` |
+| `derivation` template | step-by-step algebra | quadratic formula | multi-beat `derive`, `replaces`, `tag`, `highlight` |
+| `geometry` template | rearranging shapes | Pythagoras | shapes beside an equation |
+| `graph` template | a value tracked on a graph | a derivative | `ValueTracker`, `always_redraw` across beats |
+| `vertical_short` template | 9:16 for phones | triangular numbers | portrait `manim.cfg`, profiles, safe area |
+
+## Editing existing scenes
+
+- Change only the requested scenes and the coupled files (storyboard, captions, profiles). Preserve
+  hand-written code outside that scope.
+- Map a request to its layer: "hold the roots longer" is a beat's `hold`; "make it vertical" is a
+  `vertical_short`-style config plus portrait profiles, not a crop; "keep my code, fix the camera"
+  touches only camera calls.
+- Plain Manim scenes need not be converted. Convert to `DirectedScene` only when the user wants its
+  layout, beats or derivations; it is a base-class change plus replacing manual positioning.
+- Manim Community only: `from manimlib import ...` (ManimGL) projects must be ported by hand, scene
+  by scene, rendering each one before moving on.
+
+## Explaining a scene
+
+Explain in execution order: what the viewer sees and why, which beat or lines produce it, then the
+few Manim mechanisms involved (mobjects, transforms, trackers, updaters, camera). Read only the
+relevant lines; render only if the question is about how it looks.

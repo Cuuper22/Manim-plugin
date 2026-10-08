@@ -1,148 +1,256 @@
+"""The `discover` operation: an AST-only scan of scene classes, sections and beats."""
+
 from __future__ import annotations
 
 import ast
+import io
+import tokenize
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING
 
-from .errors import DirectorError
-from .util import confined_path, project_root
+from .errors import io_error
+from .model import Finding, RuntimeArtifact, Severity, SourceLocation
+from .tasks import DiscoverTask
 
+if TYPE_CHECKING:
+    from .protocol import Context
 
-SCENE_BASES = {
-    "Scene", "MovingCameraScene", "ThreeDScene", "SpecialThreeDScene", "VectorScene",
-    "LinearTransformationScene", "ZoomedScene", "VoiceoverScene", "Slide",
-    "DirectedScene", "DirectedMovingCameraScene", "DirectedThreeDScene",
-}
-
-
-def _name(node: ast.expr) -> str:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return f"{_name(node.value)}.{node.attr}"
-    if isinstance(node, ast.Subscript):
-        return _name(node.value)
-    return ""
-
-
-def _literal(node: ast.AST | None) -> Any:
-    if node is None:
-        return None
-    try:
-        return ast.literal_eval(node)
-    except (ValueError, TypeError):
-        return None
-
-
-def _call_info(node: ast.Call) -> dict[str, Any]:
-    return {
-        "name": _name(node.func),
-        "line": node.lineno,
-        "end_line": getattr(node, "end_lineno", node.lineno),
-        "positional_count": len(node.args),
-        "keywords": {kw.arg or "**": _literal(kw.value) for kw in node.keywords},
+MANIM_SCENE_BASES = frozenset(
+    {
+        "Scene",
+        "MovingCameraScene",
+        "ThreeDScene",
+        "SpecialThreeDScene",
+        "VectorScene",
+        "LinearTransformationScene",
+        "ZoomedScene",
+        "VoiceoverScene",
+        "Slide",
     }
+)
+# Scene classes exported by manim_director_runtime; kept literal so discover never imports Manim.
+DIRECTOR_SCENE_BASES = frozenset(
+    {"DirectedScene", "DirectedMovingCameraScene", "DirectedThreeDScene"}
+)
+MAX_SCENES = 2000
+MAX_FINDINGS = 200
 
 
-def _scene_info(node: ast.ClassDef, source_path: Path) -> dict[str, Any]:
-    construct = next((n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "construct"), None)
-    calls = [_call_info(n) for n in ast.walk(construct or node) if isinstance(n, ast.Call)]
-    assignments: list[dict[str, Any]] = []
-    for item in ast.walk(construct or node):
-        if isinstance(item, (ast.Assign, ast.AnnAssign)):
-            targets = item.targets if isinstance(item, ast.Assign) else [item.target]
-            value = item.value
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    assignments.append({
-                        "name": target.id,
-                        "line": item.lineno,
-                        "constructor": _name(value.func) if isinstance(value, ast.Call) else None,
-                    })
-    sections: list[dict[str, Any]] = []
-    for call in calls:
-        if call["name"].endswith("next_section"):
-            original = next((n for n in ast.walk(construct or node) if isinstance(n, ast.Call) and n.lineno == call["line"]), None)
-            section_name = _literal(original.args[0]) if original and original.args else None
-            sections.append({"name": section_name, "line": call["line"]})
-    return {
-        "name": node.name,
-        "file": str(source_path),
-        "line": node.lineno,
-        "end_line": getattr(node, "end_lineno", node.lineno),
-        "bases": [_name(base) for base in node.bases],
-        "docstring": ast.get_docstring(node),
-        "has_construct": construct is not None,
-        "construct_line": construct.lineno if construct else None,
-        "play_calls": [c for c in calls if c["name"].endswith(".play") or c["name"] == "play"],
-        "wait_calls": [c for c in calls if c["name"].endswith(".wait") or c["name"] == "wait"],
-        "sections": sections,
-        "objects": assignments,
-        "call_count": len(calls),
-    }
+@dataclass(frozen=True, slots=True)
+class SectionInfo:
+    name: str | None
+    line: int
 
 
-def inspect_file(path: Path) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class BeatSpan:
+    id: str | None
+    line: int
+    end_line: int
+
+
+@dataclass(frozen=True, slots=True)
+class SceneInfo:
+    name: str
+    file: str
+    line: int
+    end_line: int
+    construct_line: int | None
+    bases: list[str]
+    doc: str | None
+    theme: str | None
+    sections: list[SectionInfo]
+    beats: list[BeatSpan]
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoverResult:
+    truncated: bool  # the engine adds `files` and may also set this when it capped the file list
+    scenes: list[SceneInfo]
+    findings: list[Finding]
+    artifacts: list[RuntimeArtifact]
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedFile:
+    path: Path
+    classes: list[ast.ClassDef]
+
+
+def discover(task: DiscoverTask, ctx: Context) -> DiscoverResult:
+    parsed: list[ParsedFile] = []
+    findings: list[Finding] = []
+    for path in task.files:
+        outcome = parse_module(path, ctx.relative(path))
+        if isinstance(outcome, Finding):
+            findings.append(outcome)
+        else:
+            parsed.append(
+                ParsedFile(path, [n for n in outcome.body if isinstance(n, ast.ClassDef)])
+            )
+    scene_names = scene_class_names(parsed)
+    scenes = [
+        _scene_info(node, ctx.relative(item.path))
+        for item in parsed
+        for node in item.classes
+        if node.name in scene_names
+    ]
+    truncated = len(scenes) > MAX_SCENES or len(findings) > MAX_FINDINGS
+    return DiscoverResult(
+        truncated=truncated,
+        scenes=scenes[:MAX_SCENES],
+        findings=findings[:MAX_FINDINGS],
+        artifacts=[],
+    )
+
+
+def parse_module(path: Path, file: str) -> ast.Module | Finding:
+    """Parse one file, or describe why it cannot be parsed; `file` is its public path."""
+
     try:
-        source = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise DirectorError("source_encoding", f"Scene file is not valid UTF-8: {path}") from exc
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise io_error(path, exc) from exc
     try:
-        tree = ast.parse(source, filename=str(path))
+        # As Python reads source: a UTF-8 BOM or a PEP 263 coding line decides.
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
+        source = raw.decode(encoding)
+    except (SyntaxError, UnicodeDecodeError, LookupError):
+        return Finding(
+            code="source_encoding",
+            severity=Severity.ERROR,
+            message="The file is not valid UTF-8 (or the encoding its coding line names).",
+            hint="Save the file as UTF-8.",
+            location=SourceLocation(file=file, line=1),
+        )
+    try:
+        return ast.parse(source, filename=str(path))
     except SyntaxError as exc:
-        return {
-            "file": str(path), "valid_python": False, "scenes": [],
-            "syntax_error": {"message": exc.msg, "line": exc.lineno, "column": exc.offset, "text": exc.text},
-        }
-    imports: list[dict[str, Any]] = []
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            imports.extend({"module": alias.name, "name": None, "alias": alias.asname, "line": node.lineno} for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imports.extend({"module": node.module, "name": alias.name, "alias": alias.asname, "line": node.lineno} for alias in node.names)
-    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
-    scene_names: set[str] = set()
+        message, line, column = exc.msg, exc.lineno or 1, exc.offset
+    except ValueError as exc:  # NUL bytes, on Python 3.11
+        message, line, column = str(exc), 1, None
+    return Finding(
+        code="python_syntax",
+        severity=Severity.ERROR,
+        message=message,
+        hint="Fix the syntax error before rendering.",
+        location=SourceLocation(file=file, line=line, column=column),
+    )
+
+
+def scene_class_names(parsed: list[ParsedFile]) -> set[str]:
+    """Classes deriving, directly or through other listed classes, from a known scene base."""
+
+    known = set(MANIM_SCENE_BASES | DIRECTOR_SCENE_BASES)
+    found: set[str] = set()
+    classes = [node for item in parsed for node in item.classes]
     changed = True
     while changed:
         changed = False
-        for cls in classes:
-            bases = {_name(base).split(".")[-1] for base in cls.bases}
-            if cls.name not in scene_names and (bases & SCENE_BASES or bases & scene_names):
-                scene_names.add(cls.name)
+        for node in classes:
+            if node.name not in found and {_final_name(b) for b in node.bases} & (known | found):
+                found.add(node.name)
                 changed = True
-    scenes = [_scene_info(cls, path) for cls in classes if cls.name in scene_names]
-    return {
-        "file": str(path), "valid_python": True, "syntax_error": None,
-        "scenes": scenes, "imports": imports, "line_count": source.count("\n") + 1,
-    }
+    return found
 
 
-def discover(params: Mapping[str, Any]) -> dict[str, Any]:
-    root = project_root(params)
-    source_dir = confined_path(root, str(params.get("source_dir", "scenes")))
-    if not source_dir.exists():
-        return {"project_root": str(root), "source_dir": str(source_dir), "files": [], "scenes": [], "errors": []}
-    pattern = str(params.get("pattern", "*.py"))
-    recursive = bool(params.get("recursive", True))
-    paths = sorted(source_dir.rglob(pattern) if recursive else source_dir.glob(pattern))
-    reports = [inspect_file(path) for path in paths if path.is_file()]
-    return {
-        "project_root": str(root), "source_dir": str(source_dir),
-        "files": [str(p) for p in paths if p.is_file()],
-        "scenes": [scene for report in reports for scene in report["scenes"]],
-        "errors": [{"file": report["file"], **report["syntax_error"]} for report in reports if report["syntax_error"]],
-    }
+def _scene_info(node: ast.ClassDef, file: str) -> SceneInfo:
+    construct = next(
+        (
+            item
+            for item in node.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name == "construct"
+        ),
+        None,
+    )
+    doc = ast.get_docstring(node)
+    return SceneInfo(
+        name=node.name,
+        file=file,
+        line=node.lineno,
+        end_line=node.end_lineno or node.lineno,
+        construct_line=construct.lineno if construct else None,
+        bases=[_dotted_name(base) for base in node.bases],
+        doc=doc.strip().splitlines()[0][:200] if doc and doc.strip() else None,
+        theme=_theme_literal(node),
+        sections=_sections(node),
+        beats=_beats(node),
+    )
 
 
-def inspect(params: Mapping[str, Any]) -> dict[str, Any]:
-    root = project_root(params)
-    path = confined_path(root, str(params.get("path", params.get("scene_file", "scenes/main.py"))), must_exist=True)
-    if path.suffix != ".py":
-        raise DirectorError("invalid_scene_file", "Scene inspection requires a Python file")
-    report = inspect_file(path)
-    scene_filter = params.get("scene")
-    if scene_filter:
-        report["scenes"] = [scene for scene in report["scenes"] if scene["name"] == scene_filter]
-        if not report["scenes"]:
-            raise DirectorError("scene_not_found", f"Scene {scene_filter!r} was not found in {path}")
-    return report
+def _theme_literal(node: ast.ClassDef) -> str | None:
+    for item in node.body:
+        if isinstance(item, ast.Assign):
+            targets, value = item.targets, item.value
+        elif isinstance(item, ast.AnnAssign) and item.value is not None:
+            targets, value = [item.target], item.value
+        else:
+            continue
+        named = any(isinstance(t, ast.Name) and t.id == "theme" for t in targets)
+        if named and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return None
+
+
+def _sections(node: ast.ClassDef) -> list[SectionInfo]:
+    calls = [
+        call
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call) and _is_self_method(call.func, "next_section")
+    ]
+    calls.sort(key=lambda call: (call.lineno, call.col_offset))
+    return [SectionInfo(name=_label(call, "name"), line=call.lineno) for call in calls]
+
+
+def _beats(node: ast.ClassDef) -> list[BeatSpan]:
+    spans = []
+    for statement in ast.walk(node):
+        if not isinstance(statement, ast.With):
+            continue
+        for item in statement.items:
+            call = item.context_expr
+            if isinstance(call, ast.Call) and _is_self_method(call.func, "beat"):
+                spans.append(
+                    BeatSpan(
+                        id=_label(call, "id"),
+                        line=statement.lineno,
+                        end_line=statement.end_lineno or statement.lineno,
+                    )
+                )
+    spans.sort(key=lambda span: span.line)
+    return spans
+
+
+def _is_self_method(func: ast.expr, name: str) -> bool:
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == name
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "self"
+    )
+
+
+def _label(call: ast.Call, keyword: str) -> str | None:
+    """The literal first positional argument or `keyword=` string of a call, if any."""
+
+    candidates = [*call.args[:1], *(kw.value for kw in call.keywords if kw.arg == keyword)]
+    for value in candidates:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return None
+
+
+def _final_name(node: ast.expr) -> str:
+    return _dotted_name(node).rsplit(".", 1)[-1]
+
+
+def _dotted_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_dotted_name(node.value)}.{node.attr}"
+    if isinstance(node, ast.Subscript):
+        return _dotted_name(node.value)
+    return ""

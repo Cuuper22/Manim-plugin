@@ -1,194 +1,201 @@
-use anyhow::{Context, Result};
-use blake3::Hasher;
-use manim_director_core::{DirectorSpec, JobRequest, SPEC_FILE};
-use serde_json::Value;
-use std::{fs::File, io::Read, path::Path};
-use walkdir::{DirEntry, WalkDir};
+use manim_director_core::{files, DirectorSpec, Task};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::{self, Read},
+    path::Path,
+};
 
-const CACHE_SCHEMA: &[u8] = b"manim-director-cache-v2\0";
+const CACHE_SCHEMA: &[u8] = b"manim-director-cache-v3\0";
 
-pub fn project_fingerprint(root: &Path, request: &JobRequest) -> Result<String> {
-    let mut hasher = Hasher::new();
-    hasher.update(CACHE_SCHEMA);
-    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
-    for variable in [
-        "MANIM_DIRECTOR_RUNTIME_VERSION",
-        "MANIM_DIRECTOR_PYTHON",
-        "MANIM_DIRECTOR_RUNTIME_MODULE",
-        "MANIM_VERSION",
-        "FFMPEG_VERSION",
-    ] {
-        hasher.update(variable.as_bytes());
-        if let Ok(value) = std::env::var(variable) {
-            hasher.update(value.as_bytes());
-        }
+/// A cache key plus the per-file content hashes it was built from, so the
+/// scene file's revision comes from the same read.
+#[derive(Debug, Clone)]
+pub struct Fingerprint {
+    pub value: String,
+    files: BTreeMap<String, String>,
+}
+
+impl Fingerprint {
+    /// blake3 hex of a project-relative file that went into the key.
+    pub fn file_hash(&self, relative: &str) -> Option<&str> {
+        self.files.get(relative).map(String::as_str)
     }
-    hasher.update(request.operation.runtime_method().as_bytes());
-    let params = canonical_json(&request.params);
-    hasher.update(serde_json::to_string(&params)?.as_bytes());
+}
 
-    let selected_scene = request
-        .params
-        .get("scene_file")
-        .and_then(Value::as_str)
-        .map(normalize_relative);
-    let known_scene_files = DirectorSpec::load(root)
-        .map(|spec| {
-            spec.scenes
-                .into_iter()
-                .filter_map(|scene| scene.file)
-                .map(|path| normalize_relative(&path))
-                .collect::<std::collections::HashSet<_>>()
-        })
-        .unwrap_or_default();
+/// OPS §1.5: schema ∥ engine version ∥ runtime identity ∥ op ∥ task (minus
+/// `out_dir`/`fresh`) ∥ path and content of every relevant project file.
+pub fn fingerprint(
+    root: &Path,
+    spec: &DirectorSpec,
+    runtime_identity: &str,
+    task: &Task,
+) -> io::Result<Fingerprint> {
+    Fingerprint::new(runtime_identity, task, input_hashes(root, spec, task)?)
+}
 
-    let mut files = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(relevant_entry)
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| {
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("py") {
-                return true;
-            }
-            let relative = entry
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace('\\', "/");
-            match &selected_scene {
-                Some(selected) if known_scene_files.contains(&relative) => &relative == selected,
-                _ => true,
-            }
-        })
-        .collect::<Vec<_>>();
-    files.sort_by(|a, b| a.path().cmp(b.path()));
-
-    for entry in files {
-        let relative = entry.path().strip_prefix(root).unwrap_or(entry.path());
-        hasher.update(relative.to_string_lossy().as_bytes());
-        let mut file = File::open(entry.path())
-            .with_context(|| format!("reading {}", entry.path().display()))?;
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
+impl Fingerprint {
+    /// The key over files hashed earlier by [`input_hashes`].
+    pub fn new(
+        runtime_identity: &str,
+        task: &Task,
+        files: BTreeMap<String, String>,
+    ) -> io::Result<Self> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(CACHE_SCHEMA);
+        hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+        hasher.update(b"\0");
+        hasher.update(runtime_identity.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(task.operation().as_str().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&serde_json::to_vec(&task.cache_identity())?);
+        for (relative, hash) in &files {
+            hasher.update(relative.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(hash.as_bytes());
         }
+        Ok(Self {
+            value: hasher.finalize().to_hex().to_string(),
+            files,
+        })
+    }
+}
+
+/// blake3 hex of every project file `task` reads, by project-relative path.
+pub fn input_hashes(
+    root: &Path,
+    spec: &DirectorSpec,
+    task: &Task,
+) -> io::Result<BTreeMap<String, String>> {
+    let paths = match task {
+        Task::Discover(discover) => discover.files.clone(),
+        _ => {
+            let mut paths = spec.ignore_set(root).files_under(root);
+            paths.retain(|path| files::has_extension(path, files::RENDER_INPUTS));
+            paths
+        }
+    };
+    let mut hashes = BTreeMap::new();
+    for path in paths {
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        hashes.insert(relative, file_revision(&path)?);
+    }
+    Ok(hashes)
+}
+
+/// blake3 hex of a file's bytes.
+pub fn file_revision(path: &Path) -> io::Result<String> {
+    let mut hasher = blake3::Hasher::new();
+    let mut file = File::open(path)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
     }
     Ok(hasher.finalize().to_hex().to_string())
-}
-
-fn normalize_relative(value: &str) -> String {
-    value.trim_start_matches("./").replace('\\', "/")
-}
-
-fn relevant_entry(entry: &DirEntry) -> bool {
-    if entry.depth() == 0 {
-        return true;
-    }
-    let name = entry.file_name().to_string_lossy();
-    if entry.file_type().is_dir() {
-        return !matches!(
-            name.as_ref(),
-            ".git"
-                | ".manim-director"
-                | "media"
-                | "output"
-                | "dist"
-                | "target"
-                | "__pycache__"
-                | ".venv"
-                | "venv"
-        );
-    }
-    name == SPEC_FILE
-        || matches!(
-            entry.path().extension().and_then(|value| value.to_str()),
-            Some(
-                "py" | "svg"
-                    | "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "webp"
-                    | "csv"
-                    | "json"
-                    | "tex"
-                    | "typ"
-                    | "md"
-                    | "wav"
-                    | "mp3"
-                    | "ogg"
-                    | "ttf"
-                    | "otf"
-                    | "cfg"
-                    | "toml"
-                    | "lock"
-                    | "txt"
-                    | "yaml"
-                    | "yml"
-            )
-        )
-}
-
-fn canonical_json(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut entries = map.iter().collect::<Vec<_>>();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key.clone(), canonical_json(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
-        other => other.clone(),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manim_director_core::Operation;
-    use serde_json::json;
+    use manim_director_core::{DiscoverTask, MediaFormat, RenderSettings, StillTask};
     use std::fs;
 
-    #[test]
-    fn fingerprint_changes_for_source_but_not_output() {
+    fn still(out_dir: &str, fresh: bool) -> Task {
+        Task::Still(StillTask {
+            scene: Some("A".into()),
+            files: vec![],
+            settings: RenderSettings {
+                format: MediaFormat::Png,
+                ..crate::db::testing::draft()
+            },
+            media_dir: "/m".into(),
+            out_dir: out_dir.into(),
+            fresh,
+        })
+    }
+
+    fn project() -> (tempfile::TempDir, DirectorSpec) {
         let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("director.yaml"),
+            "version: 1\nproject:\n  name: Demo\n",
+        )
+        .unwrap();
         fs::create_dir_all(dir.path().join("scenes")).unwrap();
-        fs::create_dir_all(dir.path().join("output")).unwrap();
         fs::write(dir.path().join("scenes/a.py"), "x=1").unwrap();
-        let request = JobRequest {
-            operation: Operation::Render,
-            params: json!({"scene":"A"}),
-            priority: 0,
-        };
-        let first = project_fingerprint(dir.path(), &request).unwrap();
-        fs::write(dir.path().join("output/a.mp4"), "ignored").unwrap();
-        assert_eq!(first, project_fingerprint(dir.path(), &request).unwrap());
-        fs::write(dir.path().join("scenes/a.py"), "x=2").unwrap();
-        assert_ne!(first, project_fingerprint(dir.path(), &request).unwrap());
+        let spec = DirectorSpec::load(dir.path()).unwrap();
+        (dir, spec)
     }
 
     #[test]
-    fn fingerprint_includes_config_and_dependency_locks() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("manim.cfg"), "frame_rate = 30").unwrap();
-        fs::write(dir.path().join("uv.lock"), "v1").unwrap();
-        let request = JobRequest {
-            operation: Operation::Inspect,
-            params: json!({}),
-            priority: 0,
-        };
-        let first = project_fingerprint(dir.path(), &request).unwrap();
-        fs::write(dir.path().join("manim.cfg"), "frame_rate = 60").unwrap();
-        assert_ne!(first, project_fingerprint(dir.path(), &request).unwrap());
+    fn renders_key_on_inputs_but_not_outputs_or_job_dirs() {
+        let (dir, spec) = project();
+        let root = dir.path();
+        let first = fingerprint(root, &spec, "py", &still("/a", false)).unwrap();
+        assert_eq!(
+            first.value,
+            fingerprint(root, &spec, "py", &still("/b", true))
+                .unwrap()
+                .value
+        );
+        fs::create_dir_all(root.join("output")).unwrap();
+        fs::write(root.join("output/a.mp4"), "ignored").unwrap();
+        fs::create_dir_all(root.join(".manim-director/artifacts/x")).unwrap();
+        fs::write(root.join(".manim-director/artifacts/x/a.png"), "ignored").unwrap();
+        assert_eq!(
+            first.value,
+            fingerprint(root, &spec, "py", &still("/a", false))
+                .unwrap()
+                .value
+        );
+        assert!(first.file_hash("scenes/a.py").is_some());
+
+        fs::write(root.join("scenes/a.py"), "x=2").unwrap();
+        assert_ne!(
+            first.value,
+            fingerprint(root, &spec, "py", &still("/a", false))
+                .unwrap()
+                .value
+        );
+        fs::write(root.join("manim.cfg"), "[CLI]\nframe_rate = 30").unwrap();
+        fs::write(root.join("radius.npy"), "data").unwrap();
+        let with_cfg = fingerprint(root, &spec, "py", &still("/a", false)).unwrap();
+        assert!(with_cfg.file_hash("manim.cfg").is_some());
+        assert!(with_cfg.file_hash("radius.npy").is_some());
+        assert_ne!(
+            with_cfg.value,
+            fingerprint(root, &spec, "other-runtime", &still("/a", false))
+                .unwrap()
+                .value
+        );
+    }
+
+    #[test]
+    fn discover_keys_only_on_its_files() {
+        let (dir, spec) = project();
+        let root = dir.path();
+        let task = Task::Discover(DiscoverTask {
+            files: vec![root.join("scenes/a.py")],
+        });
+        let first = fingerprint(root, &spec, "py", &task).unwrap();
+        fs::write(root.join("notes.md"), "unrelated").unwrap();
+        assert_eq!(
+            first.value,
+            fingerprint(root, &spec, "py", &task).unwrap().value
+        );
+        fs::write(root.join("scenes/a.py"), "x=3").unwrap();
+        assert_ne!(
+            first.value,
+            fingerprint(root, &spec, "py", &task).unwrap().value
+        );
     }
 }

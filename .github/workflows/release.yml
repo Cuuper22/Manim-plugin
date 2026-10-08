@@ -16,15 +16,6 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: workbench/package-lock.json
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
-        with:
-          toolchain: 1.98.0
-          components: rustfmt
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -39,27 +30,13 @@ jobs:
           fi
           python scripts/release_integrity.py versions --tag "$release_tag"
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
-      - name: Verify release integrity code
-        run: python -m unittest discover -s scripts -p 'test_*.py'
-      - name: Verify workbench
-        run: npm ci && npm test && npm run build
-        working-directory: workbench
-      - name: Verify Rust engine
-        run: |
-          cargo fmt --all -- --check
-          cargo test --workspace --locked
-      - name: Install Manim system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libcairo2-dev libpango1.0-dev pkg-config
-      - name: Verify complete Python runtime
-        run: |
-          python -m pip install --constraint runtime/constraints-full.txt -e 'runtime[full,test]'
-          python -m pytest runtime/tests -q
-          python -c 'import manim; print(manim.__version__)'
+
+  checks:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
 
   binaries:
-    needs: verify
+    needs: [verify, checks]
     strategy:
       fail-fast: false
       matrix:

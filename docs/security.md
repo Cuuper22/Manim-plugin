@@ -1,155 +1,98 @@
-# Security model
+# Security
 
-Manim Director is a local developer tool for trusted projects. Its Rust API, MCP server, and Python bridge reduce accidental path and process hazards, but rendering a Manim scene executes Python. **The project source is code, not passive media, and the runtime is not a sandbox.**
+**A Manim scene is a Python program, and rendering it runs it with your permissions.** Manim
+Director keeps other people and web pages out of your engine and keeps its own reads and writes
+inside the project, but it is not a sandbox: once a scene is imported it can do anything you can.
+Render projects you wrote or reviewed; render anything else in a container or VM.
 
-That boundary determines the safe deployment model:
+## The local server
 
-- Run projects you authored or reviewed under your normal user account.
-- Keep the server on loopback unless another security boundary provides authentication and authorization.
-- Use a container, VM, or disposable OS account for untrusted scene code.
-- Do not expect path checks around Director-managed inputs/outputs to constrain arbitrary Python once Manim imports the scene.
+`serve` and `open` bind `127.0.0.1` by default. Without `--allow-remote` they bind only `127.0.0.1`
+or `::1`, the loopback addresses the Host check accepts.
 
-## Trust boundaries
+- **Token.** Each start creates a random 32-byte token. Every `/api` request needs it, as a Bearer
+  header or as the `mdsess_<port>` cookie (HttpOnly, SameSite=Strict) that the printed sign-in link
+  sets. It is printed at startup and never written to the database or logs. `open` hands it to the
+  browser through a mode-0600 launcher file that is deleted after 30 seconds, not on a command line
+  other users can read.
+- **DNS rebinding.** The `Host` header must be `127.0.0.1`, `localhost` or `[::1]` with the bound
+  port.
+- **Cross-site requests.** Writes need `Content-Type: application/json`, which a browser cannot send
+  cross-site without a preflight that is never answered; a present `Origin` must match the host. No
+  CORS headers are sent.
+- **Browser hardening.** The workbench page has a strict Content-Security-Policy and
+  `frame-ancestors 'none'`. Served files carry `sandbox` CSP, `nosniff` and
+  `Cross-Origin-Resource-Policy: same-origin`, so an SVG from the project cannot run script with
+  your cookie. PDFs are always downloads.
 
-```mermaid
-flowchart TD
-    A["Local user / Codex client"] --> B["Rust API + MCP"]
-    B --> C["Project-scoped scheduler"]
-    C --> D["Python bridge process"]
-    D --> E["Scene code + external render tools"]
-    B --> F["Project state and outputs"]
-```
+The token grants everything the API can do, which includes editing scenes and running them: treat
+the link like a password. `--allow-remote` also disables the Host check and sends the token over
+plain HTTP; it prints a warning saying so. To reach a remote machine, prefer an SSH tunnel to its
+loopback port.
 
-| Boundary | Trust assumption |
-|---|---|
-| CLI and stdio MCP caller | Same user and already authorized to operate on the project. |
-| REST/SSE caller | Local workbench or explicitly trusted integration. There is no built-in user authentication. |
-| `director.yaml`, scene source, and local plugins | Trusted executable project content. |
-| Imported raster/audio/video/data | Untrusted data handled by Pillow/FFmpeg/etc.; keep those dependencies patched. |
-| Imported SVG | Untrusted XML; Director removes active nodes/attributes before a normalized copy is used. |
-| Export consumer | Must still treat included Python source as executable code. |
+## What the API can touch
 
-## Implemented controls
+- **Paths** are project-relative. `..`, absolute paths, backslashes, NUL and hidden components are
+  refused, and symlinks are resolved and must stay inside the project. The only hidden directory
+  that can be read is `.manim-director/artifacts/`; `state.db`, logs, undo snapshots and Manim's
+  media cache are never served.
+- **Edits** go to text files only (`py json yaml yml toml md tex typ vtt srt txt`, up to 2 MiB),
+  require the revision that was read, are validated before they land, and keep the previous content
+  in `.manim-director/undo/`.
+- **Served files** are limited to media, captions, archives and text types.
+- **Operations**: HTTP cannot run `init` or `ingest` (ingest reads paths outside the project).
+  Outputs (`export`, `captions`) cannot be written into `.manim-director/` or the media directory.
 
-### Project confinement
+The CLI and MCP server act for the local user who started them and have the same project rules,
+except that `ingest` (through `submit` in MCP) may read any file that user can read. It refuses
+files that look like credentials (`.env`, `*.pem`, `*.key`, `id_rsa*`, `.netrc`, `.git-credentials`,
+`.pgpass`, ...), anything under `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
+`.config/gcloud` or `.config/gh`, and kernel pseudo-files under `/proc`, `/sys` and `/dev`. Writes
+from `ingest` and `init` resolve symlinks and stay inside the project. On Unix, project discovery
+never climbs into a directory anyone may write to, so another user's `/tmp/director.yaml` cannot
+become your project.
 
-The server canonicalizes its project root once and scopes all jobs to it. An `/api/state?project=` candidate must canonicalize to exactly that root. MCP also canonicalizes one project root at startup and exposes no tool for switching it.
+## Processes
 
-The Python runtime's `confined_path` resolves a candidate, then requires it to remain under the canonical project root. It is used for scene files, media directories, output destinations, manifests, caption files, QA inputs, temporary frames, and export paths. Absolute paths are accepted only when they resolve inside the project. A traversal or symlink escape fails with `path_outside_project`.
+The engine starts Python, and the runtime starts FFmpeg and TeX, with argument lists, never through a
+shell. Each request runs in a fresh process group that is killed on cancel, timeout (30 minutes by
+default) or engine shutdown, children included; on POSIX a worker whose engine dies kills its own
+group. A memory limit is available on Unix (`MANIM_DIRECTOR_MEMORY_MB`) but off by default.
+Request, response, log and artifact sizes are bounded. None of this contains hostile Python; it
+keeps honest mistakes from taking the machine down.
 
-The versioned project spec separately rejects absolute project directories and any directory containing a `..` component. Inventory walks do not follow directory symlinks. Export skips symlinked files.
+The runtime inherits the engine's environment, so a scene can read any secret in it. Start the
+engine with only the variables the project needs.
 
-Asset import is the deliberate exception: the `source` of an `assets add/normalize` operation may be a user-selected file outside the project, because importing it is the operation. Its destination is still confined to the project.
+## Data at rest
 
-### Process execution
+- `.manim-director/state.db` holds job requests, results and every line the scene printed to stderr.
+  Review it before sharing it.
+- `export --format zip` leaves out `.manim-director/`, the output and media directories, version
+  control and environment directories, files with the credential names `ingest` refuses, and files
+  reached through a symlink that leaves the project or lands on a hidden path. It does include your
+  scene source, assets and ingested sources: check licenses and confidential material before you
+  publish it.
+- `ingest --normalize` removes `script` and `foreignObject` elements, event-handler attributes and
+  remote or `javascript:` links from SVGs. It is meant for rendering, not as a general HTML sanitizer.
 
-Rust starts Python with a structured executable/argument list; Python starts Manim, FFmpeg, ffprobe, LaTeX/Typst helpers, and other media tools with argument arrays. Neither layer builds a shell command string, so scene names and file paths are not interpreted by a shell.
+## Network
 
-Render inputs are constrained before execution:
+The engine and runtime make no network requests of their own. Scene code, Manim plugins and package
+installs can. `install.py` downloads the release archive over HTTPS and checks its SHA-256 against
+the release's `SHA256SUMS` before unpacking it.
 
-- the scene file must be an existing `.py` file inside the project;
-- Python syntax must parse;
-- requested scene names must be discovered in that file;
-- renderer is `cairo` or `opengl`;
-- format is one of `mp4`, `mov`, `webm`, `gif`, or `png`;
-- custom width/height are 16–16384 and FPS is 1–240; and
-- `output_name` matches `[A-Za-z0-9_.-]+`.
+## Untrusted projects
 
-An explicit `manim_executable` is an advanced trusted-user parameter. Supplying it authorizes executing that program; do not accept it from an untrusted web client.
-
-### Resource bounds
-
-- REST JSON bodies are limited to 3 MiB; source content inside them is independently limited to 2 MiB.
-- Worker and queue counts are bounded by configured clamps.
-- Every engine job has a timeout and cancellation token.
-- On Unix, each bridge process has an 8 GiB address-space limit by default (`MANIM_DIRECTOR_MEMORY_MB`, clamped to 128–262144 MiB); Windows deployments must supply the equivalent OS/container memory limit.
-- Runtime child commands have explicit timeouts.
-- Export defaults to a 2 GiB uncompressed input budget and aborts before adding the file that exceeds it.
-- The scheduler kills the Python bridge on cancellation/drop.
-- Log responses are byte-budgeted; persisted logs are capped at 2,000 events or 2 MiB per job and 50,000 events or 64 MiB per project, with oldest terminal history pruned first.
-
-These are denial-of-service mitigations, not a containment boundary for hostile Python. Scene code can allocate before Manim returns control; use OS/container CPU, memory, process, disk, and network limits for adversarial input.
-
-### File integrity
-
-Generated text uses a same-directory temporary file followed by atomic replacement. Scaffold refuses to overwrite collisions unless `force` is explicit. Asset writes refuse an existing destination unless `force` is explicit. A failed export attempts to remove the incomplete archive.
-
-ZIP members are generated from project-relative paths rather than caller-supplied archive names. Symlinks and `.git`, `.manim-director`, Python caches, and platform junk are excluded by default. The archive includes a manifest with member paths and uncompressed sizes.
-
-Artifact download canonicalizes a project-relative path, rejects traversal and symlink escape, blocks state/undo/temp paths, allowlists artifact/source extensions, and streams only regular files up to 8 GiB with `nosniff`. It does not expose an arbitrary filesystem read endpoint.
-
-### SVG normalization
-
-Normalized SVG import parses XML and removes:
-
-- `script` and `foreignObject` elements;
-- attributes whose local name begins with `on`; and
-- `href` values beginning with HTTP(S), `javascript:`, or `data:text/html`.
-
-The resulting file is safer to render as a local vector asset. It is not a general browser-grade HTML/XML sanitizer and should not be served as active inline DOM from an untrusted origin.
-
-### Protocol isolation
-
-Bridge stdout accepts JSONL protocol messages only. Python diagnostics go to stderr; Rust bounds each relayed stderr line. Every bridge response must match the request ID and provide one recognized terminal message. A malformed or mismatched response fails the job rather than being treated as render output.
-
-MCP tool results are compact and return resource URIs for detail. No tool accepts an arbitrary shell command. The MCP process is stdio-only and inherits the authorization of the host that launched it.
-
-## API exposure
-
-The default command binds `127.0.0.1:4177`. The API has no login, session, CSRF token, or per-operation approval prompt. Loopback is therefore part of the security model, not merely a convenience.
-
-If you expose the service beyond loopback, place it behind a reverse proxy that provides:
-
-- TLS;
-- authenticated users;
-- project-level authorization;
-- request and connection rate limits;
-- an origin allowlist; and
-- a smaller OS/container privilege boundary for the render worker.
-
-Do not use permissive CORS as access control. For local production use, the compiled workbench is same-origin and needs no cross-origin grant. Development should allow only the exact local Vite origin being used.
-
-SSE is read-only, but it can disclose file names, scene names, progress, diagnostic tails, and error data. Protect `/api/events` and `/api/logs` to the same degree as mutation routes when proxying.
-
-## Secrets and environment
-
-The Python bridge and its child commands currently inherit the server environment. This is convenient for user-selected TTS/media plugins and licensed tools, but trusted scene code can read those variables. The engine does not intentionally serialize environment variables, yet a traceback, tool output, or scene can print them into persisted logs.
-
-Practical rules:
-
-- Start the server with only credentials required by the project.
-- Prefer credential files or scoped helper processes that are not readable by scene code.
-- Never place tokens in `director.yaml`, request parameters, scene source, asset metadata, or command-line arguments.
-- Review logs before sharing `.manim-director/state.db` or a diagnostic bundle.
-- Use a container secret mechanism plus network egress policy when rendering third-party code.
-
-The default source export excludes `.manim-director` and `.git`, which keeps state/logs and repository credentials out of the bundle. It does include project source, requirements, assets, and output by design; inspect attribution and confidential content before distributing it.
-
-## Network behavior
-
-Director's core create/inspect/render/export path does not fetch remote URLs. Asset import reads a local source path. External network access can still occur through:
-
-- user-authored scene code;
-- Manim plugins;
-- custom executables;
-- TTS or other provider integrations; or
-- dependency/package installation.
-
-For offline or sensitive jobs, enforce no-egress at the container/OS layer. A CLI flag cannot reliably neutralize arbitrary imported Python.
-
-## Untrusted-project workflow
-
-Use isolation before the first `doctor`, `inspect`, or render if inspection itself may import or invoke project tooling:
-
-1. Create a disposable container or VM with no host secrets.
-2. Mount the project at one writable path; do not mount a home directory, SSH agent, cloud credential directory, or Docker socket.
-3. Install pinned dependencies from a reviewed lockfile or prebuilt image.
-4. Disable network unless the animation explicitly needs it.
-5. Apply CPU, memory, PID, file-size, and wall-time limits outside Director.
-6. Export only the expected artifacts, then discard the environment.
-
-Director's own project confinement and timeouts remain useful inside that boundary, but they are defense in depth.
+1. Use a container or VM with no host secrets, SSH agent, cloud credentials or Docker socket.
+2. Mount the project as the only writable path.
+3. Install pinned dependencies (`runtime/constraints-full.txt`) or use a prepared image.
+4. Turn off networking unless the scene needs it, and set CPU, memory, process and time limits there.
+5. Copy out the artifacts you expect, then discard the environment.
 
 ## Reporting a vulnerability
 
-Include the affected version/commit, platform, minimal project or protocol request, observed impact, and whether arbitrary scene execution was already assumed. Do not include real credentials, private project files, or a public exploit against a reachable instance. Security defects in path confinement, API exposure, archive construction, protocol parsing, or command construction are in scope; the fact that an intentionally rendered Python scene can execute Python is part of the documented trust model.
+Open a private security advisory on GitHub with the version or commit, the platform, a minimal
+project or request, and the impact. Issues in path confinement, the HTTP API's authentication and
+origin checks, archive construction, protocol parsing or process handling are in scope. That a
+scene you chose to render can run Python is the documented trust model, not a vulnerability.

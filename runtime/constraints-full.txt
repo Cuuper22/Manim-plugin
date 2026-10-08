@@ -1,12 +1,15 @@
-# Exact dependency set exercised by the 1.1.0 installer and release gate.
+# Exact dependency set exercised by the installer and release gate.
 ManimPango==0.6.1
+PyYAML==6.0.3
 Pygments==2.21.0
+audioop-lts==0.2.2 ; python_version >= "3.13"
 av==18.1.0
 beautifulsoup4==4.15.0
 click==8.5.0
 cloup==3.1.0
 decorator==5.3.1
 glcontext==3.0.0
+iniconfig==2.3.1
 isosurfaces==0.1.2
 manim==0.21.0
 mapbox_earcut==2.0.0
@@ -19,12 +22,15 @@ networkx==3.6.1
 numpy==2.5.2
 packaging==26.3
 pillow==12.3.0
+pluggy==1.6.0
 pycairo==1.29.1
 pydub==0.25.1
 pyglet==2.1.16
 pyglm==2.8.3
 pypdf==6.16.2
+pytest==9.1.1
 rich==15.0.0
+ruff==0.16.10
 scipy==1.18.1
 screeninfo==0.8.1
 skia-pathops==0.9.2

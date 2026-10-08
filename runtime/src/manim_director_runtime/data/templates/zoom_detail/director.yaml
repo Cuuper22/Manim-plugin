@@ -1,0 +1,63 @@
+version: 1
+project:
+  name: {{name}}
+  description: Pattern 6, zoom in on a detail. Close to 0 the sine curve is the line y = x.
+  seed: {{seed}}
+engine:
+  source: scenes/main.py
+  main_scene: SinNearZero
+theme: {{theme}}
+brief:
+  viewer:
+    who: a student who knows sine from triangles and radians, and uses a calculator
+    level: general
+    knows: [$\sin$, radians, graphs of functions, slope]
+    new: [zooming in on a graph, $\sin x \approx x$]
+    question: Why is sin(0.01) almost exactly 0.01?
+    wrong_guess: a rounding quirk; a curvy sine cannot match a straight line
+    aha: zoomed in near 0, the graphs of sin x and y = x cannot be told apart
+    payoff: estimates the sine of a small angle in radians without a calculator, and knows when it fails
+    colors: {primary: sin x, secondary: y = x, accent: the zoom and the measured slope}
+storyboard:
+  - id: hook
+    intent: introduce
+    audience_question: Why does sine hand back almost its input?
+    changes: sin(0.1) and sin(0.01) appear with their calculator values
+    takeaway: For small inputs, sin x is almost x.
+  - id: plot
+    intent: explain
+    audience_question: Do sin x and y = x look alike?
+    changes: both graphs appear, each labeled
+    takeaway: Far from 0 they differ clearly; near 0 they touch.
+    keep: [values]
+  - id: predict
+    intent: introduce
+    audience_question: What will the two graphs look like up close?
+    changes: nothing moves while the viewer guesses
+    takeaway: The viewer commits to a guess before the zoom.
+    keep: [plot]
+  - id: zoom
+    intent: reveal
+    audience_question: What do the graphs look like up close?
+    changes: a magnified window around 0 opens beside the plot
+    takeaway: Up close, sin x is indistinguishable from the line y = x.
+    keep: [plot]
+    aha: true
+  - id: measure
+    intent: explain
+    audience_question: How close are they, in numbers?
+    changes: a chord from 0 to the curve appears, with x and its slope sin x / x read out
+    takeaway: The chord's slope, sin x / x, measures how far sine is from y = x.
+    keep: [plot]
+  - id: shrink
+    intent: prove
+    audience_question: What happens to that slope as x shrinks?
+    changes: x slides toward 0 and the chord turns onto y = x
+    takeaway: The slope sin x / x heads to 1 as x shrinks, so sin x ≈ x.
+    keep: [plot, readouts, chord]
+  - id: recap
+    intent: recap
+    audience_question: So why is sin(0.01) almost 0.01?
+    changes: the zoom opens again, with sin x ≈ x beneath it
+    takeaway: Near 0, in radians, sine is almost the straight line y = x.
+    keep: [plot]

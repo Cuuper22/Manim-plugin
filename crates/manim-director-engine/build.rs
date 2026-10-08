@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Embeds `workbench/dist` when it exists; otherwise a page that says how to
+/// get the real one. Content types are decided at request time.
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let dist = manifest.join("../../workbench/dist");
@@ -11,19 +13,18 @@ fn main() {
     let mut files = Vec::new();
     collect(&dist, &dist, &mut files);
     files.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut source = String::from("pub fn embedded_asset(path: &str) -> Option<(&'static [u8], &'static str)> {\nmatch path {\n");
+    let mut source =
+        String::from("fn embedded_asset(path: &str) -> Option<&'static [u8]> {\nmatch path {\n");
     let has_index = files.iter().any(|(relative, _)| relative == "index.html");
     for (relative, absolute) in files {
         source.push_str(&format!(
-            "{:?} => Some((include_bytes!({:?}), {:?})),\n",
+            "{:?} => Some(include_bytes!({:?})),\n",
             relative,
-            absolute.to_string_lossy(),
-            mime(&relative)
+            absolute.to_string_lossy()
         ));
     }
     if !has_index {
-        source
-            .push_str("\"index.html\" => Some((FALLBACK_INDEX, \"text/html; charset=utf-8\")),\n");
+        source.push_str("\"index.html\" => Some(FALLBACK_INDEX),\n");
     }
     source.push_str("_ => None,\n}\n}\n");
     if !has_index {
@@ -48,27 +49,5 @@ fn collect(root: &Path, directory: &Path, output: &mut Vec<(String, PathBuf)>) {
                 .replace('\\', "/");
             output.push((relative, path.canonicalize().unwrap_or(path)));
         }
-    }
-}
-
-fn mime(path: &str) -> &'static str {
-    match Path::new(path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-    {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" | "map" => "application/json",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        _ => "application/octet-stream",
     }
 }

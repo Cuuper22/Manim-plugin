@@ -1,61 +1,47 @@
 {
-  "schema": "manim-director/outputs-v1",
-  "artifacts": [
+  "version": 1,
+  "scene": "GeneralizedFibonacci",
+  "beats": [
+    "hook",
+    "family",
+    "data",
+    "state-space",
+    "roots",
+    "edge-case",
+    "recap"
+  ],
+  "deliverables": [
     {
-      "profile": "preview",
-      "scene": "GeneralizedFibonacci",
-      "path": ".manim-director/media/videos/scenes/480p15/GeneralizedFibonacci.mp4",
-      "width": 854,
-      "height": 480,
-      "fps": 15,
-      "alpha": false
-    },
-    {
-      "profile": "production",
-      "scene": "GeneralizedFibonacci",
-      "path": ".manim-director/media/videos/scenes/1080p60/GeneralizedFibonacci.mp4",
+      "path": "dist/GeneralizedFibonacci.mp4",
+      "render": "manim-director render --profile production",
+      "export": "manim-director export --format mp4 --profile production",
       "width": 1920,
       "height": 1080,
       "fps": 60,
       "alpha": false
     },
     {
-      "profile": "vertical",
-      "scene": "GeneralizedFibonacci",
-      "path": "dist/generalized-fibonacci-vertical.mp4",
-      "width": 1080,
-      "height": 1920,
-      "fps": 30,
-      "alpha": false
-    },
-    {
-      "profile": "transparent",
-      "scene": "GeneralizedFibonacci",
-      "path": "dist/generalized-fibonacci-alpha.mov",
+      "path": "dist/GeneralizedFibonacci.webm",
+      "render": "manim-director render --profile transparent",
+      "export": "manim-director export --format webm --profile transparent",
       "width": 1920,
       "height": 1080,
-      "fps": 30,
+      "fps": 60,
       "alpha": true
     },
     {
-      "profile": "loop-gif",
-      "scene": "GeneralizedFibonacci",
-      "path": "dist/generalized-fibonacci.gif",
+      "path": "dist/GeneralizedFibonacci.gif",
+      "render": "manim-director render --profile loop-gif",
+      "export": "manim-director export --format gif --profile loop-gif",
       "width": 640,
       "height": 360,
       "fps": 15,
       "alpha": false
     },
     {
-      "profile": "orbit-3d",
-      "scene": "StateOrbit3D",
-      "path": "dist/state-orbit-3d.mp4",
-      "width": 1280,
-      "height": 720,
-      "fps": 30,
-      "alpha": false
+      "path": "dist/generalized-fibonacci.zip",
+      "render": "manim-director render --profile production",
+      "export": "manim-director export"
     }
-  ],
-  "sections": ["hook", "family", "data", "state-space", "roots", "edge-case", "recap"],
-  "required_sidecars": ["captions.vtt", "narration.json", "director.yaml"]
+  ]
 }
