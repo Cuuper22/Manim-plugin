@@ -37,7 +37,7 @@ from ..layout import Rect
 from ..texscan import atoms, is_relation, upright_words
 from . import context
 from .labels import beside, box, first_free, halo, inside, trace
-from .overlay import Live, derived, now, overlay, pacing
+from .overlay import Live, derived, now, overlay, pacing, reserve, reserved
 
 Function = Callable[[float], float]
 
@@ -296,6 +296,9 @@ class FunctionPlot(VGroup):
             colors=self.colors,
             breaks=[b for b in self.breaks if cx - radius < b < cx + radius],
         )
+        # Up close the curves often coincide: each lies wider under the next, so all show.
+        for i, curve in enumerate(zoom.curves):
+            curve.set_stroke(width=CURVE_WIDTH * (1 + 1.2 * (len(zoom.curves) - 1 - i)))
         accent = context.color("accent")
         zoom.border = Rectangle(width=size[0], height=size[1], color=accent, stroke_width=2)
         zoom.border.move_to(zoom.axes.c2p(cx, cy))
@@ -314,8 +317,11 @@ class FunctionPlot(VGroup):
             style = {"color": accent, "stroke_width": 1.5, "stroke_opacity": 0.55}
             return VGroup(*(Line(a, b, **style) for a, b in pairs))
 
+        # The window and its leaders are read as part of the inset, not as more things.
         zoom.window = overlay(derived(window), zoom, "inset window", persist=True)
         zoom.leaders = overlay(derived(leaders), zoom, "inset leaders", persist=True)
+        for part in (zoom.window, zoom.leaders):
+            pacing(part, part.director_kind, chunks=0, read=0.0)
         zoom.director_companions = (zoom.window, zoom.leaders)
         return pacing(zoom, "inset", chunks=1, read=1.0)
 
@@ -423,12 +429,14 @@ class FunctionPlot(VGroup):
         return pieces[0] if len(pieces) == 1 else pieces
 
     def _curve_label(self, curve: int, text: str) -> Mobject:
-        """The label goes beside the curve's right end, or a little back along the curve,
-        wherever it is clear of the curves and of earlier labels."""
+        """The label goes beside the right end of the curve where it leaves the window, or a
+        little back along the curve, wherever it is clear of the curves and earlier labels."""
 
         name = halo(context.math(text, color=self.colors[curve]).scale(LABEL_SCALE))
         x0, x1 = self.x_range
-        stops = [self._last_visible(curve, x1 - share * (x1 - x0)) for share in _LABEL_STOPS]
+        runs = _visible_runs(self.functions[curve], x0, x1, *self.y_range)
+        end = runs[-1][1] if runs else x1
+        stops = [self._last_visible(curve, end - share * (x1 - x0)) for share in _LABEL_STOPS]
         candidates = [(p, d) for p in stops if p is not None for d in _LABEL_SIDES]
         numbers = [n for axis in self.axes for n in getattr(axis, "numbers", [])]
         taken = [box(m, 0.08) for m in [*self.labels, *numbers]]
@@ -546,7 +554,9 @@ class Readout(VGroup):
 
         def update(m: Mobject) -> None:
             if m is number:
-                number.set_value(now(self.source))
+                number.set_value(now(self.source))  # new digits: keep them reserved too
+                if reserved(self.name) and not reserved(number):
+                    reserve(number)
                 self._align()
 
         update.director = True  # type: ignore[attr-defined]

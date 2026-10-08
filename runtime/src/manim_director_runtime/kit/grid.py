@@ -17,6 +17,7 @@ from .overlay import derived, overlay, pacing
 from .plot import LABEL_SCALE
 
 ARROW_WIDTH = 5.0
+_EDGE = 1e-3
 _COLOR_KEYS = ("grid", "i", "j")
 _SQUARE = ((0, 0), (1, 0), (1, 1), (0, 1))
 
@@ -61,12 +62,14 @@ class VectorGrid(VGroup):
         self.room.move_to([*(lo + hi) / 2, 0]).set_fill(opacity=0)
         self.ghost = self._plane(self.hues["grid"], self.hues["grid"], 1.0, 0.3 if ghost else 0.0)
         self.plane = self._plane(self.hues["grid"], context.color("foreground"), 2.0, 0.75)
+        for plane in (self.ghost, self.plane):
+            plane.director_ground = True  # notes may be written over the grid lines
         self.add(self.room, self.ghost, self.plane)
         if basis:
             self.i_hat = self._arrow((1, 0), r"\hat{\imath}", self.hues["i"])
             self.j_hat = self._arrow((0, 1), r"\hat{\jmath}", self.hues["j"])
             self.add(self.i_hat, self.j_hat)
-        pacing(self, "grid", chunks=2, read=1.5)
+        pacing(self, "grid", chunks=2 if basis else 1, read=1.5 if basis else 1.0)
 
     # State ------------------------------------------------------------------------------
 
@@ -141,8 +144,10 @@ class VectorGrid(VGroup):
     # Internals --------------------------------------------------------------------------
 
     def _plane(self, hue: str, axes: str, width: float, opacity: float) -> NumberPlane:
-        span = [-self.extent, self.extent, 1]
-        size = 2 * self.extent * self.unit
+        # NumberPlane leaves out lines on the ends of its range; reach a hair past them.
+        reach = self.extent + _EDGE
+        span = [-reach, reach, 1]
+        size = 2 * reach * self.unit
         axis = {"stroke_color": axes, "stroke_width": width + 0.5, "stroke_opacity": opacity}
         lines = {"stroke_color": hue, "stroke_width": width, "stroke_opacity": opacity}
         return NumberPlane(

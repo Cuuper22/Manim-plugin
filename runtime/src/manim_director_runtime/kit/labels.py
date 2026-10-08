@@ -8,7 +8,7 @@ from statistics import median
 from typing import TypeVar
 
 import numpy as np
-from manim import MathTex, Mobject, Text, VGroup, VMobject
+from manim import MathTex, Mobject, RoundedRectangle, Text, VGroup, VMobject
 
 from ..errors import CompositionError, parse_choice
 from ..layout import Rect
@@ -56,6 +56,22 @@ def halo(mobject: Mobject) -> Mobject:
         if isinstance(leaf, VMobject):
             leaf.set_stroke(context.color("background"), width=HALO_WIDTH, background=True)
     return mobject
+
+
+def backdrop(glyphs: Mobject, hue: str, opacity: float = 0.16) -> RoundedRectangle:
+    """A soft box in `hue` to put behind glyphs, like a highlighter pen: the glyphs keep their
+    own colors."""
+
+    # Tight sideways so neighbouring operators keep their space; taller like a marker.
+    pad_x, pad_y = 0.05, 0.05 + 0.12 * glyphs.height
+    return RoundedRectangle(
+        width=glyphs.width + 2 * pad_x,
+        height=glyphs.height + 2 * pad_y,
+        corner_radius=0.08,
+        stroke_width=0,
+        fill_color=hue,
+        fill_opacity=opacity,
+    ).move_to(glyphs)
 
 
 def beside(mobject: M, anchor: Sequence[float], direction: Sequence[float], gap: float) -> M:

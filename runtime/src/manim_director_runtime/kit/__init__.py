@@ -8,11 +8,13 @@ Each component is a VGroup: `place()` it like any mobject. Its parts are attribu
 (`plot.axes`, `grid.i_hat`); noun methods return overlays drawn on it (`plot.tangent(1)`),
 which `self.show(...)` reveals and which follow it and leave with it; verbs return one
 Animation to play (`plot.refine(bars)`, `grid.apply(M)`). Colors are theme tokens.
+`reserve(part)` keeps any part laid out but hidden until `self.show(part)`, so content that
+arrives later never reflows what is on screen; `hide(part)` fades it back, for a replay.
 """
 
 from typing import TYPE_CHECKING, Any
 
-from .overlay import Live
+from .overlay import Live, hide, reserve
 
 if TYPE_CHECKING:
     from .dots import DotArray
@@ -30,7 +32,17 @@ _EXPORTS = {
     "label": "labels",
 }
 
-__all__ = ["DotArray", "Figure", "FunctionPlot", "Live", "Readout", "VectorGrid", "label"]
+__all__ = [
+    "DotArray",
+    "Figure",
+    "FunctionPlot",
+    "Live",
+    "Readout",
+    "VectorGrid",
+    "hide",
+    "label",
+    "reserve",
+]
 
 
 def __getattr__(name: str) -> Any:

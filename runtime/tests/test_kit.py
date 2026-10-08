@@ -34,6 +34,7 @@ from manim_director_runtime.kit import (  # noqa: E402
     Readout,
     VectorGrid,
     label,
+    reserve,
 )
 from manim_director_runtime.layout import Rect  # noqa: E402
 from manim_director_runtime.themes import theme  # noqa: E402
@@ -517,3 +518,49 @@ def test_labels_set_words_and_math_on_one_baseline(render: Render) -> None:
     render(Note)
     assert seen["colors"] == (MIDNIGHT.muted, MIDNIGHT.primary)
     assert seen["baseline"] < 0.02 and seen["order"]
+
+
+def test_grid_lines_reach_the_edges_of_the_grid() -> None:
+    grid = VectorGrid(1, unit=1.0)
+    xs = {
+        round(float(line.get_x()), 3)
+        for line in grid.plane.background_lines
+        if line.width < 1e-6  # vertical lines
+    }
+    assert {-1.0, 1.0} <= xs
+
+
+def test_curves_are_labeled_where_they_leave_the_window() -> None:
+    plot = FunctionPlot(
+        np.sin, lambda x: x, x_range=(-1, 3), y_range=(-1.2, 1.5), labels=["s", "y"]
+    )
+    window = plot._window()
+    label = plot.labels[1]
+    assert window.contains(box(label))
+    assert label.get_x() < plot.axes.c2p(2, 0)[0]  # near x = 1.5, where y = x leaves the top
+
+
+def test_an_inset_reads_as_one_thing_and_keeps_coinciding_curves_visible() -> None:
+    plot = FunctionPlot(np.sin, lambda x: x, x_range=(-1, 3), y_range=(-1.2, 1.6))
+    zoom = plot.inset(around=(0, 0), radius=0.25)
+    assert (zoom.window.director_chunks, zoom.leaders.director_chunks) == (0, 0)
+    under, over = (curve.get_stroke_width() for curve in zoom.curves)
+    assert under > over  # where they coincide, the first shows around the second
+
+
+def test_a_reserved_readout_stays_hidden_while_its_value_changes(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Hidden(DirectedScene):
+        def construct(self):
+            t = ValueTracker(1)
+            readout = reserve(Readout("t", t))
+            self.place(readout)
+            self.play(t.animate.set_value(2.5))
+            seen["while reserved"] = visible(readout)
+            self.show(readout)
+            self.play(t.animate.set_value(3))
+            seen["shown"] = visible(readout.number) and visible(readout.name)
+
+    render(Hidden, every_frame=True)
+    assert seen == {"while reserved": False, "shown": True}

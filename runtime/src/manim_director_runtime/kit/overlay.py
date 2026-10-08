@@ -109,8 +109,8 @@ def reveal(leaves: Iterable[VMobject]) -> None:
         leaf.director_hidden = False
 
 
-def unreveal(mobjects: Iterable[Mobject], run_time: float = 0.8) -> Animation:
-    """Fade visible leaves back to reserved, for replays: `show()` brings them in again."""
+def hide(*mobjects: Mobject, run_time: float = 0.8) -> Animation:
+    """Fade parts or overlays back to reserved, for a replay: `show()` brings them in again."""
 
     leaves = [
         leaf for m in mobjects for leaf in _leaves(m) if not getattr(leaf, "director_hidden", 0)

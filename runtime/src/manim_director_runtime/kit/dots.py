@@ -8,7 +8,7 @@ from manim import Animation, Dot, FadeToColor, LaggedStart, VGroup
 
 from ..errors import CompositionError
 from . import context
-from .overlay import pacing, reserve, unreveal
+from .overlay import hide, pacing, reserve
 
 Where = Callable[[int, int], bool]
 
@@ -92,7 +92,7 @@ class DotArray(VGroup):
     def hide(self, where: Where | None = None) -> Animation:
         """Fade the selected (default: all) visible dots back to reserved, for a replay."""
 
-        return unreveal(self._where(where if where is not None else (lambda r, c: True)))
+        return hide(*self._where(where if where is not None else (lambda r, c: True)))
 
     def _where(self, where: Where | int) -> list[Dot]:
         if isinstance(where, int):
