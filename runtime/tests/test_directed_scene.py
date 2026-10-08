@@ -20,6 +20,7 @@ from manim import (  # noqa: E402
     BLACK,
     DEGREES,
     DL,
+    DOWN,
     RED,
     RIGHT,
     YELLOW,
@@ -265,6 +266,24 @@ def test_a_new_group_glides_what_is_on_stage_and_brings_in_the_rest(render: Rend
 
     render(Gather)
     assert seen == {"glided": True, "joined": True}
+
+
+def test_placing_part_of_a_group_and_then_the_whole_keeps_every_glyph(render: Render) -> None:
+    seen: dict[str, Any] = {}
+
+    class Grow(DirectedScene):
+        def construct(self):
+            rows = VGroup(*(MathTex(f"{n} + 1") for n in range(3))).arrange(DOWN)
+            with self.beat("some"):
+                self.place(rows[:2])
+            with self.beat("all", keep=[rows]):
+                self.place(rows)  # the first two glide; their glyphs stay theirs
+            seen["glyphs"] = [len(row.family_members_with_points()) for row in rows]
+            seen["region"] = self._stage.region_of(rows)
+
+    render(Grow)
+    assert seen["glyphs"] == [3, 3, 3]
+    assert seen["region"] is Region.CONTENT  # still placed, though only its rows are on stage
 
 
 def test_keeping_part_of_a_group_retires_the_rest(render: Render) -> None:

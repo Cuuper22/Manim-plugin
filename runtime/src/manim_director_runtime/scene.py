@@ -767,6 +767,8 @@ class Directed(Devices, Viewing):
             return
         members = {id(member) for member in part.get_family()}
         for holder in root.get_family():
+            if id(holder) in members:  # the part keeps its own children
+                continue
             loose = [sub for sub in holder.submobjects if id(sub) in members]
             if loose:
                 holder.remove(*loose)

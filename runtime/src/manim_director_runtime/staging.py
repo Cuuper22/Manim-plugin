@@ -51,8 +51,10 @@ class Stage:
     def prune(self, alive: set[int]) -> None:
         """Forget placements that left the scene by any means (plain Manim included)."""
 
-        waiting = {id(m) for m in self.entering} | {id(new) for _, new in self.morphs}
-        self.placed = {k: v for k, v in self.placed.items() if k in alive or k in waiting}
+        coming = [*self.entering, *(new for _, new in self.morphs)]
+        present = alive | {id(member) for m in coming for member in m.get_family()}
+        # A group that gathered on-stage parts is never on stage itself; its parts are.
+        self.placed = {k: v for k, v in self.placed.items() if on_stage(v[0], present)}
         self.dimmed = {k: v for k, v in self.dimmed.items() if k in alive}
 
 
