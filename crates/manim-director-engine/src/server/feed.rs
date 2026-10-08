@@ -132,6 +132,14 @@ impl Feed {
                 }
             }
             self.dirty.extend(affected_sections(job.operation));
+            // A passing check is the cue to retry a scan that failed, e.g.
+            // while the runtime was broken.
+            if job.operation == Operation::Doctor
+                && job.status == JobStatus::Succeeded
+                && self.state.index().lock().failure().is_some()
+            {
+                self.state.request_reindex();
+            }
         }
         let root = self.state.root().to_path_buf();
         let record = job.clone();

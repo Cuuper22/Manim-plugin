@@ -48,6 +48,16 @@ impl Harness {
         }
         stop
     }
+
+    async fn index_reaches(&self, wanted: &str) {
+        for _ in 0..200 {
+            if self.get("/api/state").await.json()["scene_index"]["state"] == wanted {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the scene index never became {wanted}");
+    }
 }
 
 #[tokio::test]
@@ -168,6 +178,24 @@ async fn job_events_follow_the_lifecycle_then_patch_the_workspace() {
     assert_eq!(sections["doctor"]["report"]["ok"], true);
     assert!(sections.get("findings").is_some());
     assert!(sections.get("project").is_none());
+    stop.cancel();
+}
+
+#[tokio::test]
+async fn a_passing_check_retries_a_failed_scene_index() {
+    let harness = Harness::new("").await;
+    let stop = harness.spawn(&["feed", "index"]);
+    harness.index_reaches("ready").await;
+    let unavailable = ErrorBody::new("runtime_unavailable", "Python was not found.", None);
+    let broken = Err(unavailable);
+    harness.state.index().lock().finish_refresh(broken);
+    harness.index_reaches("failed").await;
+    let job = harness
+        .json(Method::POST, "/api/jobs", &json!({"operation": "doctor"}))
+        .await
+        .json();
+    harness.finished(job["id"].as_str().unwrap()).await;
+    harness.index_reaches("ready").await;
     stop.cancel();
 }
 
