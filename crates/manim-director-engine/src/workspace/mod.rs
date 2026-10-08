@@ -19,7 +19,7 @@ use anyhow::Result;
 use findings::{FindingInputs, FindingView};
 use latest::{scene_latest, Revisions, SceneLatest};
 use manim_director_core::{
-    Catalog, DoctorResult, JobStatus, Operation, OperationResult, Timestamp,
+    Catalog, DoctorResult, ErrorBody, JobRecord, JobStatus, Operation, OperationResult, Timestamp,
 };
 use project::{ProfileView, ProjectSummary, SpecStatus, ThemeView};
 use scenes::{Scene, SceneIndexStatus, StoryboardBeatView};
@@ -83,11 +83,15 @@ pub struct Sections {
     pub doctor: Option<Option<DoctorSnapshot>>,
 }
 
+/// The newest environment check, whatever it found.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DoctorSnapshot {
     pub job_id: Uuid,
     pub finished_at: Option<Timestamp>,
-    pub report: DoctorResult,
+    /// Non-null iff the check succeeded.
+    pub report: Option<DoctorResult>,
+    /// Non-null iff it failed, e.g. `runtime_unavailable`.
+    pub error: Option<ErrorBody>,
 }
 
 /// Everything the views derive from, read once by the caller.
@@ -154,21 +158,90 @@ pub fn sections(inputs: &ViewInputs<'_>, wanted: &[Section]) -> Result<Sections>
     Ok(out)
 }
 
-/// The newest successful environment report.
-fn doctor(store: &Store) -> Result<Option<DoctorSnapshot>> {
-    let job = store.newest_job(
+/// The newest `doctor` job that succeeded or failed; a cancelled one found
+/// nothing. Blocking.
+pub fn newest_check(store: &Store) -> Result<Option<JobRecord>> {
+    store.newest_job(
         JobFilter {
             operations: &[Operation::Doctor],
             ..JobFilter::default()
         },
-        &[JobStatus::Succeeded],
-    )?;
-    Ok(job.and_then(|job| match job.result {
-        Some(OperationResult::Doctor(report)) => Some(DoctorSnapshot {
-            job_id: job.id,
-            finished_at: job.finished_at,
-            report,
-        }),
-        _ => None,
+        &[JobStatus::Succeeded, JobStatus::Failed],
+    )
+}
+
+/// A failed check outranks an older report: the runtime may have broken since.
+fn doctor(store: &Store) -> Result<Option<DoctorSnapshot>> {
+    Ok(newest_check(store)?.map(|job| DoctorSnapshot {
+        job_id: job.id,
+        finished_at: job.finished_at,
+        report: match job.result {
+            Some(OperationResult::Doctor(report)) => Some(report),
+            _ => None,
+        },
+        error: job.error,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::testing;
+    use manim_director_core::{DoctorParams, DoctorTask, OperationRequest, Task};
+    use serde_json::json;
+
+    #[test]
+    fn the_doctor_section_is_the_newest_check_whatever_it_found() {
+        let (_db, store) = testing::store();
+        let (request, task) = (
+            OperationRequest::Doctor(DoctorParams {}),
+            Task::Doctor(DoctorTask {}),
+        );
+        let check = || {
+            let id = Uuid::new_v4();
+            store
+                .insert_job(&testing::new_job(id, &request, &task))
+                .unwrap();
+            store.set_running(id).unwrap();
+            id
+        };
+        assert_eq!(doctor(&store).unwrap(), None);
+
+        let passed = check();
+        let report: DoctorResult = serde_json::from_value(json!({
+            "ok": true,
+            "runtime": {"version": "2.0.0", "protocol": 2, "python": "3.12.3",
+                        "executable": "/usr/bin/python3", "platform": "linux"},
+            "checks": [],
+            "capabilities": {"render": true, "renderers": ["cairo"], "latex": true,
+                             "video_tools": true, "visual_qa": true, "symbolic_math": true,
+                             "pdf_ingest": true},
+            "disk": {"free_bytes": 1, "total_bytes": 2},
+            "findings": [],
+            "artifacts": [],
+        }))
+        .unwrap();
+        let result = OperationResult::Doctor(report.clone());
+        store.finish_success(passed, &result, None).unwrap();
+        let snapshot = doctor(&store).unwrap().unwrap();
+        assert_eq!(
+            (snapshot.job_id, snapshot.report, snapshot.error),
+            (passed, Some(report), None)
+        );
+
+        // The runtime broke since; a cancelled check found nothing either way.
+        let broken = check();
+        let unavailable = ErrorBody::new("runtime_unavailable", "Python was not found.", None);
+        store
+            .finish_error(broken, JobStatus::Failed, &unavailable, None)
+            .unwrap();
+        let cancelled = ErrorBody::new("cancelled", "Cancelled.", None);
+        store
+            .finish_error(check(), JobStatus::Cancelled, &cancelled, None)
+            .unwrap();
+        let snapshot = serde_json::to_value(doctor(&store).unwrap()).unwrap();
+        assert_eq!(snapshot["job_id"], json!(broken));
+        assert_eq!(snapshot["report"], json!(null));
+        assert_eq!(snapshot["error"]["code"], "runtime_unavailable");
+    }
 }

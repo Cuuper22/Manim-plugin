@@ -370,11 +370,11 @@ export interface Finding extends OpsFinding {
   frame_url: string | null;
 }
 
-export interface DoctorSnapshot {
-  job_id: JobId;
-  finished_at: Iso8601 | null;
-  report: DoctorResult;
-}
+/** The newest environment check: its report, or why it failed (e.g. `runtime_unavailable`). */
+export type DoctorSnapshot = { job_id: JobId; finished_at: Iso8601 | null } & (
+  | { report: DoctorResult; error: null }
+  | { report: null; error: ErrorBody }
+);
 
 /** The sections a `workspace` event replaces wholesale. */
 export interface WorkspaceSections {

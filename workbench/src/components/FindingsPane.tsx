@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import type { DoctorSnapshot, Scene, SceneId } from "../api/types.ts";
+import type { DoctorSnapshot, Scene, SceneId, SceneIndexStatus } from "../api/types.ts";
+import { environmentStatus } from "../model/environment.ts";
 import { bySeverity, cleanQa, codeTarget, type CodeTarget, type FindingCard, type ShownFinding } from "../model/findings.ts";
 import { formatTime } from "../model/format.ts";
 import { sceneName } from "../model/jobs.ts";
@@ -12,6 +13,8 @@ interface FindingsPaneProps {
   /** Whose findings these include, e.g. `Render Recurrence · draft`. */
   diagnosed: string | null;
   doctor: DoctorSnapshot | null;
+  /** A failed scan shows with the environment: the runtime runs it. */
+  index: SceneIndexStatus;
   selected: Scene | null;
   onJump: (target: CodeTarget) => void;
   onSeek: (sceneId: SceneId, seconds: number) => void;
@@ -31,7 +34,7 @@ const SOURCE_LABELS: Record<FindingCard["finding"]["source"], string> = {
 };
 
 /** QA, render, doctor and spec findings plus the newest diagnosis, errors first. */
-export function FindingsPane({ findings, diagnosed, doctor, selected, onJump, onSeek, onDoctor, doctorBusy }: FindingsPaneProps) {
+export function FindingsPane({ findings, diagnosed, doctor, index, selected, onJump, onSeek, onDoctor, doctorBusy }: FindingsPaneProps) {
   const jobs = useWorkbench((state) => state.jobs);
   const latest = useWorkbench((state) => (selected ? state.workspace?.latest[selected.id] : null) ?? null);
   const [onlySelected, setOnlySelected] = useState(false);
@@ -41,11 +44,12 @@ export function FindingsPane({ findings, diagnosed, doctor, selected, onJump, on
   );
   const passed = selected ? cleanQa(jobs, findings, selected.id, latest) : null;
   const checkedFrames = passed?.job.request.operation === "qa" ? passed.job.request.frames : undefined;
+  const environment = environmentStatus(doctor, index);
 
   return (
     <div className="findings">
       <div className="bar">
-        <p className="meta">{environment(doctor)}</p>
+        <p className={environment.tone ? `meta ${environment.tone}` : "meta"}>{environment.text}</p>
         <button type="button" className="small" aria-busy={doctorBusy || undefined} disabled={doctorBusy} onClick={onDoctor}>
           {doctorBusy ? "Checking…" : "Re-check environment"}
         </button>
@@ -151,18 +155,4 @@ function FindingItem({ card, onJump, onSeek }: FindingItemProps) {
       ) : null}
     </li>
   );
-}
-
-function environment(doctor: DoctorSnapshot | null): string {
-  if (!doctor) return "Environment not checked yet.";
-  const { report } = doctor;
-  const manim = report.checks.find((check) => check.name === "manim")?.version;
-  const missing = [
-    !report.capabilities.render && "rendering",
-    !report.capabilities.latex && "LaTeX",
-    !report.capabilities.video_tools && "video tools",
-  ].filter(Boolean);
-  const parts = [`Python ${report.runtime.python}`, manim ? `Manim ${manim}` : "Manim missing"];
-  if (missing.length > 0) parts.push(`missing ${missing.join(", ")}`);
-  return parts.join(" · ");
 }

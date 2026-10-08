@@ -311,6 +311,7 @@ export function Workbench({ workspace, reconnecting, suspended }: WorkbenchProps
             findings={shownFindings}
             diagnosed={diagnosis?.subject ?? null}
             doctor={workspace.doctor}
+            index={workspace.scene_index}
             selected={scene}
             onJump={(target) => reveal(target, true)}
             onSeek={showAt}

@@ -3,10 +3,14 @@
 
 use super::*;
 use crate::{
+    db::testing,
     server::{feed, watch, ServeConfig, Server},
     RuntimeIdentity,
 };
-use manim_director_core::{Catalog, CatalogTheme, DiagnoseParams, JobOrigin, OperationRequest};
+use manim_director_core::{
+    Catalog, CatalogTheme, DiagnoseParams, DoctorParams, DoctorTask, ErrorBody, JobOrigin,
+    JobStatus, OperationRequest, Task,
+};
 use serde_json::json;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -367,7 +371,7 @@ async fn a_bound_server_answers_real_sockets_on_its_tokenized_url() {
 }
 
 #[tokio::test]
-async fn a_fresh_doctor_report_is_not_repeated_at_start() {
+async fn only_a_fresh_passing_check_is_not_repeated_at_start() {
     let harness = Harness::new("").await;
     let doctors = || async {
         harness.get("/api/jobs").await.json()["items"]
@@ -401,4 +405,22 @@ async fn a_fresh_doctor_report_is_not_repeated_at_start() {
     assert_eq!(harness.finished(&first[0]).await["origin"], "engine");
     watch::doctor(harness.state.clone()).await;
     assert_eq!(doctors().await, first);
+
+    // A check that failed since is never fresh: the runtime may work again.
+    let failed = uuid::Uuid::new_v4();
+    let (request, task) = (
+        OperationRequest::Doctor(DoctorParams {}),
+        Task::Doctor(DoctorTask {}),
+    );
+    store
+        .insert_job(&testing::new_job(failed, &request, &task))
+        .unwrap();
+    let unavailable = ErrorBody::new("runtime_unavailable", "Python was not found.", None);
+    store
+        .finish_error(failed, JobStatus::Failed, &unavailable, None)
+        .unwrap();
+    watch::doctor(harness.state.clone()).await;
+    let after = doctors().await;
+    assert_eq!(after.len(), 3);
+    assert_eq!(after[1..], [failed.to_string(), first[0].clone()]);
 }

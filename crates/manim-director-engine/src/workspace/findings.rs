@@ -4,6 +4,7 @@
 use super::{
     artifacts::{file_url, file_version},
     latest::{Revisions, SceneLatest},
+    newest_check,
     project::SpecSnapshot,
     scenes::{Scene, SceneIndex},
 };
@@ -132,14 +133,7 @@ pub fn findings(
             all.add_job(FindingSource::Qa, &job, outdated, found);
         }
     }
-    let doctor = inputs.store.newest_job(
-        JobFilter {
-            operations: &[Operation::Doctor],
-            ..JobFilter::default()
-        },
-        &[JobStatus::Succeeded, JobStatus::Failed],
-    )?;
-    if let Some(job) = doctor {
+    if let Some(job) = newest_check(inputs.store)? {
         let found = match &job.result {
             Some(OperationResult::Doctor(result)) => result.findings.clone(),
             _ => failure_findings(&job),

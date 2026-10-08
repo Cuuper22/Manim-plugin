@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Artifact, Finding, Scene, SceneLatest, TimelineMark } from "../src/api/types.ts";
+import type { Artifact, DoctorResult, DoctorSnapshot, Finding, Scene, SceneIndexStatus, SceneLatest, TimelineMark } from "../src/api/types.ts";
 import { planAction, planExport } from "../src/model/actions.ts";
+import { environmentStatus } from "../src/model/environment.ts";
 import { bySeverity, cleanQa, codeTarget, fromDiagnosis, fromWorkspace } from "../src/model/findings.ts";
 import { clockTime, formatTime } from "../src/model/format.ts";
 import {
@@ -215,6 +216,45 @@ test("a passing QA is reported only while it is the scene's newest and found not
   assert.equal(cleanQa([qa], [], scene.id, rerendered)?.outdated, true);
   assert.equal(cleanQa([qa], [], scene.id, { ...rendered, video: { ...rendered.video!, outdated: true } })?.outdated, true);
   assert.equal(cleanQa([qa], [], scene.id, null)?.outdated, true);
+});
+
+test("the environment reads as the newest check, failed or not, and a failed scan", () => {
+  const report: DoctorResult = {
+    ok: true,
+    runtime: { version: "2.0.0", protocol: 2, python: "3.12.3", executable: "/usr/bin/python3", platform: "linux" },
+    checks: [{ name: "manim", kind: "package", available: true, version: "0.21.0", path: null }],
+    capabilities: {
+      render: true,
+      renderers: ["cairo"],
+      latex: false,
+      video_tools: true,
+      visual_qa: true,
+      symbolic_math: true,
+      pdf_ingest: true,
+    },
+    disk: { free_bytes: 1, total_bytes: 2 },
+    findings: [],
+    artifacts: [],
+  };
+  const passed: DoctorSnapshot = { job_id: "d1", finished_at: null, report, error: null };
+  const broken: DoctorSnapshot = {
+    job_id: "d2",
+    finished_at: null,
+    report: null,
+    error: { code: "runtime_unavailable", message: "The Python runtime at /venv/bin/python is unavailable.", data: null },
+  };
+  const ready: SceneIndexStatus = { state: "ready", indexed_at: null, files: 1, truncated: false, error: null };
+  const failed: SceneIndexStatus = { ...ready, state: "failed", error: broken.error };
+
+  assert.deepEqual(environmentStatus(null, ready), { text: "Environment not checked yet", tone: null });
+  assert.deepEqual(environmentStatus(passed, ready), { text: "Python 3.12.3 · Manim 0.21.0 · missing LaTeX", tone: null });
+  assert.deepEqual(environmentStatus(broken, ready), { text: "Environment check failed (runtime_unavailable)", tone: "danger" });
+  assert.deepEqual(environmentStatus(passed, failed), {
+    text: "Python 3.12.3 · Manim 0.21.0 · missing LaTeX · Scene index failed (runtime_unavailable)",
+    tone: "danger",
+  });
+  const unready = { ...report, ok: false, capabilities: { ...report.capabilities, render: false } };
+  assert.equal(environmentStatus({ ...passed, report: unready }, ready).tone, "danger");
 });
 
 test("the stage reports its scene's newest job while active or failed", () => {
